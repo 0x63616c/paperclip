@@ -1,6 +1,7 @@
 /target/
 **/*.rs.bk
 .DS_Store
+.idea/
 
 # Preview output. Screenshots that matter are attached to issues, not committed.
 /artifacts/
