@@ -1,0 +1,26 @@
+[package]
+name = "paper-sdk"
+description = "Drawing, display mapping and input primitives shared by Paperclip apps, plus the Mac desktop preview backend."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[features]
+# On by default so `cargo run -p paperctl -- preview` just works on the Mac.
+# A device build turns it off; nothing outside `desktop` pulls in a windowing
+# stack. See ADR-0002 for why the backend lives here for now rather than in a
+# separate crate.
+default = ["desktop"]
+desktop = ["dep:winit", "dep:softbuffer"]
+
+[dependencies]
+thiserror = { workspace = true }
+tiny-skia = { workspace = true }
+softbuffer = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
+
+[lints]
+workspace = true

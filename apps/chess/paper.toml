@@ -1,0 +1,14 @@
+# The Chess app's manifest. Parsed by `paper-packages`, and by the home screen
+# to build its shelf entry — it is the real source of the name and version
+# shown on the tile, not a copy of them.
+#
+# There is deliberately no `capabilities` key here and there cannot be one:
+# what an app may do is decided by the host's install policy, not by the app.
+
+[app]
+id = "dev.calum.chess"
+name = "Chess"
+version = "0.1.0"
+protocol = "1.0"
+entrypoint = "bin/chess"
+assets = []

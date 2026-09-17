@@ -1,0 +1,6 @@
+/target/
+**/*.rs.bk
+.DS_Store
+
+# Preview output. Screenshots that matter are attached to issues, not committed.
+/artifacts/

@@ -1,0 +1,68 @@
+# Virtual workspace root. Crates appear here as their functionality lands; the
+# full §7 layout is the destination, not a scaffold to be created empty.
+#
+# Note: `tests/system` is a real package with an explicitly registered test
+# target. A `tests/` directory at a virtual workspace root is NOT picked up as
+# a Cargo integration-test target on its own (§7).
+[workspace]
+resolver = "3"
+members = [
+    "platform/protocol",
+    "platform/packages",
+    "platform/sdk",
+    "apps/home",
+    "apps/chess",
+    "tools/paperctl",
+    "tests/system",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT"
+publish = false
+repository = "https://github.com/0x63616c/paperclip"
+
+[workspace.dependencies]
+paper-protocol = { path = "platform/protocol" }
+paper-packages = { path = "platform/packages" }
+# `default-features = false` here, `features = ["desktop"]` at the one
+# consumer that needs a window. Apps must not drag in a windowing stack.
+paper-sdk = { path = "platform/sdk", default-features = false }
+paper-home = { path = "apps/home" }
+paper-chess = { path = "apps/chess" }
+
+clap = { version = "4.6", features = ["derive"] }
+semver = { version = "1.0.28", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+softbuffer = "0.4.8"
+tempfile = "3.24"
+thiserror = "2.0.20"
+tiny-skia = "0.12"
+toml = "1.1"
+winit = "0.30.13"
+
+[workspace.lints.rust]
+# `deny`, not `forbid`: platform/device/native will eventually need unsafe FFI
+# and must be able to opt in locally with a written justification.
+unsafe_code = "deny"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# Style rules from §7, enforced where the linter can see them.
+undocumented_unsafe_blocks = "warn"
+exit = "warn"
+panic_in_result_fn = "warn"
+todo = "warn"
+unimplemented = "warn"
+wildcard_imports = "warn"
+needless_pass_by_value = "warn"
+str_to_string = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

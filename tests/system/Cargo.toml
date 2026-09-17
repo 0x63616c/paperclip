@@ -1,0 +1,43 @@
+# The system test harness.
+#
+# §7 warns that a `tests/` directory at a *virtual* workspace root is not a
+# Cargo integration-test target — there is no package at the root for Cargo to
+# attach it to, so the files would simply never be compiled and the suite would
+# pass by not existing. So this is a real package with the test target declared
+# explicitly, and `autotests = false` so nothing is picked up by accident that
+# was not declared here.
+[package]
+name = "paper-system-tests"
+description = "Cross-crate tests: whole screens, end-to-end input mapping, and the real app manifests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+autotests = false
+autobins = false
+autoexamples = false
+autobenches = false
+
+[lib]
+name = "paper_system_tests"
+path = "harness.rs"
+
+[[test]]
+name = "system"
+path = "cases/system.rs"
+harness = true
+
+[dependencies]
+
+[dev-dependencies]
+paper-chess = { workspace = true }
+paper-home = { workspace = true }
+paper-packages = { workspace = true }
+paper-protocol = { workspace = true }
+paper-sdk = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
