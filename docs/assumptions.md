@@ -18,7 +18,7 @@ here means "the device said so", not "the code still compiles".
 |---|---|---|---|---|
 | A1 | The panel is 1620 × 2160, portrait. | `paper_sdk::SCREEN` (`platform/sdk/src/display.rs`) | **confirmed** | Device tree `display-width` = 1620, `display-height` = 2160 (WWW-1 §1). |
 | A2 | The panel is around 230 px/inch, so 120 canvas px is a comfortable finger target. | `paper_sdk::chrome::MIN_TOUCH_TARGET` | **confirmed, corrected to 228** | Device tree `display-dpi` = 228, not the ~230 estimated from published dimensions. 120 px = 13.4 mm; the conclusion is unchanged and the constant does not move. |
-| A3 | The device presents a CPU-produced framebuffer, so software rasterisation is the right renderer. | ADR-0002; `paper_sdk::Canvas` over `tiny-skia` | **confirmed, with a caveat** | No `libEGL`/`libGLESv2`/`libgbm`/Mesa anywhere on the device; `libepaper.so` drives `QPlatformBackingStore`, a software raster path (WWW-1 §3). A CPU pixel buffer is exactly the currency the display stack wants. **Caveat:** it is not *this* buffer. The DRM dumb buffer is 1620 bytes × 1084 rows for 1620 × 2160 pixels — 4 bits per pixel, two panel rows per buffer row (WWW-20). The adapter owes a packing and quantisation step; the exact packing is an open gate. |
+| A3 | The device presents a CPU-produced framebuffer, so software rasterisation is the right renderer. | ADR-0002; `paper_sdk::Canvas` over `tiny-skia` | **confirmed, with a caveat** | No `libEGL`/`libGLESv2`/`libgbm`/Mesa anywhere on the device; `libepaper.so` drives `QPlatformBackingStore`, a software raster path (WWW-1 §3). A CPU pixel buffer is exactly the currency the display stack wants. **Caveat withdrawn (WWW-20, ADR-0007):** the panel is 1620 × 2160 **ARGB8888**, which is exactly what `Canvas` produces. The DRM `405x1084` mode is a proprietary packed *transport*, not a pixel format we write; presentation goes through the vendor waveform engine instead. No packing or quantisation step is owed. |
 | A4 | A greyscale UI is the safe default; colour is a bonus, not a dependency. | ADR-0005; `paper_sdk::palette` | **confirmed** | The panel is ACeP colour (`EPFramebufferAcep2` inside `libepaper.so`), but the framebuffer arithmetic above implies 16 levels, and waveform selection is vendor-owned. Designing for grey first was right. See the note under "What the gate reports added" about palette separation at 16 levels. |
 | A5 | Pointer input arrives as press / move / release with a position. | `paper_sdk::PointerEvent` | **refuted as sufficient** | The device reports considerably more: pen `ABS_PRESSURE` 0–4096, `ABS_DISTANCE` (hover), `ABS_TILT_X/Y` ±9000, `BTN_TOOL_RUBBER` for the eraser, and touch as multitouch protocol B with **10 simultaneous slots** (WWW-1 §3). `PointerEvent` as it stands cannot represent a second finger at all. It is now `#[non_exhaustive]` so WWW-5 can add pressure, tilt and a per-contact id without breaking every call site; the type itself is WWW-5's to design. |
 | A6 | The device target triple is not yet known. | Deliberately **not** encoded — `rust-toolchain.toml` installs no cross target. | **refuted — it is known now** | `aarch64-unknown-linux-gnu`, glibc (`ld-linux-aarch64.so.1`, `libc.so.6`), Qt 6.10.3, `libstdc++.so.6` (WWW-1, "Downstream stages"). Deliberately still not added to `rust-toolchain.toml`: nothing cross-compiles yet, and a target no build exercises is configuration ahead of functionality. WWW-3 adds it with the first cross build that proves it. |
@@ -30,14 +30,16 @@ Facts established after Stage 1 was written that Stage 1's code does not yet
 account for. None of them is a Stage 1 defect; they are the inputs WWW-3 and
 WWW-5 must design against.
 
-- **The framebuffer is packed, not linear.** `Canvas` produces 1620 × 2160
-  RGBA. The panel wants 4 bits per pixel with two panel rows per framebuffer
-  row. The conversion has no owner yet.
-- **Grey levels are scarce.** If 4 bpp holds, there are 16 of them. The
-  palette's light end — `PAPER` (0xF7), `TILE` (0xEC), `BOARD_LIGHT` (0xE4) —
-  separates by roughly one level once quantised, and nothing tests that it
-  stays separable. Worth a test once the packing is identified rather than
-  before, since the quantisation curve is not yet known.
+- ~~**The framebuffer is packed, not linear.**~~ **Withdrawn (ADR-0007).** The
+  panel is 1620 × 2160 ARGB8888 — the format `Canvas` already produces. The
+  DRM `405x1084` mode is a proprietary packed transport handled inside closed
+  vendor code, not a format we write into. There is no conversion to own.
+- **Grey levels are not scarce, and the palette question changed.** This is a
+  colour E Ink Gallery 3 panel driven by waveform *modes*, not a 16-level
+  greyscale buffer. The open question is which waveform mode each surface uses
+  (mono-fast for live ink, colour for UI), not how to quantise to 4 bits. The
+  light end of the palette needs a legibility check on hardware once the
+  vendor engine is wired up.
 - **Suspend is continuous, not an event.** The tablet suspends roughly every
   two minutes under stock, and `/sys/power/state` returns `EBUSY` — Paperclip
   cannot request or refuse a suspend except by holding a wakelock on
@@ -53,8 +55,11 @@ None of the following is touched by anything in this repository, and no test
 here should be read as evidence about them:
 
 - Whether the Paper Pro can present a framebuffer Paperclip produces at all.
-  WWW-20 established that a non-Qt process can drive the panel visibly, but
-  the pixel packing that makes an image legible is still unidentified.
+  WWW-20 established that a non-Qt process drives the panel electrically and
+  visibly, and **refuted** presenting legible pixels over raw DRM: the
+  transport packing is proprietary and unreverse-engineered by anyone
+  (ADR-0007). Presentation now depends on linking the vendor engine, which no
+  test in this repository exercises.
 - E-ink refresh behaviour, ghosting, or perceived latency.
 - Pen pressure, tilt, palm rejection, or input latency.
 - The touch and pen coordinate transforms. Pen (11180 × 15340) and touch

@@ -128,3 +128,42 @@ never what was wrong, and §9's Qt/`libepaper` bridge is the only way to put a
 controlled image on this panel rather than merely a preference.
 
 Result pending Calum's observation.
+
+
+## Correction: the packing hypothesis was wrong, and why (WWW-20 close-out)
+
+Everything above about DRM master, the kernel EPD power sequence, the FPGA
+bridge, suspend/autosleep, wakelocks and the PIN/dm-crypt relationship stands.
+The display-format reasoning does not.
+
+The DRM connector's `405x1084` and the arithmetic `405 x 4 = 1620` led to a 4bpp
+two-rows-per-framebuffer-row hypothesis, and three sessions of held patterns
+were run against it with Calum photographing the panel each time. No pattern
+ever rendered legibly; a requested full-width horizontal bar came back as a
+vertical bar down the left edge, which is what linear writes into a non-linear
+buffer look like.
+
+The panel is **1620 x 2160 ARGB8888**. The DRM mode is a proprietary packed
+transport, undocumented and not publicly reverse-engineered, living inside
+closed `libepaper.so` and the kernel panel driver. Source: rmweb's
+`docs/device-profile.md`, corroborated by quill, which calls its own vendor-
+engine path the lowest-latency route available "short of reverse-engineering the
+FPGA transport frame format".
+
+Verified here afterwards: `/usr/lib/plugins/scenegraph/libqsgepaper.so` exists
+on this image and exports the `EPFramebuffer` ABI (`instance`, `setBuffers`
+taking `QImage`s, two `swapBuffers` overloads, `ghostControl`, `checkLockFile`,
+`handleCrash`), with `EPFramebufferAcep2` / `EPFramebufferSwtcon` backends and a
+`WaveformTable`. Its licence is `CLOSED`. `xochitl` maps `libepaper.so`, not
+this one.
+
+The process lesson, which is now a standing project instruction: search for
+prior art before debugging an undocumented system from first principles, and
+search again the moment a theory fails once. One query would have cost minutes;
+the hypothesis cost three sessions of a person standing at the tablet.
+
+Gate 1 therefore closes as **split**: confirmed that a non-Qt process drives the
+panel electrically and visibly, **refuted** that a raw DRM path can present
+correct pixels. Gate 2 (coordinate transforms) is unblocked and is the useful
+thing to do next with Calum present. The off-charge suspend behaviour of a
+custom session remains open.

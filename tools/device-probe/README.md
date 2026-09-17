@@ -42,10 +42,19 @@ tablet's autosleep, while Wi-Fi does (WWW-20).
 - `--hold S` — hold one scene with a one-second ticker, to observe what happens
   to a custom display session over time.
 
-## Geometry
+## Geometry, and why the packing modes are dead code
 
-The DRM connector advertises `405x1084`, which is the genuine LVDS timing from
-the device tree, not the panel. `CREATE_DUMB` at 32bpp yields pitch 1620 and
-size 1,756,080. The panel is 1620 x 2160 at 4bpp, so one framebuffer row of 1620
-bytes carries 3240 pixels — two panel rows. Which two, and in what order, is
-what the three `enum packing` candidates test.
+The DRM connector advertises `405x1084`, the LVDS timing from the device tree.
+`CREATE_DUMB` at 32bpp yields pitch 1620 and size 1,756,080, and `405 x 4 =
+1620` invites the reading that the panel is 4bpp with two rows packed per
+framebuffer row.
+
+**That reading is wrong.** The panel is 1620 x 2160 **ARGB8888**; the DRM mode
+is a proprietary packed *transport* whose `405x1084 -> 1620x2160` mapping is
+undocumented and has not been reverse-engineered by anyone. See ADR-0007 and
+rmweb's `docs/device-profile.md`.
+
+The three `enum packing` candidates and the geometry scenes are therefore
+retained only as the record of a refuted hypothesis. They do not describe this
+hardware, and nothing should be built on them. What remains useful here is the
+DRM master / power-sequence / release evidence and the `--hold-flat` mode.
