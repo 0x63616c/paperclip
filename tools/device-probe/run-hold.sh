@@ -1,7 +1,7 @@
 #!/bin/sh
 # WWW-20 interactive hold: put ONE pattern on the panel for a fixed window while
 # Calum looks at it, then restore stock. Usage:
-#   run-hold.sh <seconds> <rowpair|halves|interleaved> [fiducials]
+#   run-hold.sh <seconds> <rowpair|halves|interleaved> [zones|fiducials|geometry]
 # No `set -e`, no `set -u`, no `date +%s%N`.
 
 SECS="${1:-180}"
@@ -11,8 +11,11 @@ LOG=/tmp/paperclip-hold.log
 PROBE_PID=""
 SAMPLER_PID=""
 RESTORED=0
-FIDFLAG=""
-[ "$MODE" = "fiducials" ] && FIDFLAG="--hold-fiducials"
+SCENEFLAG=""
+case "$MODE" in
+    fiducials) SCENEFLAG="--hold-fiducials" ;;
+    zones)     SCENEFLAG="--hold-zones" ;;
+esac
 
 ts() { date '+%H:%M:%S'; }
 say() { echo "[$(ts)] $*" >> "$LOG"; }
@@ -62,8 +65,8 @@ say "stopping xochitl"
 systemctl stop xochitl >> "$LOG" 2>&1
 sleep 1
 
-say "starting probe: --hold $SECS --pack $PACK $FIDFLAG"
-/tmp/panelprobe --watchdog $((SECS + 60)) --hold "$SECS" --pack "$PACK" $FIDFLAG >> "$LOG" 2>&1 &
+say "starting probe: --hold $SECS --pack $PACK $SCENEFLAG"
+/tmp/panelprobe --watchdog $((SECS + 90)) --hold "$SECS" --pack "$PACK" $SCENEFLAG >> "$LOG" 2>&1 &
 PROBE_PID=$!
 
 ( while :; do

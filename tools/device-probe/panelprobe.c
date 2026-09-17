@@ -196,6 +196,8 @@ static void cross(int cx, int cy, int arm, int thick, unsigned v)
 
 /* ---- scenes -------------------------------------------------------------- */
 
+static void hold(double seconds);
+
 #define WHITE 0x0f
 #define BLACK 0x00
 
@@ -252,6 +254,40 @@ static void scene_geometry(void)
     /* a 6-step grey wedge down the right side, in panel space */
     for (int i = 0; i < 6; i++)
         rect(PANEL_W - 200, 700 + i * 120, 160, 100, (unsigned)(i * 3));
+}
+
+/* Drive the panel through full-field inversions slowly enough for the waveform
+ * to complete, to flush retained charge. WWW-20 photographed probe residue
+ * still visible over a fully repainted stock UI, so releasing the display
+ * without this leaves the user looking at our ghosts. */
+static void clear_panel(int cycles, double per_state)
+{
+    logf_("CLEAR: %d black/white cycles at %.0fms per state", cycles,
+          per_state * 1000.0);
+    for (int i = 0; i < cycles; i++) {
+        fill_panel(BLACK);
+        hold(per_state);
+        fill_panel(WHITE);
+        hold(per_state);
+    }
+    fill_panel(WHITE);
+    hold(per_state);
+    logf_("CLEAR: done");
+}
+
+/* Three stacked zones, drawn in PANEL coordinates. Each candidate packing
+ * turns this into a different, easily described picture:
+ *   ROWPAIR      three zones, once: black third, white third, ~7 wide stripes
+ *   HALVES       the whole three-zone pattern repeated TWICE down the screen
+ *   INTERLEAVED  three zones, but the stripes doubled in count and half as wide
+ * Coarse in both axes, so it survives an imperfect panel far better than the
+ * ornate figure did. */
+static void scene_zones(void)
+{
+    fill_panel(WHITE);
+    rect(0, 0, PANEL_W, 720, BLACK);
+    for (int x = 0; x + 120 <= PANEL_W; x += 240)
+        rect(x, 1440, 120, 720, BLACK);
 }
 
 /* Five numbered fiducial crosses at known panel coordinates (Gate 2). */
@@ -381,6 +417,8 @@ int main(int argc, char **argv)
     double t_hold = 0.0;   /* --hold S: single scene, held with a ticker */
     enum packing hold_pack = PACK_ROWPAIR;   /* --pack */
     int hold_fid = 0;                        /* --hold-fiducials */
+    int hold_zones = 0;                      /* --hold-zones */
+    int hold_clear = 1;                      /* --no-clear disables */
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--watchdog") && i + 1 < argc)
@@ -393,6 +431,10 @@ int main(int argc, char **argv)
             t_hold = atof(argv[++i]);
         else if (!strcmp(argv[i], "--hold-fiducials"))
             hold_fid = 1;
+        else if (!strcmp(argv[i], "--hold-zones"))
+            hold_zones = 1;
+        else if (!strcmp(argv[i], "--no-clear"))
+            hold_clear = 0;
         else if (!strcmp(argv[i], "--pack") && i + 1 < argc) {
             const char *v = argv[++i];
             if (!strcmp(v, "rowpair")) hold_pack = PACK_ROWPAIR;
@@ -401,7 +443,7 @@ int main(int argc, char **argv)
             else { fprintf(stderr, "unknown --pack %s\n", v); return 64; }
         }
         else {
-            fprintf(stderr, "usage: %s [--watchdog S] [--scene-seconds S] [--fiducials] [--hold S] [--pack rowpair|halves|interleaved] [--hold-fiducials]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--watchdog S] [--scene-seconds S] [--fiducials] [--hold S] [--pack rowpair|halves|interleaved] [--hold-fiducials] [--hold-zones] [--no-clear]\n", argv[0]);
             return 64;
         }
     }
@@ -484,22 +526,28 @@ int main(int argc, char **argv)
          * if the ticker keeps advancing afterwards the process survived, and
          * the wrapper's sysfs sampler says whether the panel stayed powered. */
         cur_pack = hold_pack;
+        if (hold_clear)
+            clear_panel(6, 0.4);
         if (hold_fid)
             scene_fiducials();
+        else if (hold_zones)
+            scene_zones();
         else
             scene_geometry();
         logf_("HOLD: %s(packing=%s) held for %.0fs with 1s ticker",
-              hold_fid ? "fiducials" : "geometry",
+              hold_fid ? "fiducials" : hold_zones ? "zones" : "geometry",
               hold_pack == PACK_ROWPAIR ? "ROWPAIR" :
               hold_pack == PACK_HALVES ? "HALVES" : "INTERLEAVED", t_hold);
         for (int t = 0; (double)t < t_hold; t++) {
-            /* advance a black square along the top edge, one step per second */
-            rect(40 + ((t - 1) % 30) * 50, 40, 40, 30, WHITE);
-            rect(40 + (t % 30) * 50, 40, 40, 30, BLACK);
+            /* advance a black square across the middle band, one step per second */
+            rect(40 + ((t - 1) % 30) * 50, 1150, 40, 30, WHITE);
+            rect(40 + (t % 30) * 50, 1150, 40, 30, BLACK);
             logf_("HOLD tick %d", t);
             hold(1.0);
         }
         logf_("HOLD complete");
+        if (hold_clear)
+            clear_panel(6, 0.4);
         restore_display();
         return 0;
     }
