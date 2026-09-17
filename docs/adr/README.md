@@ -23,3 +23,4 @@ device survey and several of these are bets.
 | [0014](0014-install-transaction-durability-and-rollback.md) | The install transaction: durability, activation and rollback |
 | [0015](0015-settings-default-app-and-host-boundary.md) | Settings is a default app, and its Host boundary |
 | [0016](0016-app-protocol-and-the-sdk-boundary.md) | The app protocol, and what the SDK is not |
+| [0017](0017-chess-rules-library.md) | Chess rules library, and where it lives |

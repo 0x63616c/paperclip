@@ -15,6 +15,7 @@ members = [
     "apps/home",
     "apps/chess",
     "apps/settings",
+    "apps/chess-rules",
     "tools/paperctl",
     "tools/fault-app",
     "tests/system",
@@ -44,8 +45,10 @@ paper-home = { path = "apps/home" }
 paper-host = { path = "platform/host" }
 paper-chess = { path = "apps/chess" }
 paper-settings = { path = "apps/settings" }
+paper-chess-rules = { path = "apps/chess-rules" }
 
 cc = "1.2"
+chess = "3.2"
 clap = { version = "4.6", features = ["derive"] }
 ed25519-dalek = "3.0"
 flate2 = "1.1"
