@@ -761,7 +761,7 @@ pub fn present_and_hold(
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{HoldReport, RegistryCheck, open_and_hold, present_only};
+pub use linux::{HoldReport, RegistryCheck, open_and_hold, open_and_run, present_only};
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -998,6 +998,76 @@ mod linux {
                 record.digest
             )));
         }
+
+        let registry = wait_for_registry(&systemctl);
+        let after = systemctl.health();
+        let regressions = after.regressions_from(&before);
+        Ok(HoldReport {
+            before,
+            after,
+            panel: record,
+            registry,
+            regressions,
+        })
+    }
+
+    /// Runs an interactive session: the same takeover, release and verify
+    /// ordering as [`open_and_hold`], around a presenter that shows however
+    /// many frames a person's taps produce instead of one static screen.
+    ///
+    /// The one thing this drops from [`open_and_hold`] is the digest
+    /// agreement check. That check exists because `open`'s two halves render
+    /// the *same* deterministic screen independently and can be compared; an
+    /// interactive session's frames are chosen by whatever gets tapped, so
+    /// there is no one canvas on this side to agree with. Refusing to present
+    /// a blank first frame is therefore the presenter's own job — it is the
+    /// half that actually has a canvas to look at.
+    ///
+    /// `budget` is the interactive session's own time allowance, not a
+    /// display hold: it becomes the out-of-process watchdog's deadline the
+    /// same way [`HoldPlan::watchdog_budget`] does, margin included, so a
+    /// presenter that hangs is still bounded by a process outside it.
+    pub fn open_and_run<P>(budget: Duration, present: P) -> Result<HoldReport, DeviceError>
+    where
+        P: FnOnce() -> Result<PanelRecord, DeviceError>,
+    {
+        let systemctl = Systemctl;
+        let before = systemctl.health();
+        if !before.is_healthy() {
+            return Err(DeviceError::unexpected(format!(
+                "stock is not healthy before the session ({before:?}); refusing to take the display"
+            )));
+        }
+        before.allows_takeover()?;
+
+        let locks = VendorLockState::capture()?;
+
+        // Wakelock before the display, always — see `open_and_hold`.
+        let wake = WakeLock::acquire(WAKELOCK_TAG)?;
+        let stock = Stock::new(Systemctl, StartBudget::shared());
+        let session = match Takeover::acquire(
+            stock,
+            wake,
+            DetachedWatchdog::new(),
+            locks,
+            budget.saturating_add(super::WATCHDOG_MARGIN),
+            SystemTime::now(),
+        ) {
+            Ok(session) => session,
+            Err((error, _wake)) => return Err(error),
+        };
+
+        let record = present();
+
+        // Release regardless of how the session went, and only now: the
+        // presenter has returned, which is this function's guarantee that the
+        // process holding the engine is gone.
+        let released = Takeover::release(session, SystemTime::now());
+        let record = match (record, released) {
+            (_, Err(error)) => return Err(error),
+            (Err(error), Ok(())) => return Err(error),
+            (Ok(record), Ok(())) => record,
+        };
 
         let registry = wait_for_registry(&systemctl);
         let after = systemctl.health();

@@ -34,7 +34,11 @@ mod packaging;
 #[cfg(feature = "desktop")]
 mod preview;
 #[cfg(feature = "apps")]
+mod run;
+#[cfg(feature = "apps")]
 mod screens;
+#[cfg(feature = "apps")]
+mod session;
 mod setup;
 mod upgrade;
 
@@ -69,6 +73,10 @@ enum Command {
     /// back (§4).
     #[cfg(feature = "apps")]
     Open(open::OpenArgs),
+    /// Run an interactive Home/Chess session on the tablet's panel, reading
+    /// real input, until `ReturnToStock` (§4, WWW-6).
+    #[cfg(feature = "apps")]
+    Run(run::RunArgs),
     /// Validate a `paper.toml` manifest.
     Manifest {
         #[command(subcommand)]
@@ -180,6 +188,8 @@ fn run(cli: Cli) -> Result<(), CommandError> {
         Command::Screenshot(args) => screenshot(&args),
         #[cfg(feature = "apps")]
         Command::Open(args) => open::run(&args),
+        #[cfg(feature = "apps")]
+        Command::Run(args) => run::run(&args),
         Command::Manifest { command } => manifest::run(command),
         Command::Isolation(args) => device::run(device::DeviceCommand::Isolation(args)),
         Command::Units(args) => device::run(device::DeviceCommand::Units(args)),

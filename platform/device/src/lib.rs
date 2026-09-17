@@ -68,7 +68,8 @@ pub use hold::{
     present_and_hold,
 };
 pub use input::{
-    ContactIds, InputNode, InputRole, PenDecoder, PointerTransform, RawEvent, TouchDecoder,
+    ContactIds, InputNode, InputRole, PenDecoder, PointerTransform, RawEvent, TouchDecoder, absorb,
+    drive,
 };
 pub use panel::{MemoryPanel, Panel, PanelBuffer, Plane, Swap, present};
 pub use session::{DisplayLockHolder, DisplayLocks, RESUME_BRIDGE_DELAY, WakeLock};
@@ -77,7 +78,10 @@ pub use takeover::{Takeover, WAKELOCK_TAG, Watchdog};
 pub use waveform::{ContentType, GhostControl, PixelRect, Refresh, Waveform};
 
 #[cfg(target_os = "linux")]
-pub use hold::{HoldReport, RegistryCheck, open_and_hold, present_only};
+pub use hold::{HoldReport, RegistryCheck, open_and_hold, open_and_run, present_only};
+
+#[cfg(target_os = "linux")]
+pub use input::open_node;
 
 #[cfg(feature = "vendor-engine")]
 pub use vendor::VendorPanel;
