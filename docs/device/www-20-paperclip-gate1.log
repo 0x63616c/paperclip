@@ -1,0 +1,44 @@
+[01:17:23] gate1 run starting on imx8mm-ferrari, image 20260827113527
+[01:17:23] pre: xochitl=active pid=15310
+[01:17:23] pre: connector=disabled status=connected
+[01:17:23] pre: battery=
+[01:17:23] pre: fpga=operating
+[01:17:23] pre-rails: G2194_PS=enabled/1 VPOS2=/1 VPOS1=/1 VGH1=/1 VGH2=/1 VPDD=/1 VCOM=disabled/0 FPGA_PWR_EN=enabled/1 VGL=/1 VNEG3=/1 VNEG2=/1 VNEG1=/1 VPOS3=/1
+[01:17:23] stopping xochitl
+[01:17:23] systemctl stop xochitl rc=0 active=inactive
+[01:17:24] locks after stop: epd=[-rwxr-xr-x    1 root     root             0 Sep 16 16:44 /tmp/epd.lock] fbl=[15310 xochitl imx8mm-ferrari <machine-id redacted> <boot-id redacted> ]
+[01:17:24] --- probe output follows ---
+[01:17:24.900] watchdog armed at 240 seconds
+[01:17:24.900] SET_MASTER granted
+[01:17:24.900] resources: 1 crtc, 1 connector, 1 encoder
+[01:17:24.900] connector 36: type=7 connection=1 modes=1 0mm x 0mm
+[01:17:24.900]   mode[0] 405x1084 @85 vrefresh=85 clock=54000
+[01:17:24.900] using connector 36, crtc 34, mode 405x1084
+[01:17:24.900] saved CRTC state: fb=0 mode_valid=0 x=0 y=0
+[01:17:24.904] CREATE_DUMB: 405x1084 bpp=32 pitch=1620 size=1756080
+[01:17:24.904] panel model: 1620x2160 at 4bpp -> 1620 bytes/row needed, fb provides 1620
+[01:17:24.904] ADDFB: fb_id=37
+[01:17:24.904] mmap ok at 0xffffaf5a7000
+[01:17:24.964] SETCRTC accepted: crtc 34 scanning fb 37 (405x1084)
+[01:17:24.964] SCENE 1/6 FLASH: full-field black<->white, ~5Hz, 6s
+[01:17:31.285] SCENE 2/6 RAMP: 16 constant-byte horizontal bands, 12s
+[01:17:43.291] SCENE 3/6 CHECKER: 8x10 coarse blocks in framebuffer space, 12s
+[01:17:55.298] SCENE 4/6 GEOMETRY packing=ROWPAIR (nibbles 0-1619 = panel row 2r), 12s
+[01:18:07.357] SCENE 5/6 GEOMETRY packing=HALVES (nibbles 0-1619 = panel row r), 12s
+[01:18:19.403] SCENE 6/6 GEOMETRY packing=INTERLEAVED (nibble pairs = two rows), 12s
+[01:18:31.490] SCENE 7 FIDUCIALS packing=ROWPAIR, 12s
+[01:18:43.499] all scenes done
+[01:18:43.504] restore: CRTC 34 returned to saved state (fb=0 mode_valid=0)
+[01:18:43.505] restore: DRM master dropped
+[01:18:43.505] restore: complete
+[01:18:43] --- probe exited rc=0 ---
+[01:18:43] === restore begins ===
+[01:18:43] starting xochitl
+[01:18:43] systemctl start xochitl rc=0
+[01:18:43] post-restore: xochitl=active pid=25903
+[01:18:43] post-restore: system=running failed=[]
+[01:18:43] post-restore: /home mountpoint=yes
+[01:18:43] post-restore: notebooks=53
+[01:18:43] post-restore: connector=disabled
+[01:18:43] post-restore: epframebuffer.lock=[15310 xochitl imx8mm-ferrari <machine-id redacted> <boot-id redacted> ]
+[01:18:43] === restore complete ===

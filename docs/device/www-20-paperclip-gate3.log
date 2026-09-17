@@ -1,0 +1,90 @@
+[01:26:04] gate3 starting, uptime=31296s
+[01:26:04] pre: suspend_success=265 fail=36
+[01:26:04] pre: xochitl=active
+[01:26:04] guardian armed (200s)
+[01:26:05] stopping xochitl
+[01:26:06] starting probe in --hold mode (90s, watchdog 150s)
+[01:26:06.337] watchdog armed at 150 seconds
+[01:26:06.337] SET_MASTER granted
+[01:26:06.337] resources: 1 crtc, 1 connector, 1 encoder
+[01:26:06.337] connector 36: type=7 connection=1 modes=1 0mm x 0mm
+[01:26:06.337]   mode[0] 405x1084 @85 vrefresh=85 clock=54000
+[01:26:06.337] using connector 36, crtc 34, mode 405x1084
+[01:26:06.337] saved CRTC state: fb=0 mode_valid=0 x=0 y=0
+[01:26:06.341] CREATE_DUMB: 405x1084 bpp=32 pitch=1620 size=1756080
+[01:26:06.341] panel model: 1620x2160 at 4bpp -> 1620 bytes/row needed, fb provides 1620
+[01:26:06.341] ADDFB: fb_id=37
+[01:26:06.341] mmap ok at 0xffffb04b2000
+[01:26:06.400] SETCRTC accepted: crtc 34 scanning fb 37 (405x1084)
+[01:26:06.449] HOLD: geometry(ROWPAIR) held for 90s with 1s ticker
+[01:26:06.450] HOLD tick 0
+[01:26:07.450] HOLD tick 1
+[01:26:08.450] HOLD tick 2
+[01:26:09.451] HOLD tick 3
+[01:26:10.451] HOLD tick 4
+[01:26:11.452] HOLD tick 5
+[01:26:12] probe pid=26624 alive=yes conn=enabled vcom=enabled/1
+[01:26:12] wakealarm set: now=1789608372 wake=1789608402 readback=[1789608402]
+[01:26:12] rtc time=[1789608372]
+[01:26:12] >>> entering suspend (echo mem > /sys/power/state) with custom session holding the display
+/tmp/run-gate3.sh: line 72: echo: write error: Device or resource busy
+[01:26:12] <<< resumed, echo rc=1, wall=01:26:12
+[01:26:12] post-resume: suspend_success=265 fail=36
+[01:26:12] post-resume: probe alive=yes
+[01:26:12] post-resume: conn=enabled vcom=enabled/1
+[01:26:12] post-resume: /home=mounted
+[01:26:12] post-resume: dmesg tail:
+[01:26:12.452] HOLD tick 6
+[13299.190420] PM: suspend exit
+[13299.262686] rm-cumulus-bridge 2-0022: FPGA programming took 77 ms
+[13305.194106] PM: suspend entry (deep)
+[13305.225003] rm_sleep_monitor sleep-monitor: Enter autosleep, battery 90.625%
+[13305.445652] PM: Triggering wakeup from IRQ 147 (elants_spi)
+[13305.475728] PM: suspend exit
+[13305.546788] rm-cumulus-bridge 2-0022: FPGA programming took 73 ms
+[13313.739607] PM: suspend entry (deep)
+[13313.782205] rm_sleep_monitor sleep-monitor: Enter autosleep, battery 90.609%
+[13314.000568] PM: Triggering wakeup from IRQ 147 (elants_spi)
+[13314.030754] PM: suspend exit
+[13314.103385] rm-cumulus-bridge 2-0022: FPGA programming took 73 ms
+[16937.017230] PM: suspend entry (deep)
+[16937.067476] PM: Triggering wakeup from IRQ 139 (max77963-inokb)
+[16937.175012] rm-cumulus-bridge 2-0022: FPGA programming took 80 ms
+[16937.208510] PM: suspend exit
+[19892.799428] PM: suspend entry (deep)
+[19892.857029] PM: Triggering wakeup from IRQ 20 (30370000.snvs:snvs-powerkey)
+[19892.965532] rm-cumulus-bridge 2-0022: FPGA programming took 80 ms
+[19893.001263] PM: suspend exit
+[01:26:13.452] HOLD tick 7
+[01:26:14.453] HOLD tick 8
+[01:26:15.453] HOLD tick 9
+[01:26:16.454] HOLD tick 10
+[01:26:17.454] HOLD tick 11
+[01:26:18.454] HOLD tick 12
+[01:26:19.455] HOLD tick 13
+[01:26:20.455] HOLD tick 14
+[01:26:21.456] HOLD tick 15
+[01:26:22.456] HOLD tick 16
+[01:26:23.457] HOLD tick 17
+[01:26:24.457] HOLD tick 18
+[01:26:25.457] HOLD tick 19
+[01:26:26.458] HOLD tick 20
+[01:26:27.458] HOLD tick 21
+[01:26:28.459] HOLD tick 22
+[01:26:29.459] HOLD tick 23
+[01:26:30.460] HOLD tick 24
+[01:26:31.460] HOLD tick 25
+[01:26:32.460] HOLD tick 26
+[01:26:32] 20s after resume: probe alive=yes conn=enabled vcom=enabled/1
+[01:26:32] === restore begins ===
+[01:26:32.483] signal 15 received -- restoring display
+[01:26:32.490] restore: CRTC 34 returned to saved state (fb=0 mode_valid=0)
+[01:26:32.490] restore: DRM master dropped
+[01:26:32.490] restore: complete
+[01:26:34] post: xochitl=active pid=26973
+[01:26:34] post: system=running failed=[]
+[01:26:34] post: /home=mounted notebooks=53
+[01:26:34] post: dm=[control home-encrypted-disk persist swap-encrypted-disk ]
+[01:26:34] post: conn=disabled
+[01:26:34] DONE
+[01:26:34] === restore complete ===
