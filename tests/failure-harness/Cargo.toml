@@ -1,0 +1,27 @@
+# The Linux failure harness (§10, WWW-4 deliverable 3).
+#
+# A binary, not a `#[test]`, and that is the whole design. A test target would
+# be run by `cargo test --workspace` on a Mac, where it can only skip — and a
+# skipped test is indistinguishable from a passing one in the output everybody
+# actually reads. This has to be run deliberately, as root, in an aarch64 Linux
+# VM with systemd, and it writes a report that says which machine produced it.
+[package]
+name = "paper-failure-harness"
+description = "Causes every §10 failure on real systemd and checks what the supervisor did about it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "paperclip-failure-harness"
+path = "src/main.rs"
+
+[dependencies]
+paper-host = { workspace = true }
+paper-packages = { workspace = true }
+
+[lints]
+workspace = true

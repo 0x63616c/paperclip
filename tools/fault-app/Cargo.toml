@@ -1,0 +1,31 @@
+# A foreground session that fails on demand.
+#
+# Exists so the §10 failure table can be *caused* rather than described. Every
+# mode is one row of that table or one of the extra hazards WWW-4 adds: panic
+# and abort, ignored termination, lingering children, memory pressure, a full
+# disk, and a write outside the granted paths.
+#
+# Kept out of `apps/` deliberately: it is not a Paperclip app, it has no
+# manifest, and it must never appear on a shelf.
+[package]
+name = "paper-fault-app"
+description = "A deliberately misbehaving foreground session, for the Linux failure harness."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "paper-fault-app"
+path = "src/main.rs"
+
+[dependencies]
+paper-host = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
+[lints]
+workspace = true
