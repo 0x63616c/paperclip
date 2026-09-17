@@ -1553,6 +1553,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "paper-sudoku"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "paper-protocol",
+ "paper-sdk",
+ "paper-sudoku-rules",
+ "tempfile",
+]
+
+[[package]]
+name = "paper-sudoku-rules"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
 name = "paper-system-tests"
 version = "0.1.0"
 dependencies = [
@@ -1601,6 +1622,8 @@ dependencies = [
  "paper-protocol",
  "paper-sdk",
  "paper-settings",
+ "paper-sudoku",
+ "paper-sudoku-rules",
  "paper-updater",
  "semver",
  "serde",

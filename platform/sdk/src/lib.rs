@@ -65,7 +65,10 @@ pub use text::{TextAlign, TextStyle, measure_text};
 // The contract's own vocabulary, so an app needs one dependency rather than
 // two. These are re-exports, not aliases: `paper_sdk::PointerEvent` and
 // `paper_protocol::PointerEvent` are the same type.
+// `MAX_DAMAGE_RECTS` is here for the same reason: an app that overrides
+// [`App::damage`] has to know the cap it is claiming against, and finding it
+// out would otherwise mean depending on `paper_protocol` directly.
 pub use paper_protocol::{
-    Action, AppId, Capability, ContactId, Damage, DiagnosticLevel, ExitReason, LaunchReason, Point,
-    Pointer, PointerEvent, PointerPhase, Pressure, Rect, Size, Tilt,
+    Action, AppId, Capability, ContactId, Damage, DiagnosticLevel, ExitReason, LaunchReason,
+    MAX_DAMAGE_RECTS, Point, Pointer, PointerEvent, PointerPhase, Pressure, Rect, Size, Tilt,
 };

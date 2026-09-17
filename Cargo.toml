@@ -18,6 +18,8 @@ members = [
     "apps/chess",
     "apps/settings",
     "apps/chess-rules",
+    "apps/sudoku",
+    "apps/sudoku-rules",
     "tools/paperctl",
     "tools/fault-app",
     "tests/system",
@@ -54,6 +56,8 @@ paper-updater = { path = "platform/updater", default-features = false }
 paper-chess = { path = "apps/chess" }
 paper-settings = { path = "apps/settings" }
 paper-chess-rules = { path = "apps/chess-rules" }
+paper-sudoku = { path = "apps/sudoku" }
+paper-sudoku-rules = { path = "apps/sudoku-rules" }
 
 cc = "1.2"
 chess = "3.2"

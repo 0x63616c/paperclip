@@ -1,0 +1,18 @@
+# The Sudoku app's manifest. Parsed by `paper-packages`, and by the home screen
+# to build its shelf entry — the real source of the name and version shown on
+# the tile, not a copy of them.
+#
+# Sudoku is not a default app: it ships through the catalog and is versioned on
+# its own (project decision, 2026-09-16), which is exactly what makes it the
+# second app the install path is exercised with.
+#
+# There is deliberately no `capabilities` key here and there cannot be one:
+# what an app may do is decided by the host's install policy, not by the app.
+
+[app]
+id = "dev.calum.sudoku"
+name = "Sudoku"
+version = "0.1.0"
+protocol = "1.1"
+entrypoint = "bin/sudoku"
+assets = []
