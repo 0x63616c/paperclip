@@ -146,25 +146,74 @@ none — no libEGL, no Mesa, no GPU (WWW-1 §3):
 cargo build -p paperctl --no-default-features   # what ships to /home/root/paperclip/bin
 ```
 
-`paperctl stock` — the independent recovery path — exists only in a Linux
-build. On a Mac it says so rather than pretending.
+`paperctl stock` — the independent recovery path — has its real implementation
+only in a Linux build. Typed on a Mac it is a forward to the tablet's own copy
+over SSH (WWW-33, below); a Linux build with no tablet to forward to (the VM
+harness) says so rather than pretending.
+
+## Reaching the tablet from the Mac (WWW-33)
+
+`open`, `stock`, `setup`, `install`, `upgrade` and `remove` are the six
+subcommands that touch the tablet. Typed on a Mac, each one resolves which
+tablet to talk to and runs the same command against the copy of `paperctl`
+already installed there over SSH — the same thing as SSHing in and typing it
+directly, done for you. Typed on the tablet itself, each one runs locally, as
+it always has; nothing about that path changed.
+
+Resolution order, highest precedence first:
+
+1. `--device <host>` on the command itself.
+2. `PAPERCTL_DEVICE` in the environment.
+3. A pinned device (`paperctl devices pin <host>`), which skips every source
+   below it — a pin is a promise to stop guessing, not a promise the tablet
+   is awake right now.
+4. USB ethernet, `10.11.99.1` — Wi-Fi is still what survives autosleep
+   (WWW-20); USB is checked first only because it needs no discovery.
+5. mDNS on the LAN, `_paperctl._tcp.local.` — proposed, not yet validated on
+   hardware: nothing on the device side advertises this service yet, so
+   expect this source to find nothing until a later stage adds it.
+6. The cached last-good host — whichever of the above last resolved
+   successfully, remembered for next time.
+
+`open`, `stock` and `setup` auto-discover with no flag needed; a `paperctl
+open` typed on a Mac with no tablet reachable fails within a few seconds,
+naming every source it tried. `install`, `upgrade run`/`rollback` and `remove`
+only reach the device when `--device` is given explicitly — bare, they still
+mean "here," exactly as before, so a scratch `--root` on the Mac for local
+package testing keeps working unchanged.
+
+```sh
+paperctl devices                     # what auto-discovery found
+paperctl devices --output json
+paperctl devices pin remarkable-wifi # skip discovery until unpinned
+paperctl devices unpin
+```
+
+The pin and the cached last-good host live in one file, `paperctl devices
+--help` prints exactly where (`~/.config/paperctl/config.toml`, or
+`$PAPERCTL_CONFIG_DIR`/`$XDG_CONFIG_HOME` if set).
 
 ## First light: a screen on the actual panel
 
-`paperctl open` is the whole of it — one command, run over SSH on the tablet.
-It renders the screen through the same code `screenshot` uses, stops Xochitl,
-presents through the vendor waveform engine, holds the image, clears the panel,
-gives the display back and re-reads stock's health.
+`paperctl open` renders the screen through the same code `screenshot` uses,
+stops Xochitl, presents through the vendor waveform engine, holds the image,
+clears the panel, gives the display back and re-reads stock's health — all on
+the tablet, reached from the Mac through the transport above. A long hold
+runs detached on the device side rather than tied to the SSH session that
+started it, because a live session does not reliably survive one (WWW-23).
 
 ```sh
-# On the Mac: build it for the tablet, with the vendor engine linked.
+# On the Mac: build it for the tablet, with the vendor engine linked, and
+# copy it into place. Direct shell access, not `paperctl` — the binary has to
+# exist on the tablet before anything can forward to it.
 tools/cross/build-device.sh --bin paperctl
 ssh remarkable-wifi 'mkdir -p /home/root/paperclip/bin'
 scp target/device-container/release/paperctl remarkable-wifi:/home/root/paperclip/bin/
 
-# On the tablet.
-/home/root/paperclip/bin/paperctl open              # Home, held 60s
-/home/root/paperclip/bin/paperctl open --hold 300   # long enough to photograph
+# From the Mac, from here on.
+paperctl open              # Home, held 60s, on whichever tablet resolves
+paperctl open --hold 300   # long enough to photograph
+paperctl open --device remarkable-wifi --hold 300   # a specific tablet
 ```
 
 Nothing installs on the root filesystem: the binary lives under

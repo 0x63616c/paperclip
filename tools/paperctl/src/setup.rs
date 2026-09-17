@@ -34,7 +34,9 @@
 use std::path::PathBuf;
 
 use clap::Args;
+#[cfg(target_os = "linux")]
 use paper_updater::layout::PlatformLayout;
+#[cfg(target_os = "linux")]
 use paper_updater::upgrade::Maintenance;
 
 use crate::error::CommandError;
@@ -56,9 +58,32 @@ pub(crate) struct SetupArgs {
     /// references point at nothing.
     #[arg(long, default_value = paper_host::units::XOCHITL_UNIT)]
     stock_unit: String,
+    #[command(flatten)]
+    device: crate::transport::DeviceArgs,
+}
+
+impl SetupArgs {
+    /// The argv a remote `paperctl setup` on the tablet should be given —
+    /// setup inspects the machine it runs on, so this forwards the whole
+    /// invocation rather than any answer computed here.
+    #[cfg(not(target_os = "linux"))]
+    fn remote_argv(&self) -> Vec<String> {
+        let mut argv = vec![
+            "setup".to_owned(),
+            "--root".to_owned(),
+            self.root.display().to_string(),
+            "--stock-unit".to_owned(),
+            self.stock_unit.clone(),
+        ];
+        if self.check {
+            argv.push("--check".to_owned());
+        }
+        argv
+    }
 }
 
 /// How a stage went.
+#[cfg(target_os = "linux")]
 enum Stage {
     /// It was already so, or it was made so.
     Ok(String),
@@ -68,6 +93,7 @@ enum Stage {
     Note(String),
 }
 
+#[cfg(target_os = "linux")]
 impl Stage {
     fn mark(&self) -> &'static str {
         match self {
@@ -89,17 +115,35 @@ impl Stage {
 }
 
 /// Prints one stage line. Returns whether it stops the stages after it.
+#[cfg(target_os = "linux")]
 fn report(name: &str, stage: &Stage) -> bool {
     println!("{name:<22} {}  {}", stage.mark(), stage.text());
     stage.blocks()
 }
 
-/// Runs setup.
+/// Runs setup — locally on the device, or forwarded to it over SSH from a
+/// Mac (WWW-33). Setup inspects the machine it runs on, so a Mac cannot
+/// answer any of it itself; the whole invocation goes to the tablet's own
+/// `paperctl setup`.
 ///
 /// # Errors
 ///
-/// A prerequisite that is not there, or a root that cannot be created.
+/// A prerequisite that is not there, a root that cannot be created, or — on
+/// a Mac — no tablet the transport could resolve or reach.
 pub(crate) fn run(args: &SetupArgs) -> Result<(), CommandError> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
+        println!("device   {host} ({source})");
+        crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    run_local(args)
+}
+
+#[cfg(target_os = "linux")]
+fn run_local(args: &SetupArgs) -> Result<(), CommandError> {
     let layout = PlatformLayout::new(&args.root);
     let mut blocked = false;
 
@@ -174,17 +218,6 @@ pub(crate) fn run(args: &SetupArgs) -> Result<(), CommandError> {
          the §17 acceptance sequence is what says that, and it has not been run."
     );
     Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn prerequisites(_stock_unit: &str) -> Vec<(&'static str, Stage)> {
-    vec![(
-        "machine",
-        Stage::Missing(
-            "this is not Linux; setup inspects a tablet, and a Mac cannot stand in for one"
-                .to_owned(),
-        ),
-    )]
 }
 
 #[cfg(target_os = "linux")]
@@ -315,5 +348,40 @@ fn enforcement(controller: paper_host::facilities::Controller) -> &'static str {
         "enforced"
     } else {
         "accepted but ineffective"
+    }
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod tests {
+    use super::*;
+
+    fn args(check: bool) -> SetupArgs {
+        SetupArgs {
+            root: PathBuf::from("/home/root/paperclip"),
+            check,
+            stock_unit: "xochitl.service".to_owned(),
+            device: crate::transport::DeviceArgs::default(),
+        }
+    }
+
+    #[test]
+    fn remote_argv_carries_root_and_stock_unit() {
+        let argv = args(false).remote_argv();
+        assert_eq!(
+            argv,
+            vec![
+                "setup",
+                "--root",
+                "/home/root/paperclip",
+                "--stock-unit",
+                "xochitl.service",
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_argv_adds_check_only_when_asked() {
+        assert!(args(true).remote_argv().contains(&"--check".to_owned()));
+        assert!(!args(false).remote_argv().contains(&"--check".to_owned()));
     }
 }

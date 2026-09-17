@@ -74,6 +74,8 @@ pub(crate) struct OpenArgs {
     /// Internal: where the presenting half leaves its report.
     #[arg(long, hide = true, value_name = "PATH")]
     report_to: Option<std::path::PathBuf>,
+    #[command(flatten)]
+    device: crate::transport::DeviceArgs,
 }
 
 /// Which waveform to ask the engine for.
@@ -88,9 +90,9 @@ pub(crate) enum WaveformArg {
 }
 
 impl WaveformArg {
-    /// The spelling `--waveform` accepts, so the presenting half can be given
-    /// back exactly what this half was given.
-    #[cfg(target_os = "linux")]
+    /// The spelling `--waveform` accepts, so the presenting half — or the
+    /// remote `paperctl` a Mac forwards to — can be given back exactly what
+    /// this half was given.
     fn slug(self) -> &'static str {
         match self {
             WaveformArg::MonoInk => "mono-ink",
@@ -110,7 +112,6 @@ impl WaveformArg {
 
 impl OpenArgs {
     /// The spelling `--screen` accepts for whatever was chosen.
-    #[cfg(target_os = "linux")]
     fn screen_slug(&self) -> &'static str {
         match self.screen {
             ScreenArg::Home => "home",
@@ -119,6 +120,29 @@ impl OpenArgs {
             ScreenArg::AppStore => "app-store",
             ScreenArg::All => "home",
         }
+    }
+
+    /// The argv a remote `paperctl open` on the tablet should be given —
+    /// everything this half was, except `--dry-run`, `--present-only` and
+    /// `--report-to`, which only mean something to the half that opens the
+    /// vendor engine.
+    #[cfg(not(target_os = "linux"))]
+    fn remote_argv(&self) -> Vec<String> {
+        let mut argv = vec![
+            "open".to_owned(),
+            "--screen".to_owned(),
+            self.screen_slug().to_owned(),
+            "--hold".to_owned(),
+            self.hold.to_string(),
+            "--waveform".to_owned(),
+            self.waveform.slug().to_owned(),
+            "--sample-every".to_owned(),
+            self.sample_every.to_string(),
+        ];
+        if self.partial {
+            argv.push("--partial".to_owned());
+        }
+        argv
     }
 }
 
@@ -270,11 +294,15 @@ fn dry_run(canvas: &Canvas, plan: &HoldPlan) -> Result<(), CommandError> {
     Ok(())
 }
 
+/// On a Mac, presenting means forwarding to the tablet's own `paperctl open`
+/// over SSH (WWW-33) — detached, because a live SSH session does not
+/// reliably survive a long hold (WWW-23).
 #[cfg(not(target_os = "linux"))]
-fn present(_canvas: &Canvas, _plan: &HoldPlan, _args: &OpenArgs) -> Result<(), CommandError> {
-    Err(CommandError::NotOnDevice {
-        what: "presenting a screen on the panel (try --dry-run)",
-    })
+fn present(_canvas: &Canvas, plan: &HoldPlan, args: &OpenArgs) -> Result<(), CommandError> {
+    let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
+    println!("device   {host} ({source})");
+    crate::transport::remote::run_open(&host, &args.remote_argv(), plan.hold)?;
+    Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -340,4 +368,56 @@ fn present(canvas: &Canvas, plan: &HoldPlan, args: &OpenArgs) -> Result<(), Comm
         });
     }
     Ok(())
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod tests {
+    use super::*;
+
+    fn args(hold: u64, partial: bool) -> OpenArgs {
+        OpenArgs {
+            screen: ScreenArg::Chess,
+            hold,
+            waveform: WaveformArg::MonoInk,
+            partial,
+            sample_every: 5,
+            dry_run: false,
+            present_only: false,
+            report_to: None,
+            device: crate::transport::DeviceArgs::default(),
+        }
+    }
+
+    #[test]
+    fn remote_argv_carries_the_screen_hold_waveform_and_sampling() {
+        let argv = args(45, false).remote_argv();
+        assert_eq!(
+            argv,
+            vec![
+                "open",
+                "--screen",
+                "chess",
+                "--hold",
+                "45",
+                "--waveform",
+                "mono-ink",
+                "--sample-every",
+                "5",
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_argv_adds_partial_only_when_asked() {
+        assert!(
+            args(45, true)
+                .remote_argv()
+                .contains(&"--partial".to_owned())
+        );
+        assert!(
+            !args(45, false)
+                .remote_argv()
+                .contains(&"--partial".to_owned())
+        );
+    }
 }

@@ -26,3 +26,4 @@ device survey and several of these are bets.
 | [0017](0017-chess-rules-library.md) | Chess rules library, and where it lives |
 | [0018](0018-launch-request.md) | A fourth request: `Launch` |
 | [0019](0019-platform-update-transaction.md) | The platform update transaction: stage, activate, verify, commit, roll back |
+| [0020](0020-mac-side-device-transport.md) | The Mac-side device transport, and where auto-discovery is still unproven |

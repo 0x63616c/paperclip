@@ -75,6 +75,26 @@ pub(crate) struct StockArgs {
     /// Retry even after the supervisor has recorded a terminal failure.
     #[arg(long)]
     force: bool,
+    #[command(flatten)]
+    device: crate::transport::DeviceArgs,
+}
+
+impl StockArgs {
+    /// The argv a remote `paperctl stock` on the tablet should be given.
+    /// `--from-unit` never forwards: it only means something to the copy
+    /// `paperclip-restore-stock.service` itself starts.
+    #[cfg(not(target_os = "linux"))]
+    fn remote_argv(&self) -> Vec<String> {
+        let mut argv = vec!["stock".to_owned()];
+        if let Some(state) = &self.state {
+            argv.push("--state".to_owned());
+            argv.push(state.display().to_string());
+        }
+        if self.force {
+            argv.push("--force".to_owned());
+        }
+        argv
+    }
 }
 
 /// The device-facing subcommands.
@@ -165,11 +185,15 @@ fn granted_for(app: &AppId) -> GrantedCapabilities {
         .clone()
 }
 
+/// On a Mac, this is a forward to the tablet's own `paperctl stock` over SSH
+/// (WWW-33) — the independent recovery path still runs on the device; this
+/// side only reaches it.
 #[cfg(not(target_os = "linux"))]
-fn stock(_args: &StockArgs) -> Result<(), CommandError> {
-    Err(CommandError::NotOnDevice {
-        what: "returning the display to stock",
-    })
+fn stock(args: &StockArgs) -> Result<(), CommandError> {
+    let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
+    println!("device   {host} ({source})");
+    crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -215,5 +239,37 @@ fn stock(args: &StockArgs) -> Result<(), CommandError> {
                 diagnostics: where_to_look.display().to_string(),
             })
         }
+    }
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_argv_carries_state_and_force_but_never_from_unit() {
+        let args = StockArgs {
+            from_unit: true,
+            state: Some(PathBuf::from("/run/paperclip")),
+            force: true,
+            device: crate::transport::DeviceArgs::default(),
+        };
+
+        assert_eq!(
+            args.remote_argv(),
+            vec!["stock", "--state", "/run/paperclip", "--force"]
+        );
+    }
+
+    #[test]
+    fn remote_argv_omits_state_when_not_given() {
+        let args = StockArgs {
+            from_unit: false,
+            state: None,
+            force: false,
+            device: crate::transport::DeviceArgs::default(),
+        };
+
+        assert_eq!(args.remote_argv(), vec!["stock"]);
     }
 }

@@ -51,6 +51,17 @@ impl RootArgs {
     }
 }
 
+/// `paperctl upgrade`.
+#[derive(Debug, Args)]
+pub(crate) struct UpgradeArgs {
+    #[command(subcommand)]
+    command: UpgradeCommand,
+    /// The tablet to reach, overriding auto-discovery and any pin. Only
+    /// `run` and `rollback` reach the device; the rest are answered locally.
+    #[command(flatten)]
+    device: crate::transport::DeviceArgs,
+}
+
 /// Replacing the platform.
 #[derive(Debug, Subcommand)]
 pub(crate) enum UpgradeCommand {
@@ -130,6 +141,29 @@ pub(crate) struct RunArgs {
     root: RootArgs,
 }
 
+impl RunArgs {
+    /// The argv a remote `paperctl upgrade run` on the tablet should be
+    /// given — the bundle and trust paths forward verbatim; see the module
+    /// doc on why nothing is staged across the link.
+    #[cfg(not(target_os = "linux"))]
+    fn remote_argv(&self) -> Vec<String> {
+        let mut argv = vec![
+            "upgrade".to_owned(),
+            "run".to_owned(),
+            self.bundle.display().to_string(),
+        ];
+        for key in &self.trust {
+            argv.push("--trust".to_owned());
+            argv.push(key.display().to_string());
+        }
+        argv.push("--state".to_owned());
+        argv.push(self.state.display().to_string());
+        argv.push("--root".to_owned());
+        argv.push(self.root.root.display().to_string());
+        argv
+    }
+}
+
 /// Show what is installed.
 #[derive(Debug, Args)]
 pub(crate) struct StatusArgs {
@@ -148,6 +182,24 @@ pub(crate) struct RollbackArgs {
     state: PathBuf,
     #[command(flatten)]
     root: RootArgs,
+}
+
+impl RollbackArgs {
+    /// The argv a remote `paperctl upgrade rollback` on the tablet should be
+    /// given.
+    #[cfg(not(target_os = "linux"))]
+    fn remote_argv(&self) -> Vec<String> {
+        let mut argv = vec!["upgrade".to_owned(), "rollback".to_owned()];
+        for key in &self.trust {
+            argv.push("--trust".to_owned());
+            argv.push(key.display().to_string());
+        }
+        argv.push("--state".to_owned());
+        argv.push(self.state.display().to_string());
+        argv.push("--root".to_owned());
+        argv.push(self.root.root.display().to_string());
+        argv
+    }
 }
 
 /// Replace the bootstrap.
@@ -174,23 +226,55 @@ pub(crate) struct RemoveArgs {
     store: Option<PathBuf>,
     #[command(flatten)]
     root: RootArgs,
+    #[command(flatten)]
+    device: crate::transport::DeviceArgs,
+}
+
+impl RemoveArgs {
+    /// The argv a remote `paperctl remove` on the tablet should be given.
+    #[cfg(not(target_os = "linux"))]
+    fn remote_argv(&self) -> Vec<String> {
+        let mut argv = vec!["remove".to_owned()];
+        if self.remove_app_data {
+            argv.push("--remove-app-data".to_owned());
+        }
+        if self.yes {
+            argv.push("--yes".to_owned());
+        }
+        if let Some(store) = &self.store {
+            argv.push("--store".to_owned());
+            argv.push(store.display().to_string());
+        }
+        argv.push("--root".to_owned());
+        argv.push(self.root.root.display().to_string());
+        argv
+    }
 }
 
 /// Runs an `upgrade` subcommand.
 ///
 /// # Errors
 ///
-/// Whatever the transaction failed with, or a refusal on a machine where the
-/// session cannot be controlled.
-pub(crate) fn run(command: UpgradeCommand) -> Result<(), CommandError> {
-    match command {
-        UpgradeCommand::Run(args) => upgrade(&args),
-        UpgradeCommand::Status(args) => status(&args),
-        UpgradeCommand::Rollback(args) => rollback(&args),
-        UpgradeCommand::Reconcile(args) => reconcile(&args),
-        UpgradeCommand::Bootstrap(args) => bootstrap(&args),
+/// Whatever the transaction failed with, a refusal on a machine where the
+/// session cannot be controlled, or — on a Mac running `run`/`rollback` — no
+/// tablet the transport could resolve or reach.
+pub(crate) fn run(args: UpgradeArgs) -> Result<(), CommandError> {
+    #[cfg(not(target_os = "linux"))]
+    let device = args.device.as_deref();
+    match args.command {
+        #[cfg(not(target_os = "linux"))]
+        UpgradeCommand::Run(run_args) => upgrade(&run_args, device),
+        #[cfg(target_os = "linux")]
+        UpgradeCommand::Run(run_args) => upgrade(&run_args),
+        UpgradeCommand::Status(status_args) => status(&status_args),
+        #[cfg(not(target_os = "linux"))]
+        UpgradeCommand::Rollback(rollback_args) => rollback(&rollback_args, device),
+        #[cfg(target_os = "linux")]
+        UpgradeCommand::Rollback(rollback_args) => rollback(&rollback_args),
+        UpgradeCommand::Reconcile(status_args) => reconcile(&status_args),
+        UpgradeCommand::Bootstrap(bootstrap_args) => bootstrap(&bootstrap_args),
         #[cfg(feature = "publishing")]
-        UpgradeCommand::Package(args) => package(&args),
+        UpgradeCommand::Package(package_args) => package(&package_args),
     }
 }
 
@@ -370,6 +454,14 @@ fn bootstrap(args: &BootstrapArgs) -> Result<(), CommandError> {
 /// A root that is not a Paperclip root, or a filesystem failure part-way
 /// through.
 pub(crate) fn remove(args: &RemoveArgs) -> Result<(), CommandError> {
+    #[cfg(not(target_os = "linux"))]
+    if let Some(explicit) = args.device.as_deref() {
+        let (host, source) = crate::transport::remote::resolve_device(Some(explicit))?;
+        println!("device   {host} ({source})");
+        crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
+        return Ok(());
+    }
+
     let platform = args.root.layout();
     let store = match &args.store {
         Some(root) => Layout::new(root),
@@ -416,18 +508,24 @@ fn trusted(paths: &[PathBuf]) -> Result<TrustedKeys, CommandError> {
     Ok(keys)
 }
 
+/// On a Mac, a forward to the tablet's own `paperctl upgrade run` over SSH
+/// (WWW-33) — `--bundle` and every `--trust` path are read on the tablet,
+/// exactly as if typed there directly; nothing is staged across the link.
 #[cfg(not(target_os = "linux"))]
-fn upgrade(_args: &RunArgs) -> Result<(), CommandError> {
-    Err(CommandError::NotOnDevice {
-        what: "upgrading the platform",
-    })
+fn upgrade(args: &RunArgs, device: Option<&str>) -> Result<(), CommandError> {
+    let (host, source) = crate::transport::remote::resolve_device(device)?;
+    println!("device   {host} ({source})");
+    crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
+    Ok(())
 }
 
+/// The Mac-side half of `upgrade rollback`; see [`upgrade`].
 #[cfg(not(target_os = "linux"))]
-fn rollback(_args: &RollbackArgs) -> Result<(), CommandError> {
-    Err(CommandError::NotOnDevice {
-        what: "rolling the platform back",
-    })
+fn rollback(args: &RollbackArgs, device: Option<&str>) -> Result<(), CommandError> {
+    let (host, source) = crate::transport::remote::resolve_device(device)?;
+    println!("device   {host} ({source})");
+    crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -514,5 +612,61 @@ fn report_outcome(outcome: &Outcome) {
                  automatically; `paperctl upgrade status` says where things stand."
             );
         }
+    }
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_args_remote_argv_forwards_bundle_and_trust_verbatim() {
+        let args = RunArgs {
+            bundle: PathBuf::from("/home/root/staging/platform-0.4.0.paperpkg"),
+            trust: vec![PathBuf::from("/home/root/paperclip/keys/platform.pub")],
+            state: PathBuf::from("/run/paperclip"),
+            root: RootArgs {
+                root: PathBuf::from("/home/root/paperclip"),
+            },
+        };
+
+        assert_eq!(
+            args.remote_argv(),
+            vec![
+                "upgrade",
+                "run",
+                "/home/root/staging/platform-0.4.0.paperpkg",
+                "--trust",
+                "/home/root/paperclip/keys/platform.pub",
+                "--state",
+                "/run/paperclip",
+                "--root",
+                "/home/root/paperclip",
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_args_remote_argv_carries_yes_and_remove_app_data() {
+        let args = RemoveArgs {
+            remove_app_data: true,
+            yes: true,
+            store: None,
+            root: RootArgs {
+                root: PathBuf::from("/home/root/paperclip"),
+            },
+            device: crate::transport::DeviceArgs::default(),
+        };
+
+        assert_eq!(
+            args.remote_argv(),
+            vec![
+                "remove",
+                "--remove-app-data",
+                "--yes",
+                "--root",
+                "/home/root/paperclip",
+            ]
+        );
     }
 }

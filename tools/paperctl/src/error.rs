@@ -234,6 +234,7 @@ pub(crate) enum CommandError {
     /// No detail here on purpose: the stage table above it already named every
     /// one, and repeating the first in an error line is how the others get
     /// missed.
+    #[cfg(target_os = "linux")]
     #[error("setup did not complete; a prerequisite above is missing")]
     SetupIncomplete,
 
@@ -251,4 +252,20 @@ pub(crate) enum CommandError {
         #[source]
         source: paper_protocol::ParseError,
     },
+
+    /// The Mac-side device transport could not reach or complete on the
+    /// tablet — no device resolved, `ssh` failed, or the remote command
+    /// exited non-zero.
+    #[cfg(not(target_os = "linux"))]
+    #[error("the device transport did not complete")]
+    Transport(#[from] crate::transport::remote::TransportError),
+
+    /// The device config (the pin and the cached last-good host) could not
+    /// be read or written.
+    #[error("the device config could not be used")]
+    DeviceConfig(#[from] crate::transport::config::ConfigError),
+
+    /// `paperctl devices --output json` could not encode its result.
+    #[error("cannot encode devices as JSON")]
+    Json(#[source] serde_json::Error),
 }

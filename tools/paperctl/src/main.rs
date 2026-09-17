@@ -40,6 +40,7 @@ mod screens;
 #[cfg(feature = "apps")]
 mod session;
 mod setup;
+mod transport;
 mod upgrade;
 
 use std::process::ExitCode;
@@ -114,12 +115,15 @@ enum Command {
     /// Establish Paperclip on a tablet, in stages (§14).
     Setup(setup::SetupArgs),
     /// Replace Paperclip itself (§13).
-    Upgrade {
-        #[command(subcommand)]
-        command: upgrade::UpgradeCommand,
-    },
+    Upgrade(upgrade::UpgradeArgs),
     /// Take Paperclip off the device, keeping notebooks and app data (§14).
     Remove(upgrade::RemoveArgs),
+    /// List the tablets auto-discovery found, or pin one (WWW-33).
+    ///
+    /// Config lives at `~/.config/paperctl/config.toml`
+    /// (`$PAPERCTL_CONFIG_DIR/config.toml` or
+    /// `$XDG_CONFIG_HOME/paperctl/config.toml` override it).
+    Devices(transport::devices::DevicesArgs),
 }
 
 /// Which screen to draw.
@@ -207,8 +211,9 @@ fn run(cli: Cli) -> Result<(), CommandError> {
         Command::Rollback(args) => install::rollback(&args),
         Command::Recover(args) => install::recover(&args),
         Command::Setup(args) => setup::run(&args),
-        Command::Upgrade { command } => upgrade::run(command),
+        Command::Upgrade(args) => upgrade::run(args),
         Command::Remove(args) => upgrade::remove(&args),
+        Command::Devices(args) => transport::devices::run(&args),
     }
 }
 

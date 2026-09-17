@@ -15,7 +15,7 @@ repository.workspace = true
 # for a developer's Mac; leaving it *mandatory* would mean the one command that
 # rescues a stuck device could not be built for it.
 [features]
-default = ["desktop", "publishing"]
+default = ["desktop", "publishing", "discovery"]
 # The offscreen renderer and the built-in screens.
 apps = [
     "dep:paper-app-store",
@@ -36,9 +36,15 @@ publishing = ["paper-packages/publishing", "paper-updater/publishing"]
 # `platform/device/native/README.md`. Without it `open` refuses rather than
 # stopping Xochitl to present into memory.
 vendor-engine = ["apps", "paper-device/vendor-engine"]
+# mDNS auto-discovery for the Mac-side device transport (WWW-33). Off the
+# device build on purpose: the tablet never needs to discover itself, and
+# `tools/cross/build-device.sh` asks for `--no-default-features
+# --features vendor-engine` without this one.
+discovery = ["dep:mdns-sd"]
 
 [dependencies]
 clap = { workspace = true }
+mdns-sd = { version = "0.21", default-features = false, optional = true }
 paper-app-store = { workspace = true, optional = true }
 paper-chess = { workspace = true, optional = true }
 paper-chess-rules = { workspace = true, optional = true }
@@ -51,7 +57,13 @@ paper-sdk = { workspace = true }
 paper-settings = { workspace = true, optional = true }
 paper-updater = { workspace = true }
 semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

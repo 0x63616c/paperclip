@@ -58,6 +58,38 @@ pub(crate) struct InstallArgs {
     no_prune: bool,
     #[command(flatten)]
     store: StoreArgs,
+    #[command(flatten)]
+    device: crate::transport::DeviceArgs,
+}
+
+impl InstallArgs {
+    /// The argv a remote `paperctl install` on the tablet should be given —
+    /// exactly what was typed, so `--catalog` and `--trust` are read as
+    /// paths on the tablet, same as if this had been typed there directly.
+    #[cfg(not(target_os = "linux"))]
+    fn remote_argv(&self) -> Vec<String> {
+        let mut argv = vec![
+            "install".to_owned(),
+            self.app.clone(),
+            "--catalog".to_owned(),
+            self.catalog.display().to_string(),
+        ];
+        for key in &self.trust {
+            argv.push("--trust".to_owned());
+            argv.push(key.display().to_string());
+        }
+        if self.no_activate {
+            argv.push("--no-activate".to_owned());
+        }
+        if self.no_prune {
+            argv.push("--no-prune".to_owned());
+        }
+        if let Some(root) = &self.store.root {
+            argv.push("--root".to_owned());
+            argv.push(root.display().to_string());
+        }
+        argv
+    }
 }
 
 /// Show what is installed.
@@ -120,8 +152,21 @@ impl Progress for Printer {
     }
 }
 
-/// Runs `paperctl install`.
+/// Runs `paperctl install` — against `--root`/`--store` right here by
+/// default (a Mac's own scratch store is a normal thing to install into for
+/// development), or on the tablet over SSH when `--device` says so (WWW-33).
+/// Unlike `open`/`stock`/`setup`, this never auto-discovers: a bare
+/// `paperctl install` with no `--device` has always meant "install here",
+/// and that stays true.
 pub(crate) fn install(args: &InstallArgs) -> Result<(), CommandError> {
+    #[cfg(not(target_os = "linux"))]
+    if let Some(explicit) = args.device.as_deref() {
+        let (host, source) = crate::transport::remote::resolve_device(Some(explicit))?;
+        println!("device   {host} ({source})");
+        crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
+        return Ok(());
+    }
+
     let (id, wanted) = split_app(&args.app)?;
     let layout = args.store.layout();
     let catalog = Catalog::new(FileTransport::new(&args.catalog), trusted(&args.trust)?)
@@ -360,4 +405,35 @@ fn trusted(paths: &[PathBuf]) -> Result<TrustedKeys, CommandError> {
         keys.trust(read_text(path)?.parse::<PublicKey>()?);
     }
     Ok(keys)
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_argv_forwards_catalog_trust_and_flags_verbatim() {
+        let args = InstallArgs {
+            app: "dev.calum.chess".to_owned(),
+            catalog: PathBuf::from("/home/root/catalogs/home"),
+            trust: vec![PathBuf::from("/home/root/paperclip/keys/home.pub")],
+            no_activate: true,
+            no_prune: false,
+            store: StoreArgs { root: None },
+            device: crate::transport::DeviceArgs::default(),
+        };
+
+        assert_eq!(
+            args.remote_argv(),
+            vec![
+                "install",
+                "dev.calum.chess",
+                "--catalog",
+                "/home/root/catalogs/home",
+                "--trust",
+                "/home/root/paperclip/keys/home.pub",
+                "--no-activate",
+            ]
+        );
+    }
 }
