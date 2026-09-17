@@ -1,0 +1,5 @@
+#!/bin/sh
+# `zig ar` as a cross archiver. Without this cc-rs reaches for Xcode’s ranlib,
+# which writes an ELF archive with an empty table of contents and the link then
+# fails with every bridge symbol undefined.
+exec zig ar "$@"

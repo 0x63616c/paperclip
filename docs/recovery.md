@@ -91,11 +91,11 @@ Mac and none exercised on the tablet:
 | `WakeLock` | takes and releases the kernel wakelock, on every exit path | on scratch files, not on `/sys/power` |
 | `DisplayLocks` | reads the vendor advisory locks and says who holds the panel | against the exact bytes the tablet wrote |
 | `Panel::clear` | drives the panel white with a settled waveform | on `MemoryPanel` only |
-| `VendorPanel` | the vendor waveform engine behind a C ABI | **never compiled** — ADR-0009 |
-| `device-report` | a read-only readiness report to run on the tablet | cross-links; never run |
+| `VendorPanel` | the vendor waveform engine behind a C ABI | opened and presented on the tablet; **nothing has seen the glass** |
+| `device-report` | a read-only readiness report to run on the tablet | run on the tablet; every prediction held |
 | `Stock` | stops and restores Xochitl, never kills it, one guarded retry | against a fake systemd, not against systemd |
 | `StartBudget` | refuses a session near `StartLimitBurst` | on scratch files |
-| `Takeover` | owns the acquire/release order, restores on every path | ordering, drop, **panic**, and each failure branch |
+| `Takeover` | owns the acquire/release order, restores on every path | ordering, drop, **panic**, each failure branch, **and three round trips on hardware** |
 | `DetachedWatchdog` | a `setsid` guardian that outlives `SIGKILL` | the mechanism, on aarch64 Linux; not its script |
 
 ## What is still owed here

@@ -85,6 +85,14 @@ fn build_bridge() {
     build.compile("paperclip_ep");
 
     println!("cargo::rustc-link-search=native={vendor_lib_dir}");
+    // `libqsgepaper.so` needs Qt Quick and `libQt6Gui.so` needs Qt DBus, and
+    // GNU ld chases those transitively at link time even though nothing here
+    // calls them. On the tablet they are all present; in a build environment
+    // holding only the libraries we actually link against, they are not.
+    // Leaving them unresolved is correct rather than lax — the dynamic linker
+    // resolves them on the device, and pulling them in explicitly would add
+    // DT_NEEDED entries for libraries Paperclip does not use.
+    println!("cargo::rustc-link-arg=-Wl,--allow-shlib-undefined");
     println!("cargo::rustc-link-lib=dylib=qsgepaper");
     println!("cargo::rustc-link-lib=dylib=Qt6Core");
     println!("cargo::rustc-link-lib=dylib=Qt6Gui");

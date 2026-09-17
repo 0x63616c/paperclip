@@ -36,7 +36,9 @@
 #include <QtCore/QRect>
 #include <QtGui/QImage>
 
+#include <cstdio>
 #include <cstring>
+#include <dirent.h>
 #include <exception>
 #include <new>
 #include <pthread.h>
@@ -53,25 +55,27 @@ namespace {
 constexpr int kPanelWidth = 1620;
 constexpr int kPanelHeight = 2160;
 
-/* The engine's SWTCON backend loads these at construction and calls abort() if
- * any is missing or the wrong size — observed, not inferred: a container run
- * with none of them present printed
+/* The engine's SWTCON backend loads a waveform table at construction and calls
+ * abort() if it cannot — observed in a container with the directory absent:
  *
  *     /usr/share/remarkable/ct33_std.bin: file does not exist.
  *     Failed to initialize SWTCON.
  *
- * and raised SIGABRT. With a wrong-sized file it printed "unexpected size".
- * `ct33` is the panel lot; the library also searches by lot and TFT, so a
- * different panel may want different names. Hence: check for *existence and
- * non-emptiness*, name the file that is wrong, and let the engine do the real
- * validation. Guessing the correct size here would trade one abort for a
- * wrong refusal. */
-const char *const kWaveformFiles[] = {
-    "/usr/share/remarkable/ct33_std.bin",
-    "/usr/share/remarkable/ct33_best.bin",
-    "/usr/share/remarkable/ct33_fast.bin",
-    "/usr/share/remarkable/ct33_pen.bin",
-};
+ * followed by SIGABRT. A catch(...) cannot intercept that, so the only defence
+ * is to refuse before instance() is reached.
+ *
+ * WHICH file it wants is panel-specific and not ours to predict. On Calum's
+ * tablet the engine reported `panel tft: C0F` and `panel fpl: AAB0AU` and then
+ * loaded
+ *
+ *     /usr/share/remarkable/GAL3_AAB0AU_ID1C11_AC118TC1F2_AD1004-LHA_TC.eink
+ *
+ * not any of the `ct33_*.bin` files an earlier revision of this code insisted
+ * on. Requiring those by name would wrongly refuse a tablet with a different
+ * panel lot. So the check is only that the vendor's waveform directory exists
+ * and holds at least one non-empty candidate; the engine does the real
+ * selection, which is its job and not ours. */
+const char *const kWaveformDir = "/usr/share/remarkable";
 
 /* Per-thread error text. Thread-local so a message cannot be overwritten by
  * another thread between a failing call and the caller reading it — even
@@ -99,20 +103,36 @@ int32_t preflight() noexcept
         return fail(PAPERCLIP_EP_NOT_OPEN,
                     "no QCoreApplication: EPFramebuffer::instance() segfaults without one");
     }
-    for (const char *path : kWaveformFiles) {
+
+    DIR *dir = opendir(kWaveformDir);
+    if (dir == nullptr) {
+        return fail(PAPERCLIP_EP_NOT_OPEN,
+                    "no /usr/share/remarkable: the engine aborts rather than failing");
+    }
+    bool found = false;
+    for (const dirent *entry = readdir(dir); entry != nullptr && !found;
+         entry = readdir(dir)) {
+        const char *dot = strrchr(entry->d_name, '.');
+        if (dot == nullptr) {
+            continue;
+        }
+        if (strcmp(dot, ".eink") != 0 && strcmp(dot, ".bin") != 0) {
+            continue;
+        }
+        char path[512];
+        if (snprintf(path, sizeof path, "%s/%s", kWaveformDir, entry->d_name)
+            >= static_cast<int>(sizeof path)) {
+            continue;
+        }
         struct stat info = {};
-        if (stat(path, &info) != 0) {
-            try {
-                const std::string message = std::string("waveform table missing: ") + path
-                                            + " (the engine aborts rather than failing)";
-                return fail(PAPERCLIP_EP_NOT_OPEN, message.c_str());
-            } catch (...) {
-                return fail(PAPERCLIP_EP_NOT_OPEN, "a waveform table is missing");
-            }
-        }
-        if (info.st_size == 0) {
-            return fail(PAPERCLIP_EP_NOT_OPEN, "a waveform table is empty");
-        }
+        found = stat(path, &info) == 0 && info.st_size > 0;
+    }
+    closedir(dir);
+
+    if (!found) {
+        return fail(PAPERCLIP_EP_NOT_OPEN,
+                    "no waveform table in /usr/share/remarkable: the engine aborts "
+                    "rather than failing");
     }
     return PAPERCLIP_EP_OK;
 }
@@ -261,15 +281,27 @@ int32_t check(paperclip_ep *ep) noexcept
     return PAPERCLIP_EP_OK;
 }
 
-/* The vendor's EPScreenMode and UpdateFlag values are opaque to us: they are
- * enums in a closed header we do not have. The engine's mode numbers are
- * passed through as integers and reinterpreted here, which is the one place
- * the guess lives. */
+/* EPScreenMode is the mode number on its own.
+ *
+ * An earlier reading packed the content type into bit 8 — `0x100 | mode` — and
+ * the device refuted it in one run: a colour swap printed
+ *
+ *     Invalid screen mode being set: 260
+ *
+ * which is `0x100 | 4`, and the swap returned in 190ms against the 2181ms a
+ * real full-panel update took. So the engine rejected it outright.
+ *
+ * Mono and colour share one numbering — mono 0 and 3, colour 3/4/5 — so the
+ * content type is not part of this call at all. It stays in the C ABI because
+ * it is real information the Rust side carries, and because the vendor has a
+ * separate notion of content type that a later revision may need to pass
+ * somewhere else; it simply does not belong here. */
 int32_t present(paperclip_ep *ep, QRect rect, int32_t content, int32_t mode,
                 int32_t full) noexcept
 {
+    (void)content;
     try {
-        const int screen_mode = (content == PAPERCLIP_EP_CONTENT_COLOR ? 0x100 : 0) | mode;
+        const int screen_mode = mode;
         const int flags = full != 0 ? 1 : 0;
         ep->engine->swapBuffers(
             rect, static_cast<EPScreenMode>(screen_mode),

@@ -1,7 +1,8 @@
 # ADR-0009 — The device adapter's FFI boundary
 
-**Status:** accepted for the shape; **compiles, links and refuses cleanly off
-the tablet, but has never driven the panel** (Stage 3, WWW-3).
+**Status:** accepted, and **exercised on hardware** — three takeover round
+trips on 2026-09-17 with stock verified healthy after each (Stage 3, WWW-3).
+See `docs/device/www-3-takeover-session.md`.
 Implements the decision in [ADR-0007](0007-display-transport-via-vendor-waveform-engine.md);
 this ADR is about *how* the vendor engine is called, not whether it is.
 
@@ -182,6 +183,21 @@ This is also the firmware-drift alarm. When an OS update replaces the rootfs,
 re-running the check against the new library says immediately whether the ABI
 moved, rather than leaving it to be discovered by a black screen.
 
+## Building it: GCC, not zig
+
+Worth recording because it cost a debugging cycle. The `zig cc` wrapper that
+cross-links pure Rust for the tablet **cannot build this bridge**. Zig ships
+libc++, whose `std::tuple` mangles as `St3__16tupleI…`; `libqsgepaper.so` was
+built with libstdc++, which mangles it `St5tupleIJ…`. So
+`EPFramebuffer::setBuffers` fails to resolve, and only that one symbol does.
+
+`tools/cross/build-device.sh` therefore builds in an aarch64 Debian **bookworm**
+container: GCC for the libstdc++ ABI, and glibc 2.36 against the device's 2.39,
+because an older glibc runs on a newer one and the reverse is the
+`GLIBC_2.39 not found` failure that only appears on the tablet. Qt headers come
+from a 6.10 extract; the libraries linked against are **copies pulled off the
+device itself**, so the ABI is the device's own rather than a distribution's.
+
 ## Does it link? Yes — `check-link.sh`
 
 `check-abi.sh` proves the declarations match the exports. It does not prove the
@@ -273,12 +289,17 @@ pointed at by `PAPERCLIP_VENDOR_LIB_DIR`.
 
 | Gate | Status | What it blocks |
 |---|---|---|
-| The declared symbols are exported by the real library | **closed 2026-09-17** — all seven present | linking at all |
-| The bridge compiles and links against `libqsgepaper.so` | **closed 2026-09-17** — Qt 6.10.2, aarch64, `-Werror` | everything below |
+| The declared symbols are exported by the real library | **closed** — all seven present | linking at all |
+| The bridge compiles and links against `libqsgepaper.so` | **closed** | everything below |
 | Whether `EPFramebuffer` needs a live `QGuiApplication` | **closed** — a bare `QCoreApplication` suffices; without one it segfaults | whether the primary path is simpler than the fallback |
 | Whether the vendor can kill the process past our error handling | **closed, and it can** — `abort()` on init failure, guarded by `preflight()` | the honesty of the no-exception contract |
-| The four waveform tables exist on the tablet with the sizes the engine wants | **assumed** — stock uses them, but unread | opening the engine at all |
-| Whether the bridge builds against the device's exact Qt 6.10.3 | **not attempted** — checked against 6.10.2 | a patch-level ABI surprise |
+| Which waveform table the engine loads | **closed** — panel-specific, selected by lot/TFT; not the `ct33_*` files | a guard that wrongly refuses another panel |
+| The engine opens and presents on the real tablet | **closed** — three round trips, stock healthy after each | the stage |
+| The `EPScreenMode` encoding | **closed, and it was wrong** — mode alone, no content bit | every colour swap |
+| **That what reaches the glass is correct** | **open** — nothing has seen the panel | §18 item 2 |
+| Panel settle time, as against API call latency | **open** — connect `framebufferUpdated` or use a camera | the §9 latency budget |
+| Input during a session | **open** — needs a finger on the glass | the input half of the round trip |
+| Ghosting, memory, CPU, behaviour across a real suspend | **open** — the tablet was on charge, so it never suspended | the §9 baseline |
 | A Paperclip surface is legible on the glass | **open** | §18 item 2, the stage's whole point |
 | Which tuple element the engine presents from | **guessed** in `paperclip_ep_open` | drawing landing on the wrong page |
 | The `EPScreenMode` / `UpdateFlag` / `GhostControlMode` numeric values | **guessed** | wrong waveform, silently |

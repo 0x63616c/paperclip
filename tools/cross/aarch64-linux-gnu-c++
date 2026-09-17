@@ -1,0 +1,22 @@
+#!/bin/sh
+# Cross C++ compiler for the tablet, built on `zig c++`.
+#
+# Same reasoning as the C wrapper next to it: glibc 2.36 rather than the
+# device's 2.39, because an older glibc runs on a newer one and the reverse is
+# the "GLIBC_2.39 not found" failure that only appears on the tablet.
+#
+# Qt headers come from PAPERCLIP_QT_INCLUDE; the libraries to link against come
+# from PAPERCLIP_VENDOR_LIB_DIR, which holds copies pulled off the device
+# itself, so the ABI is the device's own rather than a distribution's guess.
+#
+# `cc-rs` appends its own `--target=<rust triple>`, which zig cannot parse
+# ("UnknownOperatingSystem" on the `unknown` vendor field). Drop it; the
+# `-target` below is the authoritative one.
+args=""
+for arg in "$@"; do
+    case "$arg" in
+        --target=*) continue ;;
+    esac
+    args="$args '$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
+done
+eval "exec zig c++ -target aarch64-linux-gnu.2.36 $args"

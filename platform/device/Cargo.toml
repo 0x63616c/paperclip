@@ -23,11 +23,23 @@ vendor-engine = ["dep:cc"]
 paper-sdk = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+# The takeover example draws a real screen rather than a test pattern: §9 wants
+# the same UI code on both backends, and a rectangle would not prove that.
+paper-home = { workspace = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
 
 [build-dependencies]
 cc = { workspace = true, optional = true }
+
+# Device-only: it links the vendor engine and calls systemd, so a Mac build of
+# the workspace must not try to compile it. `vendor-engine` already refuses any
+# target that is not aarch64 Linux, so this one gate covers both.
+[[example]]
+name = "takeover"
+required-features = ["vendor-engine"]
 
 [lints]
 workspace = true
