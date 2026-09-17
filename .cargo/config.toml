@@ -8,5 +8,13 @@
 # The linker is a two-line `zig cc` wrapper rather than the reMarkable SDK, so
 # that a check of the device half costs nothing to set up. Anything that links
 # Qt — the `vendor-engine` feature — needs the real SDK and overrides this.
+# Note for anyone building *natively* on aarch64 Linux — the failure harness's
+# VM, or the tablet itself — where this is the host triple rather than a cross
+# target: the wrapper is not on PATH there and every link fails with exit 127.
+# Override it with the native linker:
+#
+#     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=cc cargo build
+#
+# `tools/vm-harness/run-harness.sh` does this.
 [target.aarch64-unknown-linux-gnu]
 linker = "tools/cross/aarch64-linux-gnu-cc"

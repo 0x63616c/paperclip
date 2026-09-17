@@ -11,10 +11,13 @@ members = [
     "platform/packages",
     "platform/sdk",
     "platform/device",
+    "platform/host",
     "apps/home",
     "apps/chess",
     "tools/paperctl",
+    "tools/fault-app",
     "tests/system",
+    "tests/failure-harness",
 ]
 
 [workspace.package]
@@ -33,6 +36,7 @@ paper-packages = { path = "platform/packages" }
 paper-sdk = { path = "platform/sdk", default-features = false }
 paper-device = { path = "platform/device" }
 paper-home = { path = "apps/home" }
+paper-host = { path = "platform/host" }
 paper-chess = { path = "apps/chess" }
 
 cc = "1.2"

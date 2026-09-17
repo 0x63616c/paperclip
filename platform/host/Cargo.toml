@@ -1,0 +1,46 @@
+# The supervisor (§7 `platform/host`, §10 recovery, §11 isolation).
+#
+# Split deliberately into a pure core and a thin Linux runtime:
+#
+#   * `state`, `facilities`, `units`, `policy`, `report` are platform-free and
+#     tested everywhere, including on the Mac.
+#   * `linux` touches signals, `/proc`, cgroups and `systemctl`, compiles only
+#     on Linux, and is proven by the VM harness in `tests/failure-harness`.
+#
+# The split is the point: a Mac test can prove the *decisions* are right, and
+# only the VM can prove the *enforcement* is real. Nothing here lets the first
+# be mistaken for the second.
+[package]
+name = "paper-host"
+description = "The Paperclip host: foreground state machine, deadlines, session supervision and stock recovery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+autotests = false
+
+[lib]
+name = "paper_host"
+path = "src/lib.rs"
+
+[[test]]
+name = "host"
+path = "tests/host.rs"
+harness = true
+
+[dependencies]
+paper-device = { workspace = true }
+paper-packages = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+paper-device = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
