@@ -367,7 +367,40 @@ fn present(canvas: &Canvas, plan: &HoldPlan, args: &OpenArgs) -> Result<(), Comm
             },
         });
     }
-    Ok(())
+    // Checked after the restore, and deliberately in that order: a tablet that
+    // needs looking at outranks a frame that does not add up, and the restore
+    // has already happened by the time either is reported.
+    verdict(&report.panel)
+}
+
+/// Turns the presenter's readback verdict into this process's exit code.
+///
+/// Until WWW-31 the verdict went as far as the terminal and no further:
+/// `PanelWork::holding` computed it, `Display` printed it, and `open` exited 0
+/// over the top of it — which is how every orphaned present between WWW-3 and
+/// WWW-30 passed for a success. Anything scripting this command, or reading a
+/// `$?`, now gets the answer the report was already giving to a human.
+///
+/// What a pass means is exactly what `PanelWork::claim` says: the engine holds
+/// the bytes that were sent. Not that the panel changed. That still needs a
+/// camera (§17).
+#[cfg(target_os = "linux")]
+fn verdict(panel: &paper_device::PanelRecord) -> Result<(), CommandError> {
+    match panel.holds_sent {
+        Some(true) => Ok(()),
+        Some(false) => Err(CommandError::FrameNotHeld {
+            detail: format!(
+                "the frame was presented without error and no engine buffer came back holding \
+                 {} — the pixels are unaccounted for",
+                panel.digest
+            ),
+        }),
+        None => Err(CommandError::FrameNotHeld {
+            detail: "the presenter reported no readback verdict at all, so whether the engine \
+                     took the frame is unknown"
+                .to_owned(),
+        }),
+    }
 }
 
 #[cfg(all(test, not(target_os = "linux")))]

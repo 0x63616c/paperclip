@@ -349,6 +349,11 @@ mod interactive {
         Ok(PanelRecord {
             real_panel,
             digest: first_digest.expect("the loop above presents at least one frame"),
+            // An interactive session presents frame after frame and digests
+            // none of the engine's buffers afterwards, so it has no verdict to
+            // report — not a negative one. `paperctl open` is the command that
+            // reads back, and the one that exits non-zero on the answer.
+            holds_sent: None,
             lines,
         })
     }

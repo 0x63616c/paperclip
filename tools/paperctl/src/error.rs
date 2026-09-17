@@ -138,6 +138,25 @@ pub(crate) enum CommandError {
         regressions: String,
     },
 
+    /// The session completed, and the readback does not support the claim
+    /// that the engine is holding the frame that was sent.
+    ///
+    /// A separate variant from [`Self::StockRegressed`] because the tablet is
+    /// fine and the *evidence* is not: stock came back, nothing needs
+    /// rescuing, and the run still must not exit 0. That distinction is the
+    /// whole point of WWW-31 — between WWW-3 and WWW-30 every present was
+    /// orphaned from the engine and every one of them exited 0, because the
+    /// verdict `PanelWork::holding` computes was printed and then dropped.
+    #[cfg(target_os = "linux")]
+    #[error(
+        "the display session completed and its frame is NOT accounted for: {detail}\n\
+         stock is back and the tablet is healthy; what failed is the evidence, not the restore"
+    )]
+    FrameNotHeld {
+        /// Which of the two failures this is, in words.
+        detail: String,
+    },
+
     /// Stock could not be restored. Never softened: §10 forbids claiming a
     /// recovery that did not happen.
     #[cfg(target_os = "linux")]

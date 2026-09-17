@@ -619,6 +619,20 @@ pub struct PanelRecord {
     pub real_panel: bool,
     /// The digest of the frame the presenter actually sent.
     pub digest: String,
+    /// Whether an engine buffer came back holding exactly that frame —
+    /// [`PanelWork::holding`] reduced to the one bit a caller can act on.
+    ///
+    /// `Option` rather than `bool` because "the readback said no" and "nobody
+    /// read anything back" are different facts and a caller that exits on the
+    /// first must not be handed the second dressed up as it. `None` is the
+    /// honest value for a presenter that never digested the buffers — the
+    /// interactive session in `paperctl run` presents many frames and reads
+    /// none of them back — and for a record written by something older than
+    /// this field.
+    ///
+    /// `Some(true)` says the engine accepted and is holding these pixels. It
+    /// says nothing whatever about the glass; see [`PanelWork::claim`].
+    pub holds_sent: Option<bool>,
     /// The presenter's own report, one line each.
     pub lines: Vec<String>,
 }
@@ -629,6 +643,10 @@ impl PanelRecord {
         Self {
             real_panel: work.real_panel,
             digest: format!("sha256:{}", work.digest.to_hex()),
+            // Every plane is read back on the `present_and_hold` path, so this
+            // is a verdict rather than an absence: `false` here means the
+            // readback ran and no buffer held the frame.
+            holds_sent: Some(!work.holding().is_empty()),
             lines: work.to_string().lines().map(str::to_owned).collect(),
         }
     }
@@ -639,7 +657,16 @@ impl PanelRecord {
     /// diagnostics to stdout — panel lot ids, waveform table, pmic rails — and
     /// those belong in front of the operator, not parsed out of a stream.
     pub fn write(&self, path: &Path) -> Result<(), DeviceError> {
-        let mut text = format!("real_panel={}\ndigest={}\n", self.real_panel, self.digest);
+        let mut text = format!(
+            "real_panel={}\ndigest={}\nholds_sent={}\n",
+            self.real_panel,
+            self.digest,
+            match self.holds_sent {
+                Some(true) => "true",
+                Some(false) => "false",
+                None => "unknown",
+            }
+        );
         for line in &self.lines {
             // The report is human text and may hold anything but a newline,
             // which is the one character the format cannot carry.
@@ -656,12 +683,19 @@ impl PanelRecord {
         let mut record = Self {
             real_panel: false,
             digest: String::new(),
+            holds_sent: None,
             lines: Vec::new(),
         };
         for line in text.lines() {
             match line.split_once('=') {
                 Some(("real_panel", value)) => record.real_panel = value == "true",
                 Some(("digest", value)) => record.digest = value.to_owned(),
+                // Anything that is not the word `true` reads as unverified,
+                // and a missing key as unknown: the default has to be the one
+                // that makes a caller look harder, never the green one.
+                Some(("holds_sent", "true")) => record.holds_sent = Some(true),
+                Some(("holds_sent", "false")) => record.holds_sent = Some(false),
+                Some(("holds_sent", _)) => record.holds_sent = None,
                 Some(("line", value)) => record.lines.push(value.to_owned()),
                 _ => {}
             }
@@ -1240,6 +1274,7 @@ mod tests {
         assert_eq!(read, written);
         assert_eq!(read.digest, format!("sha256:{}", work.digest.to_hex()));
         assert!(!read.real_panel);
+        assert_eq!(read.holds_sent, Some(!work.holding().is_empty()));
         // The report comes back verbatim, including the claim — the parent
         // reprints it rather than restating it, so it cannot drift.
         assert!(read.lines.iter().any(|line| line.contains(work.claim())));
@@ -1343,6 +1378,65 @@ mod tests {
         // what happened even if it never looks at the planes.
         assert!(work.claim().contains("unaccounted for"), "{}", work.claim());
         assert!(!work.claim().contains("engine holds"));
+    }
+
+    /// The verdict `holding()` computes has to survive being written to a file
+    /// and read back by another process, because that is the only way it can
+    /// reach the exit code: the presenting half cannot return a value, it can
+    /// only leave a record and die (WWW-23's lock).
+    ///
+    /// Both directions, against the same fixture pair as
+    /// `a_panel_that_reports_success_over_the_wrong_pixels_is_caught`: a
+    /// truthful panel records `Some(true)`, and a panel that reports success
+    /// over the wrong pixels records `Some(false)` rather than losing the
+    /// finding somewhere in `lines`.
+    #[test]
+    fn the_readback_verdict_survives_the_process_boundary_in_both_directions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let held = super::PanelRecord::of(&present_once(&mut MemoryPanel::new(SCREEN)));
+        assert_eq!(held.holds_sent, Some(true));
+
+        let lost =
+            super::PanelRecord::of(&present_once(&mut SilentFallback(MemoryPanel::new(SCREEN))));
+        assert_eq!(lost.holds_sent, Some(false));
+
+        for record in [&held, &lost] {
+            let path = dir.path().join("record");
+            record.write(&path).expect("writes");
+            assert_eq!(
+                super::PanelRecord::read(&path).expect("reads").holds_sent,
+                record.holds_sent
+            );
+        }
+    }
+
+    /// A record that names no verdict reads as unknown, never as a pass.
+    ///
+    /// The case that matters is an older or foreign presenter, or a record
+    /// truncated after the digest: `paperctl open` exits non-zero on `None`
+    /// exactly as it does on `Some(false)`, so the absent value must not
+    /// default to the green one.
+    #[test]
+    fn a_record_with_no_verdict_is_unknown_rather_than_a_pass() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("record");
+        std::fs::write(
+            &path,
+            "real_panel=true\ndigest=sha256:abc\nline=presented\n",
+        )
+        .expect("writes");
+        assert_eq!(
+            super::PanelRecord::read(&path).expect("reads").holds_sent,
+            None
+        );
+
+        std::fs::write(&path, "digest=sha256:abc\nholds_sent=probably\n").expect("writes");
+        assert_eq!(
+            super::PanelRecord::read(&path).expect("reads").holds_sent,
+            None,
+            "anything but `true` or `false` is unknown"
+        );
     }
 
     #[test]
