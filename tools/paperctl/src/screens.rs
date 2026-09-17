@@ -125,11 +125,17 @@ impl Screens {
     pub(crate) fn new() -> Result<Self, CommandError> {
         let home_manifest = parse_built_in("home", HOME_MANIFEST)?;
         let chess_manifest = parse_built_in("chess", CHESS_MANIFEST)?;
-        parse_built_in("settings", SETTINGS_MANIFEST)?;
+        let settings_manifest = parse_built_in("settings", SETTINGS_MANIFEST)?;
 
+        // Settings is a default app (ADR-0015) and belongs on the shelf every
+        // path renders. `session::home_screen` listed it and this did not, so
+        // the tile appeared in an interactive session and was missing from the
+        // panel — `open` renders through here. Two shelves is one too many;
+        // `both_shelves_list_the_same_apps` below holds them together.
         let home = HomeScreen {
             entries: vec![
                 ShelfEntry::from_manifest(&chess_manifest, ShelfGlyph::Board),
+                ShelfEntry::from_manifest(&settings_manifest, ShelfGlyph::Gear),
                 ShelfEntry::action("App Store", "NOT INSTALLED", ShelfGlyph::Store),
                 ShelfEntry::action("Return to stock", "REMARKABLE", ShelfGlyph::Stock),
             ],
@@ -384,8 +390,8 @@ mod golden {
     const GOLDEN: [(Screen, &str, u32); 4] = [
         (
             Screen::Home,
-            "0fb73b27198efb386d8d5dc906b190430e9ef465f7243b69e8b72cb6b0b08dd2",
-            318,
+            "1dff16794e0cc4188720d3d74eac62c536fcd4d4fb292d6337ac9871203bc786",
+            420,
         ),
         (
             Screen::Chess,
@@ -481,6 +487,26 @@ mod golden {
     /// a digest that changed with whatever is installed locally would assert
     /// nothing. What a real session uses is `LiveHost` — see
     /// `session::open_session`.
+    /// The shelf `screenshot` and `open` render must list the same apps as the
+    /// one an interactive `run` session shows.
+    ///
+    /// They were built in two places and drifted: Settings was added to
+    /// `session::home_screen` and not here, so the tile appeared in a session
+    /// and was absent from the panel. Nothing failed — both shelves rendered
+    /// perfectly, they just disagreed about what Paperclip contains.
+    #[test]
+    fn both_shelves_list_the_same_apps() {
+        let screens = Screens::new().expect("the built-in manifests parse");
+        let rendered: Vec<&str> = screens.home.entries.iter().map(|e| e.label()).collect();
+        for expected in ["Chess", "Settings", "Return to stock"] {
+            assert!(
+                rendered.iter().any(|t| t.eq_ignore_ascii_case(expected)),
+                "the rendered shelf is missing `{expected}`: {rendered:?}. \
+                 `session::home_screen` lists it; these two must agree."
+            );
+        }
+    }
+
     #[test]
     fn the_settings_app_launches_into_the_frame_the_settings_screen_is_frozen_at() {
         let (_, frozen, ink) = GOLDEN
