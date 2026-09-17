@@ -149,7 +149,10 @@ pub(crate) fn run(args: &SetupArgs) -> Result<(), CommandError> {
             None => Stage::Note("nothing selected; run `paperctl upgrade run`".to_owned()),
         },
     );
-    report("this paperctl", &Stage::Ok(env!("CARGO_PKG_VERSION").to_owned()));
+    report(
+        "this paperctl",
+        &Stage::Ok(env!("CARGO_PKG_VERSION").to_owned()),
+    );
     report(
         "trusted keys",
         &if layout
@@ -272,9 +275,12 @@ fn prerequisites(stock_unit: &str) -> Vec<(&'static str, Stage)> {
 
     // The display library. SSH working says nothing about this, which is the
     // sentence §14 is built around.
-    let vendor = ["/usr/lib/libqsgepaper.so", "/usr/lib/plugins/libqsgepaper.so"]
-        .into_iter()
-        .find(|path| Path::new(path).exists());
+    let vendor = [
+        "/usr/lib/libqsgepaper.so",
+        "/usr/lib/plugins/libqsgepaper.so",
+    ]
+    .into_iter()
+    .find(|path| Path::new(path).exists());
     stages.push((
         "display library",
         match vendor {
@@ -293,7 +299,9 @@ fn prerequisites(stock_unit: &str) -> Vec<(&'static str, Stage)> {
         if Path::new(wake_lock).exists() {
             Stage::Ok(wake_lock.to_owned())
         } else {
-            Stage::Note(format!("no {wake_lock}; the tablet may suspend mid-session"))
+            Stage::Note(format!(
+                "no {wake_lock}; the tablet may suspend mid-session"
+            ))
         },
     ));
 

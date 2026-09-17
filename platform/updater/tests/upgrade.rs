@@ -221,7 +221,10 @@ impl SessionControl for FakeSession {
     }
 
     fn release_wakelock(&self) {
-        self.log.lock().expect("log").push("release-wakelock".to_owned());
+        self.log
+            .lock()
+            .expect("log")
+            .push("release-wakelock".to_owned());
         if !*self.wakelock_stuck.lock().expect("stuck") {
             *self.wakelock.lock().expect("wakelock") = false;
         }
@@ -277,14 +280,22 @@ impl Fixture {
         let bin = source.join("bin");
         std::fs::create_dir_all(&bin).expect("a source tree");
         for name in ["paperclip-host", "home", "app-store", "settings"] {
-            std::fs::write(bin.join(name), elf(0xB7, format!("{name} {version}").as_bytes()))
-                .expect("a component");
+            std::fs::write(
+                bin.join(name),
+                elf(0xB7, format!("{name} {version}").as_bytes()),
+            )
+            .expect("a component");
         }
         tamper(&source);
 
         let manifest = bundle::describe(
             &source,
-            &description(Version::parse(version).expect("a version"), state_version, rollback_to_state, &[]),
+            &description(
+                Version::parse(version).expect("a version"),
+                state_version,
+                rollback_to_state,
+                &[],
+            ),
         )
         .expect("a manifest");
         self.pack(&source, &manifest, domain, version, state_version)
@@ -392,8 +403,14 @@ fn a_healthy_candidate_is_committed_and_the_old_release_becomes_the_fallback() {
         other => panic!("expected an upgrade, got {other:?}"),
     }
 
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 4, 0)));
-    assert_eq!(fixture.layout.fallback().unwrap(), Some(Version::new(0, 3, 1)));
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 4, 0))
+    );
+    assert_eq!(
+        fixture.layout.fallback().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
     assert_eq!(
         fixture.journal().read().unwrap().map(|record| record.phase),
         Some(Phase::Commit)
@@ -507,7 +524,10 @@ fn a_candidate_that_stalls_below_ready_is_rolled_back() {
         other => panic!("expected a rollback, got {other:?}"),
     }
 
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 3, 1)));
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
     assert_eq!(
         fixture.journal().read().unwrap().map(|record| record.phase),
         Some(Phase::RolledBack)
@@ -552,7 +572,10 @@ fn a_release_that_starts_but_never_climbs_is_not_treated_as_healthy() {
         .expect("a completed transaction");
 
     assert!(matches!(outcome, Outcome::RolledBack { .. }), "{outcome:?}");
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 3, 1)));
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
 }
 
 #[test]
@@ -574,9 +597,16 @@ fn when_the_fallback_also_fails_the_device_is_left_at_stock_and_nothing_retries(
         .expect("a completed transaction");
 
     match outcome {
-        Outcome::Stranded { candidate, fallback, .. } => {
+        Outcome::Stranded {
+            candidate,
+            fallback,
+            ..
+        } => {
             assert_eq!(candidate, Version::new(0, 4, 0));
-            assert!(fallback.is_some(), "the report must say the fallback was tried");
+            assert!(
+                fallback.is_some(),
+                "the report must say the fallback was tried"
+            );
         }
         other => panic!("expected the device to be left at stock, got {other:?}"),
     }
@@ -605,7 +635,10 @@ fn a_first_release_that_fails_leaves_nothing_selected() {
         .run(&fixture.bundle("0.1.0"))
         .expect("a completed transaction");
 
-    assert!(matches!(outcome, Outcome::Stranded { fallback: None, .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, Outcome::Stranded { fallback: None, .. }),
+        "{outcome:?}"
+    );
     assert_eq!(
         fixture.layout.selected().unwrap(),
         None,
@@ -649,8 +682,15 @@ fn a_bundle_signed_by_a_stranger_is_refused_and_nothing_is_selected() {
         .run(&path)
         .expect_err("a bundle signed by an untrusted key must be refused");
     assert!(matches!(error, UpdateError::Signature(_)), "{error:?}");
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 3, 1)));
-    assert_eq!(session.count("stand-down"), 1, "only the first install stood down");
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
+    assert_eq!(
+        session.count("stand-down"),
+        1,
+        "only the first install stood down"
+    );
 }
 
 #[test]
@@ -715,7 +755,10 @@ fn a_component_that_does_not_match_the_signed_manifest_is_refused() {
         matches!(&error, UpdateError::Component { name, .. } if name == "paperclip-host"),
         "{error:?}"
     );
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 3, 1)));
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
 }
 
 #[test]
@@ -764,7 +807,10 @@ fn a_file_in_the_bundle_that_the_manifest_does_not_name_is_refused() {
         matches!(&error, UpdateError::Component { name, .. } if name == "bin/extra"),
         "{error:?}"
     );
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 3, 1)));
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
 }
 
 #[test]
@@ -772,11 +818,17 @@ fn a_manifest_missing_a_required_component_is_refused() {
     let source = tempfile::tempdir().expect("a temp directory");
     std::fs::create_dir_all(source.path().join("bin")).expect("a source tree");
     for name in ["paperclip-host", "home", "app-store"] {
-        std::fs::write(source.path().join("bin").join(name), elf(0xB7, name.as_bytes()))
-            .expect("a component");
+        std::fs::write(
+            source.path().join("bin").join(name),
+            elf(0xB7, name.as_bytes()),
+        )
+        .expect("a component");
     }
-    let error = bundle::describe(source.path(), &description(Version::new(0, 4, 0), 1, 1, &[]))
-        .expect_err("a platform release without Settings is not a platform release");
+    let error = bundle::describe(
+        source.path(),
+        &description(Version::new(0, 4, 0), 1, 1, &[]),
+    )
+    .expect_err("a platform release without Settings is not a platform release");
     assert!(matches!(error, UpdateError::Component { .. }), "{error:?}");
 }
 
@@ -806,7 +858,10 @@ fn installing_the_version_that_is_already_selected_is_refused() {
         .upgrade(&session, &clock)
         .run(&fixture.bundle("0.3.1"))
         .expect_err("re-selecting the running release is not an upgrade");
-    assert!(matches!(error, UpdateError::AlreadySelected { .. }), "{error:?}");
+    assert!(
+        matches!(error, UpdateError::AlreadySelected { .. }),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -862,9 +917,14 @@ fn a_session_that_will_not_stand_down_stops_the_upgrade_before_the_swap() {
     let error = fixture
         .upgrade(&session, &clock)
         .run(&fixture.bundle("0.4.0"))
-        .expect_err("swapping under a session that still owns the panel is the one thing not allowed");
+        .expect_err(
+            "swapping under a session that still owns the panel is the one thing not allowed",
+        );
     assert!(matches!(error, UpdateError::StandDown { .. }), "{error:?}");
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 3, 1)));
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
 }
 
 // --- interruption -----------------------------------------------------------
@@ -880,7 +940,10 @@ fn reconcile_does_nothing_when_nothing_was_interrupted() {
         fixture.upgrade(&session, &clock).reconcile().unwrap(),
         Reconciled::Nothing
     );
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 3, 1)));
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
 }
 
 #[test]
@@ -907,7 +970,10 @@ fn an_interruption_between_activate_and_commit_reverts_rather_than_resumes() {
     let mut record = fixture.journal().read().unwrap().expect("a record");
     record.phase = Phase::Verify;
     record.attempts = 1;
-    fixture.journal().record(&mut record).expect("a journal write");
+    fixture
+        .journal()
+        .record(&mut record)
+        .expect("a journal write");
 
     let reconciled = upgrade.reconcile().expect("a reconcile");
     assert_eq!(
@@ -918,7 +984,10 @@ fn an_interruption_between_activate_and_commit_reverts_rather_than_resumes() {
             state_restored: false,
         }
     );
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 3, 1)));
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
     assert_eq!(
         fixture.journal().read().unwrap().map(|record| record.phase),
         Some(Phase::RolledBack)
@@ -940,7 +1009,10 @@ fn an_interruption_while_staging_discards_the_candidate() {
     std::fs::create_dir_all(&staging).expect("a staging directory");
     let mut record = paper_updater::Record::opening(Some(Version::new(0, 3, 1)), candidate.clone());
     record.staged = Some(staging.clone());
-    fixture.journal().record(&mut record).expect("a journal write");
+    fixture
+        .journal()
+        .record(&mut record)
+        .expect("a journal write");
 
     let clock = FakeClock::new();
     let reconciled = fixture
@@ -950,7 +1022,10 @@ fn an_interruption_while_staging_discards_the_candidate() {
     assert_eq!(reconciled, Reconciled::DiscardedStaging { candidate });
     assert!(!staging.exists(), "the staging directory must be gone");
     assert!(!release.exists(), "an uncommitted release is not a release");
-    assert_eq!(fixture.layout.selected().unwrap(), Some(Version::new(0, 3, 1)));
+    assert_eq!(
+        fixture.layout.selected().unwrap(),
+        Some(Version::new(0, 3, 1))
+    );
 }
 
 #[test]
@@ -962,7 +1037,10 @@ fn a_second_upgrade_over_an_unreconciled_one_is_refused() {
     let mut record =
         paper_updater::Record::opening(Some(Version::new(0, 3, 1)), Version::new(0, 4, 0));
     record.phase = Phase::Verify;
-    fixture.journal().record(&mut record).expect("a journal write");
+    fixture
+        .journal()
+        .record(&mut record)
+        .expect("a journal write");
 
     let clock = FakeClock::new();
     let error = fixture
@@ -1022,7 +1100,10 @@ fn no_snapshot_is_taken_when_the_older_release_can_read_the_newer_ones_writes() 
     // state_version 2, but readable back to 1 — a backward-compatible change.
     let bundle = fixture.bundle_with("0.4.0", 2, 1, Domain::PLATFORM, |_| {});
     let clock = FakeClock::new();
-    fixture.upgrade(&session, &clock).run(&bundle).expect("an upgrade");
+    fixture
+        .upgrade(&session, &clock)
+        .run(&bundle)
+        .expect("an upgrade");
 
     assert!(
         !fixture.layout.snapshot_dir(&Version::new(0, 3, 1)).exists(),
@@ -1091,7 +1172,13 @@ fn no_app_id_names_a_path_inside_the_platform_root() {
     let store = Layout::new(paper_packages::store::DEVICE_ROOT);
     platform.separate_from(&store).expect("disjoint roots");
 
-    for id in ["dev.calum.chess", "paperclip-host", "home", "current", "bin"] {
+    for id in [
+        "dev.calum.chess",
+        "paperclip-host",
+        "home",
+        "current",
+        "bin",
+    ] {
         let Ok(app) = id.parse::<paper_packages::AppId>() else {
             continue;
         };
@@ -1125,10 +1212,7 @@ fn removal_keeps_app_data_and_never_names_a_notebook() {
         );
     }
     assert!(
-        removal
-            .keeps
-            .iter()
-            .any(|(path, _)| path.ends_with("data")),
+        removal.keeps.iter().any(|(path, _)| path.ends_with("data")),
         "app data is kept unless removal is asked for it explicitly"
     );
 }
@@ -1153,7 +1237,10 @@ fn removal_refuses_a_directory_that_is_not_a_paperclip_root() {
     let error = plan(&platform, &store, AppData::Keep)
         .execute()
         .expect_err("a root without the marker must be refused");
-    assert!(matches!(error, UpdateError::NotAPaperclipRoot { .. }), "{error:?}");
+    assert!(
+        matches!(error, UpdateError::NotAPaperclipRoot { .. }),
+        "{error:?}"
+    );
     assert!(keepsake.exists());
 }
 
@@ -1175,7 +1262,10 @@ fn removal_deletes_the_platform_tree_and_leaves_app_data() {
 
     assert!(!platform.releases_dir().exists());
     assert!(!platform.root().join(".paperclip-platform").exists());
-    assert!(save.exists(), "§14: app data is not deleted unintentionally");
+    assert!(
+        save.exists(),
+        "§14: app data is not deleted unintentionally"
+    );
 }
 
 // --- the journal ------------------------------------------------------------
@@ -1191,7 +1281,10 @@ fn an_unreadable_journal_is_an_error_rather_than_an_assumption_that_nothing_happ
     let error = Journal::new(&path)
         .read()
         .expect_err("guessing is worst exactly here");
-    assert!(matches!(error, UpdateError::CorruptJournal { .. }), "{error:?}");
+    assert!(
+        matches!(error, UpdateError::CorruptJournal { .. }),
+        "{error:?}"
+    );
 }
 
 #[test]

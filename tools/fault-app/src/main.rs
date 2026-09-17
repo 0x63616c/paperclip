@@ -207,7 +207,11 @@ fn fake_host(arguments: &[String]) -> ExitCode {
     };
     let script = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().and_then(|bin| bin.parent()).map(Path::to_path_buf))
+        .and_then(|exe| {
+            exe.parent()
+                .and_then(|bin| bin.parent())
+                .map(Path::to_path_buf)
+        })
         .map(|release| release.join("ladder"))
         .and_then(|path| fs::read_to_string(path).ok())
         .unwrap_or_else(|| "ready".to_owned());
@@ -225,20 +229,32 @@ fn fake_host(arguments: &[String]) -> ExitCode {
         );
     };
 
-    let stop_at = script.strip_prefix("stall=").unwrap_or(match script.as_str() {
-        "panic" => "control",
-        _ => "ready",
-    });
+    let stop_at = script
+        .strip_prefix("stall=")
+        .unwrap_or(match script.as_str() {
+            "panic" => "control",
+            _ => "ready",
+        });
 
     // Climb, publishing each rung, exactly as the real supervisor does.
-    let ladder = ["process", "control", "protocol", "device-adapter", "home", "ready"];
+    let ladder = [
+        "process",
+        "control",
+        "protocol",
+        "device-adapter",
+        "home",
+        "ready",
+    ];
     let limit = ladder.iter().position(|rung| *rung == stop_at).unwrap_or(0);
     for rung in &ladder[..=limit] {
         write(rung, "");
         std::thread::sleep(Duration::from_millis(50));
     }
     if limit + 1 < ladder.len() {
-        write(ladder[limit], &format!("scripted stall below `{}`", ladder[limit + 1]));
+        write(
+            ladder[limit],
+            &format!("scripted stall below `{}`", ladder[limit + 1]),
+        );
     }
 
     // `READY=1` whatever the ladder said. §13's point is precisely that these

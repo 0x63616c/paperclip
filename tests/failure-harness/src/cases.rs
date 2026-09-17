@@ -929,7 +929,6 @@ fn write_outside_grants(fixture: &Fixture) -> Outcome {
     Ok(evidence)
 }
 
-
 // --- §13: platform upgrade ---------------------------------------------------
 //
 // Every case here drives the real `paperctl upgrade`, against real systemd,
@@ -983,7 +982,10 @@ fn assert_at_stock(fixture: &Fixture) -> Result<Vec<String>, String> {
         ));
     }
     let held = fs::read_to_string(fixture.power_dir.join("wake_lock")).unwrap_or_default();
-    if held.split_whitespace().any(|tag| tag == "paperclip-harness") {
+    if held
+        .split_whitespace()
+        .any(|tag| tag == "paperclip-harness")
+    {
         return Err("the wakelock is still held after the upgrade".to_owned());
     }
     Ok(vec![
@@ -996,7 +998,10 @@ fn upgrade_healthy(fixture: &Fixture) -> Outcome {
     let output = run_upgrade(fixture, &bundle)?;
 
     if selected(fixture) != "0.2.0" {
-        return Err(format!("`current` is {} after a healthy upgrade", selected(fixture)));
+        return Err(format!(
+            "`current` is {} after a healthy upgrade",
+            selected(fixture)
+        ));
     }
     let fallback = fixture
         .platform
@@ -1004,7 +1009,9 @@ fn upgrade_healthy(fixture: &Fixture) -> Outcome {
         .map_err(|error| error.to_string())?
         .map_or_else(|| "none".to_owned(), |version| version.to_string());
     if fallback != BASELINE {
-        return Err(format!("`previous` is {fallback}, not the baseline {BASELINE}"));
+        return Err(format!(
+            "`previous` is {fallback}, not the baseline {BASELINE}"
+        ));
     }
     if !unit_active(HOST_UNIT) {
         return Err("the new supervisor is not running after a committed upgrade".to_owned());
@@ -1030,14 +1037,15 @@ fn upgrade_panics(fixture: &Fixture) -> Outcome {
         ));
     }
     if !output.contains("refused") {
-        return Err(format!("the report did not say the candidate was refused:\n{output}"));
+        return Err(format!(
+            "the report did not say the candidate was refused:\n{output}"
+        ));
     }
     if !unit_active(HOST_UNIT) {
         return Err("the restored supervisor is not running".to_owned());
     }
-    let mut evidence = vec![
-        "a candidate whose supervisor panicked was refused and 0.1.0 came back".to_owned(),
-    ];
+    let mut evidence =
+        vec!["a candidate whose supervisor panicked was refused and 0.1.0 came back".to_owned()];
     evidence.push(format!("report: {}", output.trim().replace('\n', " | ")));
     Ok(evidence)
 }
@@ -1056,7 +1064,9 @@ fn upgrade_never_ready(fixture: &Fixture) -> Outcome {
         ));
     }
     if !output.contains("home") {
-        return Err(format!("the report did not name the rung reached:\n{output}"));
+        return Err(format!(
+            "the report did not name the rung reached:\n{output}"
+        ));
     }
     Ok(vec![
         "a release that went `active` without reaching `ready` was refused".to_owned(),
@@ -1069,7 +1079,10 @@ fn upgrade_middle_rung(fixture: &Fixture) -> Outcome {
     let output = run_upgrade(fixture, &bundle)?;
 
     if selected(fixture) != BASELINE {
-        return Err(format!("`current` is {} after a mid-ladder stall", selected(fixture)));
+        return Err(format!(
+            "`current` is {} after a mid-ladder stall",
+            selected(fixture)
+        ));
     }
     if !output.contains("device-adapter") {
         return Err(format!(
@@ -1111,8 +1124,9 @@ fn upgrade_power_loss(fixture: &Fixture) -> Outcome {
     let _ = child.kill();
     let _ = child.wait();
     if !reached {
-        return Err("the upgrade never reached ACTIVATE, so there was nothing to interrupt"
-            .to_owned());
+        return Err(
+            "the upgrade never reached ACTIVATE, so there was nothing to interrupt".to_owned(),
+        );
     }
 
     let before = fs::read_to_string(&journal).unwrap_or_default();
@@ -1173,9 +1187,14 @@ fn upgrade_reboot(fixture: &Fixture) -> Outcome {
     // says "No [Install]: never enabled", and matching that would fail a unit
     // for documenting the thing it does not do.
     if contents.lines().any(|line| line.trim() == "[Install]") {
-        return Err("the host unit has an [Install] section, so a reboot could take over".to_owned());
+        return Err(
+            "the host unit has an [Install] section, so a reboot could take over".to_owned(),
+        );
     }
-    evidence.push("the supervisor unit is runtime-only, resolves through `current`, and is never enabled".to_owned());
+    evidence.push(
+        "the supervisor unit is runtime-only, resolves through `current`, and is never enabled"
+            .to_owned(),
+    );
 
     // 3. And an interrupted journal is reconcilable without a session to talk
     //    to — which is the state a reboot actually leaves.
@@ -1192,7 +1211,9 @@ fn upgrade_cannot_replace_the_bootstrap(fixture: &Fixture) -> Outcome {
     let bootstrap = fixture.paths.root.join("bin/paperctl");
     let keys = fixture.platform.keys_dir().join("harness.pub");
     let before = (
-        fs::metadata(&bootstrap).map_err(|error| error.to_string())?.len(),
+        fs::metadata(&bootstrap)
+            .map_err(|error| error.to_string())?
+            .len(),
         fs::read(&keys).map_err(|error| error.to_string())?,
     );
 
@@ -1200,7 +1221,9 @@ fn upgrade_cannot_replace_the_bootstrap(fixture: &Fixture) -> Outcome {
     run_upgrade(fixture, &bundle)?;
 
     let after = (
-        fs::metadata(&bootstrap).map_err(|error| error.to_string())?.len(),
+        fs::metadata(&bootstrap)
+            .map_err(|error| error.to_string())?
+            .len(),
         fs::read(&keys).map_err(|error| error.to_string())?,
     );
     if before != after {
@@ -1238,7 +1261,6 @@ fn upgrade_cannot_replace_the_bootstrap(fixture: &Fixture) -> Outcome {
     ])
 }
 
-
 fn setup_is_idempotent(fixture: &Fixture) -> Outcome {
     // §14 asks for staged, version-aware and diagnostic — and for setup to
     // inspect the actual prerequisites rather than treat a working shell as
@@ -1260,14 +1282,20 @@ fn setup_is_idempotent(fixture: &Fixture) -> Outcome {
     }
     for (run, output) in [("first", &first), ("second", &second)] {
         if !output.contains("isolation") || !output.contains("runtime units") {
-            return Err(format!("the {run} run skipped a prerequisite stage:\n{output}"));
+            return Err(format!(
+                "the {run} run skipped a prerequisite stage:\n{output}"
+            ));
         }
         if output.contains("MISSING") {
-            return Err(format!("the {run} run reported a missing prerequisite:\n{output}"));
+            return Err(format!(
+                "the {run} run reported a missing prerequisite:\n{output}"
+            ));
         }
     }
     if !second.contains("is established") {
-        return Err(format!("the second run did not recognise the root:\n{second}"));
+        return Err(format!(
+            "the second run did not recognise the root:\n{second}"
+        ));
     }
     Ok(vec![
         "setup reported every stage and found no prerequisite missing".to_owned(),

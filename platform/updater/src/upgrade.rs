@@ -51,7 +51,7 @@ use paper_packages::signing::{Domain, TrustedKeys};
 use paper_packages::store;
 use semver::Version;
 
-use crate::error::{UpdateError, Unhealthy};
+use crate::error::{Unhealthy, UpdateError};
 use crate::health::{self, Budget, Clock, HealthReport, SessionControl};
 use crate::journal::{Journal, MAX_ATTEMPTS, Phase, Record};
 use crate::layout::PlatformLayout;
@@ -626,7 +626,10 @@ impl Upgrade<'_> {
             journal.advance(
                 record,
                 Phase::Failed,
-                format!("the previous release also failed to come up: {}", health.summary()),
+                format!(
+                    "the previous release also failed to come up: {}",
+                    health.summary()
+                ),
             )?;
             return Ok(Outcome::Stranded {
                 candidate: candidate.clone(),

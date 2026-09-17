@@ -24,11 +24,11 @@ use paper_packages::AppId;
 use crate::linux::recovery::{LockPaths, RecoveryConfig, StockRecovery, WakeLockPaths};
 use crate::linux::systemd::{self, Systemd};
 use crate::progress::{Progress, ProgressWatch};
+use crate::readiness::{self, Ladder, Rung};
 use crate::state::{
     Action, Budget, Diagnosis, Escalation, Event, ExitKind, FailurePolicy, Foreground, Machine,
     SessionState, StopReason,
 };
-use crate::readiness::{self, Ladder, Rung};
 use crate::units::{SESSION_TARGET, SessionPaths};
 
 /// The ELF machine this build targets, for the `home` rung.

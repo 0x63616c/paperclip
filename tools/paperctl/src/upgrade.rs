@@ -230,7 +230,13 @@ fn package(args: &PackageArgs) -> Result<(), CommandError> {
         path: args.out.clone(),
         source,
     })?;
-    bundle::build(&args.source, &manifest, document.as_bytes(), &signature, file)?;
+    bundle::build(
+        &args.source,
+        &manifest,
+        document.as_bytes(),
+        &signature,
+        file,
+    )?;
 
     println!("platform   {}", manifest.version());
     println!("protocol   {}", manifest.protocol());
@@ -325,11 +331,10 @@ fn bootstrap(args: &BootstrapArgs) -> Result<(), CommandError> {
     let live = layout.bin_dir().join("paperctl");
     let kept = layout.bin_dir().join("paperctl.previous");
 
-    let replacement =
-        std::fs::read(&args.replacement).map_err(|source| CommandError::Read {
-            path: args.replacement.clone(),
-            source,
-        })?;
+    let replacement = std::fs::read(&args.replacement).map_err(|source| CommandError::Read {
+        path: args.replacement.clone(),
+        source,
+    })?;
     if live.exists() {
         let _ = std::fs::remove_file(&kept);
         std::fs::rename(&live, &kept).map_err(|source| CommandError::Write {
@@ -350,7 +355,10 @@ fn bootstrap(args: &BootstrapArgs) -> Result<(), CommandError> {
     }
     println!("replaced {}", live.display());
     if kept.exists() {
-        println!("the previous one is at {} if this one is wrong", kept.display());
+        println!(
+            "the previous one is at {} if this one is wrong",
+            kept.display()
+        );
     }
     Ok(())
 }

@@ -62,7 +62,7 @@ pub mod upgrade;
 #[cfg(target_os = "linux")]
 pub mod linux;
 
-pub use error::{UpdateError, Unhealthy};
+pub use error::{Unhealthy, UpdateError};
 pub use health::{Budget, Clock, HealthReport, Observation, SessionControl, SystemClock};
 pub use journal::{Journal, Phase, Record};
 pub use layout::PlatformLayout;

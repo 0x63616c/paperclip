@@ -71,7 +71,12 @@ pub struct Component {
 
 impl Component {
     /// Describes a component. Publisher side.
-    pub fn new(name: impl Into<String>, path: impl Into<String>, size: u64, digest: Digest) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        path: impl Into<String>,
+        size: u64,
+        digest: Digest,
+    ) -> Self {
         Self {
             name: name.into(),
             path: path.into(),
@@ -420,20 +425,21 @@ pub fn parse(verified: Verified<'_>) -> Result<VerifiedPlatform, UpdateError> {
     let version = Version::parse(&raw.version).map_err(|source| UpdateError::Manifest {
         reason: format!("version `{}`: {source}", raw.version),
     })?;
-    let protocol = raw
-        .protocol
-        .parse::<ProtocolVersion>()
-        .map_err(|source| UpdateError::Manifest {
-            reason: format!("protocol `{}`: {source}", raw.protocol),
-        })?;
+    let protocol =
+        raw.protocol
+            .parse::<ProtocolVersion>()
+            .map_err(|source| UpdateError::Manifest {
+                reason: format!("protocol `{}`: {source}", raw.protocol),
+            })?;
     let mut components = Vec::with_capacity(raw.component.len());
     for raw_component in raw.component {
-        let digest = raw_component
-            .digest
-            .parse::<Digest>()
-            .map_err(|source| UpdateError::Manifest {
-                reason: format!("component `{}` digest: {source}", raw_component.name),
-            })?;
+        let digest =
+            raw_component
+                .digest
+                .parse::<Digest>()
+                .map_err(|source| UpdateError::Manifest {
+                    reason: format!("component `{}` digest: {source}", raw_component.name),
+                })?;
         components.push(Component::new(
             raw_component.name,
             raw_component.path,
@@ -473,7 +479,10 @@ pub fn read_release(
         std::fs::read(&manifest_path).map_err(|source| UpdateError::io(&manifest_path, source))?;
     if document.len() as u64 > MAX_MANIFEST_BYTES {
         return Err(UpdateError::Manifest {
-            reason: format!("{} bytes, over the {MAX_MANIFEST_BYTES} limit", document.len()),
+            reason: format!(
+                "{} bytes, over the {MAX_MANIFEST_BYTES} limit",
+                document.len()
+            ),
         });
     }
     let armoured = std::fs::read_to_string(&signature_path)

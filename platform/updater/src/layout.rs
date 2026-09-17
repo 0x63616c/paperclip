@@ -320,10 +320,12 @@ fn read_selection(link: &Path) -> Result<Option<Version>, UpdateError> {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    Version::parse(&name).map(Some).map_err(|_| UpdateError::CorruptSelection {
-        link: link.to_path_buf(),
-        target,
-    })
+    Version::parse(&name)
+        .map(Some)
+        .map_err(|_| UpdateError::CorruptSelection {
+            link: link.to_path_buf(),
+            target,
+        })
 }
 
 /// Lexical normalisation, enough to compare two roots for containment.

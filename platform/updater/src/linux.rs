@@ -37,9 +37,8 @@ use crate::health::{Observation, SessionControl};
 /// It exits at stock, which means it may be part-way through a restore when
 /// the request arrives. Anything shorter than the restore's own deadline would
 /// give up on a supervisor that is doing exactly what it should.
-const STOP_BUDGET: Duration = Duration::from_secs(
-    paper_device::stock::RESTORE_TIMEOUT.as_secs() * 2 + 10,
-);
+const STOP_BUDGET: Duration =
+    Duration::from_secs(paper_device::stock::RESTORE_TIMEOUT.as_secs() * 2 + 10);
 
 /// How long the supervisor is given to notice the stop request and exit on its
 /// own before it is stopped.
@@ -183,9 +182,8 @@ impl SessionControl for SystemdSession {
     }
 
     fn wakelock_held(&self) -> bool {
-        fs::read_to_string(&self.wake_lock).is_ok_and(|held| {
-            held.split_whitespace().any(|tag| tag == self.wakelock_name)
-        })
+        fs::read_to_string(&self.wake_lock)
+            .is_ok_and(|held| held.split_whitespace().any(|tag| tag == self.wakelock_name))
     }
 
     fn release_wakelock(&self) {

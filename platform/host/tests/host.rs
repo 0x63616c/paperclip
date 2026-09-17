@@ -949,7 +949,9 @@ fn the_recovery_unit_does_not_resolve_through_the_selected_release() {
     let units = units_for(&Facilities::paper_pro(), &[]);
     let restore = units.get(RESTORE_UNIT).expect("a restore unit");
     assert!(
-        restore.contents.contains("/home/root/paperclip/bin/paperctl"),
+        restore
+            .contents
+            .contains("/home/root/paperclip/bin/paperctl"),
         "the restore unit must run the bootstrap from outside releases/:\n{}",
         restore.contents
     );

@@ -74,8 +74,7 @@ pub fn describe(
     source: &Path,
     description: &Description<'_>,
 ) -> Result<PlatformManifest, UpdateError> {
-    let mut components =
-        Vec::with_capacity(REQUIRED_COMPONENTS.len() + description.extras.len());
+    let mut components = Vec::with_capacity(REQUIRED_COMPONENTS.len() + description.extras.len());
     for name in REQUIRED_COMPONENTS {
         let relative = format!("bin/{name}");
         components.push(measure(source, name, &relative)?);

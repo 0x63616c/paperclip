@@ -219,12 +219,11 @@ impl Journal {
     /// Any failure to write or fsync.
     pub fn record(&self, record: &mut Record) -> Result<(), UpdateError> {
         record.updated = store::now();
-        let encoded = serde_json::to_vec_pretty(record).map_err(|source| {
-            UpdateError::CorruptJournal {
+        let encoded =
+            serde_json::to_vec_pretty(record).map_err(|source| UpdateError::CorruptJournal {
                 path: self.path.clone(),
                 reason: source.to_string(),
-            }
-        })?;
+            })?;
         store::atomic_write(&self.path, &encoded)?;
         Ok(())
     }
