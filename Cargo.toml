@@ -10,6 +10,7 @@ members = [
     "platform/protocol",
     "platform/packages",
     "platform/sdk",
+    "platform/device",
     "apps/home",
     "apps/chess",
     "tools/paperctl",
@@ -30,10 +31,13 @@ paper-packages = { path = "platform/packages" }
 # `default-features = false` here, `features = ["desktop"]` at the one
 # consumer that needs a window. Apps must not drag in a windowing stack.
 paper-sdk = { path = "platform/sdk", default-features = false }
+paper-device = { path = "platform/device" }
 paper-home = { path = "apps/home" }
 paper-chess = { path = "apps/chess" }
 
+cc = "1.2"
 clap = { version = "4.6", features = ["derive"] }
+libc = "0.2"
 semver = { version = "1.0.28", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 softbuffer = "0.4.8"

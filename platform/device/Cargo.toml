@@ -1,0 +1,33 @@
+[package]
+name = "paper-device"
+description = "The reMarkable Paper Pro adapter: vendor waveform presentation, evdev input, and the session locks a takeover must hold."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[features]
+# Nothing by default. A Mac build of this crate compiles the portable half —
+# geometry, waveform selection, evdev decoding, transforms — and links nothing.
+default = []
+
+# Link the vendor waveform engine through `native/`. Requires an aarch64 Linux
+# target, the reMarkable SDK sysroot (Qt 6.10.3), and `libqsgepaper.so` copied
+# off the device. The library is proprietary (`LICENSE: CLOSED`) and is never
+# vendored into this repository; see `native/README.md` and ADR-0009.
+vendor-engine = ["dep:cc"]
+
+[dependencies]
+paper-sdk = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true, optional = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+# Cross-compiling for the tablet.
+#
+# `aarch64-unknown-linux-gnu` is the device triple, established by WWW-1:
+# glibc (`ld-linux-aarch64.so.1`, `libc.so.6`), Qt 6.10.3, `libstdc++.so.6`.
+# WWW-10's A6 verdict said to add it with the first build that exercises it;
+# `platform/device` is that build.
+#
+# The linker is a two-line `zig cc` wrapper rather than the reMarkable SDK, so
+# that a check of the device half costs nothing to set up. Anything that links
+# Qt — the `vendor-engine` feature — needs the real SDK and overrides this.
+[target.aarch64-unknown-linux-gnu]
+linker = "tools/cross/aarch64-linux-gnu-cc"

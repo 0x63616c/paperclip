@@ -185,6 +185,30 @@ struct Graphics {
     surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
 }
 
+/// Resizes the window surface, copies the canvas into it, and presents.
+///
+/// Free function rather than a method so the `&mut Graphics` borrow ends at
+/// the return, leaving the caller free to touch the rest of `self`.
+fn present_surface(
+    graphics: &mut Graphics,
+    surface_canvas: &Canvas,
+    width: NonZeroU32,
+    height: NonZeroU32,
+) -> Result<(), PreviewError> {
+    graphics
+        .surface
+        .resize(width, height)
+        .map_err(|error| PreviewError::Surface(error.to_string()))?;
+    let mut buffer = graphics
+        .surface
+        .buffer_mut()
+        .map_err(|error| PreviewError::Surface(error.to_string()))?;
+    surface_canvas.fill_argb_buffer(&mut buffer);
+    buffer
+        .present()
+        .map_err(|error| PreviewError::Surface(error.to_string()))
+}
+
 struct Preview<H> {
     options: PreviewOptions,
     handler: H,
@@ -254,24 +278,17 @@ impl<H: FnMut(PreviewEvent<'_>)> Preview<H> {
             .expect("the surface canvas was just ensured");
         self.canvas.present_into(surface_canvas, mapping);
 
-        if let Some(graphics) = self.graphics.as_mut() {
-            if let Err(error) = graphics.surface.resize(width, height) {
-                self.stop(event_loop, PreviewError::Surface(error.to_string()));
-                return;
-            }
-            match graphics.surface.buffer_mut() {
-                Ok(mut buffer) => {
-                    surface_canvas.fill_argb_buffer(&mut buffer);
-                    if let Err(error) = buffer.present() {
-                        self.stop(event_loop, PreviewError::Surface(error.to_string()));
-                        return;
-                    }
-                }
-                Err(error) => {
-                    self.stop(event_loop, PreviewError::Surface(error.to_string()));
-                    return;
-                }
-            }
+        // The failure is collected and reported *after* the surface borrow
+        // ends. Calling `self.stop` inside the borrow compiles on macOS and
+        // does not on Linux, where `softbuffer`'s buffer has a destructor that
+        // still holds it — and the preview is meant to build on both.
+        let surface_failure = match self.graphics.as_mut() {
+            Some(graphics) => present_surface(graphics, surface_canvas, width, height).err(),
+            None => None,
+        };
+        if let Some(error) = surface_failure {
+            self.stop(event_loop, error);
+            return;
         }
 
         if !self.captured && !self.options.capture.is_empty() {

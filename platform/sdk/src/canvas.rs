@@ -306,6 +306,81 @@ impl Canvas {
         true
     }
 
+    /// Copies the canvas into an opaque ARGB8888 buffer — the format the
+    /// tablet's waveform engine takes.
+    ///
+    /// Identical to [`Self::fill_argb_buffer`] except that the alpha byte is
+    /// `0xFF` rather than zero. The two exist separately because the desktop
+    /// preview's `softbuffer` surface wants `0RGB` with the top byte clear,
+    /// while the device wants a genuinely opaque pixel. The rasterisation
+    /// above them is the same code either way, which is the point (§9).
+    ///
+    /// On the little-endian aarch64 the tablet runs, a `u32` of `0xFFRRGGBB`
+    /// lands in memory as the bytes `B, G, R, 0xFF` — the order the vendor
+    /// engine's auxiliary buffer is documented to use (ADR-0007).
+    ///
+    /// Returns `false` if `buffer` is not exactly the canvas's pixel count,
+    /// which is the only way to get this wrong silently.
+    pub fn fill_argb8888(&self, buffer: &mut [u32]) -> bool {
+        let size = self.size();
+        self.blit_argb8888(buffer, size.width as usize, 0, 0, size.width, size.height)
+    }
+
+    /// Copies one rectangle of the canvas into an ARGB8888 buffer of
+    /// `target_stride` pixels per row, at the same coordinates.
+    ///
+    /// The mapping is the identity: canvas pixel `(x, y)` lands at `(x, y)` in
+    /// the target. That is what the device is — a 1:1 surface — and a partial
+    /// copy is how a stroke reaches the panel without repainting 3.5 million
+    /// pixels first.
+    ///
+    /// Returns `false` and copies nothing if the rectangle leaves either the
+    /// canvas or the target, rather than clipping. A caller that asked for the
+    /// wrong rectangle has a bug, and a silently smaller update shows up as a
+    /// stale strip on the glass rather than as an error.
+    pub fn blit_argb8888(
+        &self,
+        target: &mut [u32],
+        target_stride: usize,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> bool {
+        let size = self.size();
+        // Saturating throughout: a caller passing `u32::MAX` should get
+        // `false`, not a debug-build panic in the bounds check itself.
+        let right = x.saturating_add(width);
+        let bottom = y.saturating_add(height);
+        if right > size.width || bottom > size.height || target_stride < right as usize {
+            return false;
+        }
+        if width == 0 || height == 0 {
+            return true;
+        }
+        let last_row_end = (bottom as usize - 1) * target_stride + right as usize;
+        if last_row_end > target.len() {
+            return false;
+        }
+
+        let pixels = self.pixmap.pixels();
+        let source_stride = size.width as usize;
+        for row in 0..height as usize {
+            let source_row = (y as usize + row) * source_stride + x as usize;
+            let target_row = (y as usize + row) * target_stride + x as usize;
+            let source = &pixels[source_row..source_row + width as usize];
+            let target = &mut target[target_row..target_row + width as usize];
+            for (slot, pixel) in target.iter_mut().zip(source) {
+                let pixel = pixel.demultiply();
+                *slot = 0xFF00_0000
+                    | ((pixel.red() as u32) << 16)
+                    | ((pixel.green() as u32) << 8)
+                    | (pixel.blue() as u32);
+            }
+        }
+        true
+    }
+
     /// Encodes the canvas as a PNG at full resolution.
     pub fn to_png(&self) -> io::Result<Vec<u8>> {
         self.pixmap
@@ -494,6 +569,71 @@ mod tests {
         assert!(canvas.fill_argb_buffer(&mut correct));
         assert!(!canvas.fill_argb_buffer(&mut wrong));
         assert_eq!(correct[0], palette::PAPER.to_argb());
+    }
+
+    #[test]
+    fn the_device_fill_is_opaque_where_the_desktop_fill_is_not() {
+        let canvas = canvas(4, 4);
+        let mut desktop = vec![0u32; 16];
+        let mut device = vec![0u32; 16];
+        assert!(canvas.fill_argb_buffer(&mut desktop));
+        assert!(canvas.fill_argb8888(&mut device));
+
+        assert_eq!(desktop[0] >> 24, 0x00);
+        assert_eq!(device[0] >> 24, 0xFF);
+        // Same rasterisation underneath: only the alpha byte differs.
+        assert_eq!(device[0] & 0x00FF_FFFF, desktop[0] & 0x00FF_FFFF);
+    }
+
+    #[test]
+    fn a_partial_blit_touches_only_its_own_rectangle() {
+        let mut canvas = canvas(8, 8);
+        canvas.fill_rect(Rect::new(2.0, 2.0, 2.0, 2.0), palette::INK);
+
+        let mut target = vec![0u32; 64];
+        assert!(canvas.blit_argb8888(&mut target, 8, 2, 2, 2, 2));
+
+        for y in 0..8u32 {
+            for x in 0..8u32 {
+                let slot = target[(y * 8 + x) as usize];
+                let inside = (2..4).contains(&x) && (2..4).contains(&y);
+                assert_eq!(slot != 0, inside, "at ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn a_blit_into_a_wider_target_lands_at_the_same_coordinates() {
+        let mut canvas = canvas(4, 4);
+        canvas.fill_rect(Rect::new(1.0, 1.0, 1.0, 1.0), palette::INK);
+
+        let stride = 16;
+        let mut target = vec![0u32; stride * 4];
+        assert!(canvas.blit_argb8888(&mut target, stride, 1, 1, 1, 1));
+        assert_ne!(target[stride + 1], 0);
+        assert_eq!(target[stride], 0);
+    }
+
+    #[test]
+    fn an_out_of_bounds_blit_refuses_rather_than_clipping() {
+        let canvas = canvas(4, 4);
+        let mut target = vec![0u32; 16];
+        assert!(!canvas.blit_argb8888(&mut target, 4, 2, 2, 4, 4));
+        assert!(!canvas.blit_argb8888(&mut target, 4, 0, 0, u32::MAX, 1));
+        // A stride narrower than the rectangle would wrap rows silently.
+        assert!(!canvas.blit_argb8888(&mut target, 2, 0, 0, 4, 4));
+        // A correct rectangle into too small a target is still refused.
+        let mut small = vec![0u32; 8];
+        assert!(!canvas.blit_argb8888(&mut small, 4, 0, 0, 4, 4));
+        assert!(target.iter().all(|slot| *slot == 0));
+    }
+
+    #[test]
+    fn an_empty_blit_succeeds_and_does_nothing() {
+        let canvas = canvas(4, 4);
+        let mut target = vec![0u32; 16];
+        assert!(canvas.blit_argb8888(&mut target, 4, 0, 0, 0, 0));
+        assert!(target.iter().all(|slot| *slot == 0));
     }
 
     #[test]

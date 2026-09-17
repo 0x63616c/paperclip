@@ -1,0 +1,18 @@
+#!/bin/sh
+# Cross C compiler and linker driver for the tablet, built on `zig cc`.
+#
+# The reMarkable SDK is the right toolchain for anything that links Qt, but it
+# is a multi-gigabyte download and a pure-Rust binary does not need it. `zig cc`
+# ships its own glibc stubs and cross-links aarch64 from a Mac with nothing
+# installed but zig, which is what makes "does the device half even compile"
+# answerable in seconds rather than after an SDK install.
+#
+# glibc 2.36, not the 2.39 the device actually has (Yocto scarthgap): linking
+# against an older glibc produces a binary that runs on a newer one, and the
+# reverse is exactly the "GLIBC_2.39 not found" failure that only shows up on
+# the tablet. Raise this only with a reason.
+#
+# Not a substitute for the SDK. `platform/device`'s `vendor-engine` feature
+# needs Qt 6.10.3 headers and the vendor library; see
+# platform/device/native/README.md.
+exec zig cc -target aarch64-linux-gnu.2.36 "$@"

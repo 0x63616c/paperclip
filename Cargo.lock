@@ -1150,6 +1150,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "paper-device"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "paper-sdk",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "paper-home"
 version = "0.1.0"
 dependencies = [
