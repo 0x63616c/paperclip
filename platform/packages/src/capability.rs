@@ -35,14 +35,23 @@ pub enum Capability {
     /// Take part in explicit cross-app sharing (§4): receive or offer content
     /// when the user initiates the exchange.
     Sharing,
+    /// Install, update and roll back packages (§12).
+    ///
+    /// The App Store holds this and nothing else does. It is what makes the
+    /// App Store a *client* of package management rather than its owner: the
+    /// enforcement point is
+    /// [`PackageManager::on_behalf_of`](crate::install::PackageManager::on_behalf_of),
+    /// which refuses to hand an installer to an app that was not granted this.
+    Packages,
 }
 
 impl Capability {
     /// Every capability the platform currently knows how to enforce.
-    pub const ALL: [Capability; 3] = [
+    pub const ALL: [Capability; 4] = [
         Capability::Storage,
         Capability::Network,
         Capability::Sharing,
+        Capability::Packages,
     ];
 
     /// The stable name used in host policy files and `paperctl` output.
@@ -51,6 +60,7 @@ impl Capability {
             Capability::Storage => "storage",
             Capability::Network => "network",
             Capability::Sharing => "sharing",
+            Capability::Packages => "packages",
         }
     }
 }
