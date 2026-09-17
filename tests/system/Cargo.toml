@@ -40,6 +40,8 @@ paper-packages = { workspace = true }
 paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
 paper-settings = { workspace = true }
+paper-sudoku = { workspace = true }
+paper-sudoku-rules = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

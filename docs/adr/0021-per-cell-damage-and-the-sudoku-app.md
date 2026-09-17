@@ -66,6 +66,28 @@ Over-claiming costs one larger panel update. Under-claiming leaves a stale
 rectangle on the glass until something else happens to repaint it, which is why
 every ambiguous case above resolves to `Full`.
 
+### A claim only pays if the presenter honours it
+
+An app that claims one cell and a presenter that swaps the panel anyway look
+identical in the app's own tests, and cost a full-screen waveform per
+keystroke on the glass. So the translation from a claim to a panel rectangle
+is one function, `PixelRect::covering`, next to the rounding and union rules
+it is built from:
+
+- `Damage::Full` is the whole panel.
+- Regions collapse to their union, rounded outward — the engine coalesces
+  overlapping updates anyway, and one rectangle costs one waveform where
+  several cost several. A claim of two distant cells is therefore one swap
+  over both, which is the reason selection is two cells and not two claims.
+- A claim of nothing is an empty rectangle, and an empty rectangle is a swap
+  that never reaches the glass.
+
+`paperctl run` previously computed this inline, in a module that only compiles
+for Linux — so the arithmetic deciding the cost of every keystroke was never
+type-checked on the machine the tests run on, let alone asserted. It is now
+cross-platform, and the system suite asserts the number: a Sudoku digit entry
+swaps under 1% of the panel, and it is exactly the cell that changed.
+
 ### What the screen therefore does not show
 
 No "cells remaining" counter, no timer, no progress bar. Each would change on
@@ -81,11 +103,14 @@ is a real cost for a number nobody needs.
 - `paperctl dev --app sudoku`, `paperctl run --app sudoku`,
   `paperctl screenshot --screen sudoku` and the preview's `u` key all reach it,
   and the golden table freezes its render.
-- The claim is asserted three ways: on the `Press` (one rectangle, and it is
+- The claim is asserted four ways: on the `Press` (one rectangle, and it is
   the cell), on the pixels (nothing outside the claim changed between two real
-  renders), and on the wire (the `FrameDone` a host reads).
-- A second app now goes through package → publish → check → install, which is
-  what makes "installing an app that is not Chess" a tested path.
+  renders), on the wire (the `FrameDone` a host reads), and on the panel
+  rectangle the presenting loop would hand the waveform engine.
+- A second app goes through package → publish → check → install as a test
+  (`tools/paperctl/tests/catalog.rs`) rather than a transcript, driving the
+  real command line against the `paper.toml` Sudoku ships. That is what makes
+  "installing an app that is not Chess" a path a regression can fail on.
 - **Sudoku is deliberately not on either Home shelf.** Both shelves are
   hand-built lists of what this device has (WWW-37 holds them together), and
   the App Store preview shows Sudoku as `NOT INSTALLED` with an INSTALL
@@ -103,7 +128,9 @@ is a real cost for a number nobody needs.
   ours; if a 158x158 px update measures the same as a full-panel one on the
   glass, the exactness here buys nothing and the honest simplification is
   `Damage::Full` everywhere. Nothing in this ADR has been measured on the
-  device — WWW-6 established the transport, not a saving.
+  device — WWW-6 established the transport, not a saving. Every assertion
+  above is about which pixels will be swapped, not about what the panel does
+  with them; no Sudoku frame has reached the glass.
 - **If the host starts deriving damage itself** (`App::damage`'s own doc
   comment reserves that right, and says centralised tracking is the version
   that stays correct when an app gets it wrong). Then this becomes an

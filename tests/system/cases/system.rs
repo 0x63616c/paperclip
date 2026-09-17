@@ -24,6 +24,8 @@ use paper_sdk::{
     Canvas, ContactId, DisplayMapping, Point, Pointer, PointerEvent, PointerPhase, SCREEN, Size,
 };
 use paper_settings::{PlaceholderHost, SettingsScreen};
+use paper_sudoku::{PadKey, SudokuScreen};
+use paper_sudoku_rules::{Cell, Difficulty, Digit, Game as SudokuGame};
 
 /// The manifests the apps really ship, read from the repository.
 const APP_MANIFESTS: [(&str, &str); 4] = [
@@ -367,4 +369,80 @@ assets = ["assets/opening-book.toml"]
     manifest
         .validate_payload(root)
         .expect("the package is complete now");
+}
+
+/// The cost of a digit entry, in panel pixels — the whole reason §4 asks apps
+/// to report damage, and the claim ADR-0021 makes on Sudoku's behalf.
+///
+/// The app crate already checks that entering a digit claims one cell and
+/// changes no pixel outside it. This is the layer past that: the rectangle
+/// `paperctl run` hands the waveform engine, computed by the same
+/// [`PixelRect::covering`] the presenting loop calls. An app that claims
+/// correctly and a presenter that widens the claim to the panel would look
+/// identical in the app's own tests and cost a full-screen waveform per
+/// keystroke on the glass.
+///
+/// Software only. It says what will be swapped, not what the panel does with
+/// it — no digit has reached the glass yet (WWW-39).
+#[test]
+fn a_sudoku_digit_entry_swaps_one_cell_and_not_the_panel() {
+    let tap = |at: Point| PointerEvent::new(at, PointerPhase::Up, Pointer::Touch, ContactId::FIRST);
+
+    let mut game = SudokuGame::start(Difficulty::Easy, 4_242);
+    let mut screen = SudokuScreen::new(game.difficulty());
+    let mut canvas = screen_canvas();
+    let layout = paper_sudoku::render(&mut canvas, &screen, &game);
+
+    let (cell, digit) = Cell::all()
+        .filter(|cell| game.digit_at(*cell).is_none())
+        .find_map(|cell| {
+            Digit::ALL
+                .into_iter()
+                .find(|digit| game.board().accepts(cell, *digit))
+                .map(|digit| (cell, digit))
+        })
+        .expect("some empty cell takes some digit");
+
+    // Select the cell, then re-render: the layout a real session presses
+    // against is the one the previous frame produced.
+    screen.press(
+        &mut game,
+        &layout,
+        &tap(layout.grid.cell_rect(cell).center()),
+    );
+    let layout = paper_sudoku::render(&mut canvas, &screen, &game);
+    let key = layout
+        .pad
+        .key_rect(PadKey::Digit(digit))
+        .expect("the pad has that digit");
+    let press = screen.press(&mut game, &layout, &tap(key.center()));
+    assert_eq!(
+        game.digit_at(cell),
+        Some(digit),
+        "the tap claimed a cell it never wrote"
+    );
+
+    let swap = PixelRect::covering(&press.damage, SCREEN);
+    assert_eq!(
+        swap,
+        PixelRect::enclosing(layout.grid.cell_rect(cell), SCREEN),
+        "the swap is not the cell that changed"
+    );
+    assert!(!swap.is_empty(), "a digit entry asked for no swap at all");
+    assert!(swap.fits_in(SCREEN));
+
+    // The number that matters: a keystroke must not cost a panel.
+    let panel = u64::from(SCREEN.width) * u64::from(SCREEN.height);
+    let swapped = u64::from(swap.width) * u64::from(swap.height);
+    assert!(
+        swapped * 100 < panel,
+        "a digit entry swaps {swapped} of {panel} panel pixels; per-cell damage buys nothing"
+    );
+
+    // And the contrast, so the assertion above cannot pass by accident on a
+    // presenter that ignores damage: a first draw really is the whole panel.
+    assert_eq!(
+        PixelRect::covering(&paper_sdk::Damage::Full, SCREEN),
+        PixelRect::PANEL
+    );
 }

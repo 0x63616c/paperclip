@@ -20,6 +20,7 @@
 //! and not yet wired into any [`Waveform`] constant — without touching a
 //! call site.
 
+use paper_protocol::Damage;
 use paper_sdk::{Rect, SCREEN, Size};
 
 /// The vendor engine's own waveform-mode enum, as `EPScreenMode` — not a
@@ -269,6 +270,25 @@ impl PixelRect {
         Self::new(left, top, right - left, bottom - top)
     }
 
+    /// The panel rectangle a frame's [`Damage`] asks to have swapped.
+    ///
+    /// [`Damage::Full`] is the whole panel. Regions collapse to their union —
+    /// rounded outward by [`Self::enclosing`], so no partly-covered pixel is
+    /// left stale — because the engine coalesces overlapping updates anyway,
+    /// and one rectangle costs one waveform where several cost several.
+    ///
+    /// A claim of no regions is an empty rectangle, and an empty rectangle is
+    /// a swap that never reaches the glass. A region entirely off the panel
+    /// contributes nothing rather than dragging the union out to the edge.
+    pub fn covering(damage: &Damage, panel: Size) -> Self {
+        let Some(regions) = damage.regions() else {
+            return Self::whole(panel);
+        };
+        regions.iter().fold(Self::new(0, 0, 0, 0), |swept, region| {
+            swept.union(Self::enclosing(*region, panel))
+        })
+    }
+
     /// Whether this rectangle fits inside a surface of `size`.
     ///
     /// Saturating, so a nonsense rectangle answers `false` rather than
@@ -282,6 +302,7 @@ impl PixelRect {
 #[cfg(test)]
 mod tests {
     use super::{ContentType, EngineMode, GhostControl, PixelRect, Refresh, Waveform};
+    use paper_protocol::Damage;
     use paper_sdk::{Rect, SCREEN, Size};
 
     #[test]
@@ -361,5 +382,39 @@ mod tests {
         assert_eq!(a.union(b), PixelRect::new(10, 5, 100, 15));
         assert_eq!(a.union(PixelRect::new(0, 0, 0, 0)), a);
         assert_eq!(PixelRect::new(0, 0, 0, 0).union(b), b);
+    }
+
+    #[test]
+    fn full_damage_is_the_whole_panel_and_regions_are_only_what_changed() {
+        assert_eq!(PixelRect::covering(&Damage::Full, SCREEN), PixelRect::PANEL);
+
+        // Two cells apart on one row: one swap over both, not one per cell and
+        // not the panel.
+        let cell = |x: f32| Rect::new(x, 300.0, 120.0, 120.0);
+        let swept = PixelRect::covering(
+            &Damage::Regions {
+                regions: vec![cell(100.0), cell(400.0)],
+            },
+            SCREEN,
+        );
+        assert_eq!(swept, PixelRect::new(100, 300, 420, 120));
+        assert!(swept.fits_in(SCREEN));
+        assert_ne!(swept, PixelRect::PANEL);
+    }
+
+    #[test]
+    fn a_claim_of_nothing_is_a_swap_that_never_happens() {
+        let nothing = PixelRect::covering(&Damage::Regions { regions: vec![] }, SCREEN);
+        assert!(nothing.is_empty(), "an empty claim asked for a waveform");
+
+        // A region off the panel cannot drag the swap out to the edge: it
+        // contributes nothing, and a claim made only of those is still empty.
+        let off = PixelRect::covering(
+            &Damage::Regions {
+                regions: vec![Rect::new(9000.0, 9000.0, 10.0, 10.0)],
+            },
+            SCREEN,
+        );
+        assert!(off.is_empty());
     }
 }

@@ -1586,6 +1586,8 @@ dependencies = [
  "paper-protocol",
  "paper-sdk",
  "paper-settings",
+ "paper-sudoku",
+ "paper-sudoku-rules",
  "tempfile",
 ]
 

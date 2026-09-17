@@ -240,7 +240,7 @@ mod interactive {
         ContactIds, DeviceError, FrameDigest, InputRole, PanelRecord, PenDecoder, PixelRect,
         PointerTransform, Refresh, TouchDecoder, Waveform,
     };
-    use paper_protocol::{Damage, ExitReason, Request, Size};
+    use paper_protocol::{ExitReason, Request};
     use paper_sdk::PointerEvent;
 
     use crate::session;
@@ -260,6 +260,12 @@ mod interactive {
         ReturnToStock,
     }
 
+    /// How many queued pointer samples to fold into one paint.
+    ///
+    /// Bounded so a stream of input cannot starve the exit checks below; the
+    /// panel is the slow part, so this only needs to outrun one waveform.
+    const MAX_COALESCED_POINTERS: usize = 64;
+
     /// Runs the whole interactive session against the real panel.
     ///
     /// This is the half that opens the vendor engine
@@ -267,45 +273,6 @@ mod interactive {
     /// before Xochitl can start again. Nothing here stops or starts Xochitl,
     /// takes the wakelock, or holds an opinion about systemd — that is
     /// entirely [`paper_device::open_and_run`]'s, in the parent process.
-    /// How many queued pointer samples to fold into one paint.
-    ///
-    /// Bounded so a stream of input cannot starve the exit checks below; the
-    /// panel is the slow part, so this only needs to outrun one waveform.
-    const MAX_COALESCED_POINTERS: usize = 64;
-
-    /// The panel rectangle a [`Damage`] claims.
-    ///
-    /// `Full` is the whole panel. `Regions` collapses to the bounding box:
-    /// the engine coalesces overlapping updates anyway, and one rectangle
-    /// costs one waveform where several cost several.
-    fn damaged_rect(damage: &Damage, panel: Size) -> PixelRect {
-        let Some(regions) = damage.regions() else {
-            return PixelRect::whole(panel);
-        };
-        let mut left = f32::MAX;
-        let mut top = f32::MAX;
-        let mut right = f32::MIN;
-        let mut bottom = f32::MIN;
-        for region in regions {
-            left = left.min(region.x);
-            top = top.min(region.y);
-            right = right.max(region.x + region.width);
-            bottom = bottom.max(region.y + region.height);
-        }
-        if !(left.is_finite() && top.is_finite() && right > left && bottom > top) {
-            return PixelRect::new(0, 0, 0, 0);
-        }
-        let x = left.floor().max(0.0) as u32;
-        let y = top.floor().max(0.0) as u32;
-        let w = (right.ceil() as u32)
-            .saturating_sub(x)
-            .min(panel.width.saturating_sub(x));
-        let h = (bottom.ceil() as u32)
-            .saturating_sub(y)
-            .min(panel.height.saturating_sub(y));
-        PixelRect::new(x, y, w, h)
-    }
-
     pub(super) fn run_on_panel(app_slug: &str) -> Result<PanelRecord, DeviceError> {
         let mut panel = paper_device::open_panel()?;
         let real_panel = paper_device::is_real_device();
@@ -388,7 +355,7 @@ mod interactive {
                         // cloned the whole 14 MB canvas, hashed it, and drove
                         // a full-panel waveform for every single sample.
                         if let Some(damage) = current.take_damage() {
-                            let rect = damaged_rect(&damage, panel_size);
+                            let rect = PixelRect::covering(&damage, panel_size);
                             if !rect.is_empty() {
                                 current.with_frame(|canvas| {
                                     paper_device::present(
