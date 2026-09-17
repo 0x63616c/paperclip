@@ -1,4 +1,20 @@
 #!/bin/sh
+# SUPERSEDED -- DO NOT RUN.
+#
+# This driver presents through raw DRM/KMS. That path is now prohibited: the
+# 405x1084 -> 1620x2160 transport packing is proprietary and has never been
+# publicly reverse-engineered, and presentation goes through the vendor
+# waveform engine instead (ADR-0007).
+#
+# It also predates lib-stock.sh, so it does NOT hold a wakelock for the
+# takeover and does NOT check xochitl's start budget before stopping stock.
+# Running it risks a suspend resuming into a second xochitl, and repeated runs
+# risk tripping StartLimitBurst=4/10min -- which fails the unit, fires an
+# OnFailure naming a service that does not exist, and drops the tablet to an
+# emergency shell.
+#
+# Kept only as the record of a refuted hypothesis. Use run-calib.sh as the
+# pattern for any new driver.
 # WWW-20 interactive hold: put ONE pattern on the panel for a fixed window while
 # Calum looks at it, then restore stock. Usage:
 #   run-hold.sh <seconds> <rowpair|halves|interleaved> [zones|flat|fiducials|geometry]

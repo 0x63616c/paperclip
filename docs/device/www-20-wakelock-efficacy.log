@@ -1,0 +1,8 @@
+[02:38:08] charger online=0 status=Discharging
+[02:38:08] wake_lock at start=[]
+[02:38:08] autosleep=[mem]
+[02:38:08] PHASE A (no wakelock): baseline suspend_success=272, waiting 90s
+[02:42:01]   A t+15s success=276 lock=[]
+[02:42:27]   A t+30s success=279 lock=[]
+[02:42:54]   A t+45s success=282 lock=[]
+[02:43:51]   A t+60s success=286 lock=[]
