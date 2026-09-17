@@ -4,11 +4,14 @@
 //! session. Which store is `--root`, or `PAPERCLIP_ROOT`, or the device path.
 //! No command here holds a key that can sign anything; all of them verify.
 
+use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
 use paper_packages::catalog::{Catalog, FileTransport};
-use paper_packages::install::{InstallOptions, NothingIsRunning, PackageManager};
+use paper_packages::install::{InstallOptions, NothingIsRunning, PackageManager, Progress, Step};
+use paper_packages::inventory::Inventory;
+use paper_packages::launch::Ledger;
 use paper_packages::signing::{PublicKey, TrustedKeys};
 use paper_packages::store::Layout;
 use paper_packages::{AppId, InstallPolicy};
@@ -86,6 +89,37 @@ pub(crate) struct RecoverArgs {
     store: StoreArgs,
 }
 
+/// Prints install progress on one rewritten line.
+///
+/// The App Store will draw the same [`Step`]s on the panel; this is the same
+/// information for someone at a terminal, and it exists mostly so the reporting
+/// has a second consumer and cannot quietly stop working.
+#[derive(Debug, Default)]
+struct Printer;
+
+impl Progress for Printer {
+    fn step(&self, step: Step) {
+        let line = match step {
+            Step::Downloading { done, total } if total > 0 => {
+                format!("downloading {done}/{total} bytes ({}%)", done * 100 / total)
+            }
+            Step::Downloading { done, .. } => format!("downloading {done} bytes"),
+            Step::Verifying => "verifying size, digest and structure".to_owned(),
+            Step::Extracting => "extracting".to_owned(),
+            Step::Committing => "committing".to_owned(),
+            Step::Activating => "selecting".to_owned(),
+        };
+        // Rewrite one line on a terminal; print plain lines when stderr is
+        // redirected, because a log full of escape sequences is worse than a
+        // log with six lines in it.
+        if std::io::stderr().is_terminal() {
+            eprint!("\r\u{1b}[K  {line}");
+        } else {
+            eprintln!("  {line}");
+        }
+    }
+}
+
 /// Runs `paperctl install`.
 pub(crate) fn install(args: &InstallArgs) -> Result<(), CommandError> {
     let (id, wanted) = split_app(&args.app)?;
@@ -117,7 +151,10 @@ pub(crate) fn install(args: &InstallArgs) -> Result<(), CommandError> {
     // system. When the host gains a supervisor (WWW-4) it supplies the real
     // answer; claiming to know one here would be inventing it.
     let manager = PackageManager::host(layout, InstallPolicy::deny_all());
-    let installed = manager.install(&release, archive, &options, &NothingIsRunning)?;
+    let installed = manager.install(&release, archive, &options, &NothingIsRunning, &Printer)?;
+    if std::io::stderr().is_terminal() {
+        eprintln!();
+    }
 
     println!(
         "installed  {} {}{}",
@@ -165,49 +202,81 @@ pub(crate) fn install(args: &InstallArgs) -> Result<(), CommandError> {
 }
 
 /// Runs `paperctl list`.
+///
+/// Built on the same [`Inventory`] the App Store will render, so the two
+/// cannot disagree about what is installed or what an update is.
 pub(crate) fn list(args: &ListArgs) -> Result<(), CommandError> {
     let layout = args.store.layout();
     println!("root       {}", layout.root().display());
 
-    let apps = layout.apps()?;
-    if apps.is_empty() {
-        println!("installed  nothing");
-    }
-    for app in &apps {
-        let current = layout.current(app)?;
-        let previous = layout.previous(app)?;
-        let versions = layout.installed_versions(app)?;
+    let view = match &args.catalog {
+        Some(directory) => {
+            let catalog = Catalog::new(FileTransport::new(directory), trusted(&args.trust)?)
+                .with_cache(layout.clone());
+            Some(catalog.view()?)
+        }
+        None => None,
+    };
+
+    let inventory = Inventory::survey(&layout, view.as_ref(), &Ledger::new(layout.clone()))?;
+
+    if let Some(status) = inventory.catalog() {
         println!(
-            "installed  {app} {} (fallback {}; on disk {})",
-            current.map_or_else(|| "none selected".to_owned(), |v| v.to_string()),
-            previous.map_or_else(|| "none".to_owned(), |v| v.to_string()),
-            versions
-                .iter()
-                .map(Version::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
+            "catalog    {} serial {}{}",
+            status.name,
+            status.serial,
+            if status.stale {
+                " (unreachable; showing the last index seen)"
+            } else {
+                ""
+            }
         );
     }
 
-    let Some(directory) = &args.catalog else {
+    if inventory.entries().is_empty() {
+        println!("apps       none installed, none offered");
         return Ok(());
-    };
-    let catalog =
-        Catalog::new(FileTransport::new(directory), trusted(&args.trust)?).with_cache(layout);
-    let view = catalog.view()?;
-    println!(
-        "catalog    {} serial {}{}",
-        view.index.catalog(),
-        view.index.serial(),
-        if view.stale { " (stale; cached)" } else { "" }
-    );
-    for entry in view.index.entries() {
+    }
+
+    for entry in inventory.entries() {
         println!(
-            "available  {} {} \u{2014} {}",
-            entry.app(),
-            entry.version(),
-            entry.name()
+            "{:<10} {} \u{2014} {}",
+            entry.state.label(),
+            entry.app,
+            entry.name
         );
+        println!(
+            "           installed {}   available {}",
+            entry
+                .installed
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), Version::to_string),
+            entry
+                .available
+                .as_ref()
+                .map_or_else(|| "none".to_owned(), Version::to_string)
+        );
+        if let Some(prerelease) = &entry.available_prerelease {
+            println!("           prerelease {prerelease} (install it by name)");
+        }
+        if let Some(fallback) = &entry.fallback
+            && entry.can_roll_back()
+        {
+            println!("           fallback {fallback}");
+        }
+        if let Some(health) = &entry.health
+            && !health.started
+            && health.attempts > 0
+        {
+            println!(
+                "           {} attempt(s) without a start{}",
+                health.attempts,
+                health
+                    .last_failure
+                    .as_deref()
+                    .map_or_else(String::new, |note| format!(": {note}"))
+            );
+        }
     }
     Ok(())
 }

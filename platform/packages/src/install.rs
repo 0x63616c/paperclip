@@ -78,6 +78,88 @@ impl ActivationGuard for NothingIsRunning {
     }
 }
 
+/// How far an install has got.
+///
+/// §6 requires the App Store to show download and install progress. Only the
+/// download has a meaningful fraction; the rest are steps that either have
+/// happened or have not, and reporting a made-up percentage for them would be
+/// a progress bar that lies at exactly the moment someone is watching it
+/// because something is slow.
+/// Deliberately *not* `#[non_exhaustive]`, unlike the errors and the result
+/// structs in this module. Every consumer of a step has to put a word on a
+/// screen for it, and a catch-all arm is how a new step becomes a blank label
+/// nobody notices. Adding a variant here should break the App Store's `match`
+/// and make someone choose the word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Bytes are arriving. `total` is the size the signed descriptor declares,
+    /// so the fraction is trustworthy before a single byte has been read.
+    Downloading {
+        /// Bytes written to staging so far.
+        done: u64,
+        /// Bytes the signed release says there are.
+        total: u64,
+    },
+    /// Checking size, digest and package structure.
+    Verifying,
+    /// Unpacking into staging.
+    Extracting,
+    /// Making the release durable and moving it into place.
+    Committing,
+    /// Changing which version is selected.
+    Activating,
+}
+
+/// Something watching an install happen.
+///
+/// Reporting only; a [`Progress`] cannot cancel, fail or alter an install, and
+/// nothing in the transaction waits on it. An App Store that stops drawing has
+/// not stopped an install, and an install does not slow down because nobody is
+/// looking.
+pub trait Progress: fmt::Debug {
+    /// Called as each step begins, and repeatedly while downloading.
+    fn step(&self, step: Step);
+}
+
+/// The observer for callers that are not showing anyone anything.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Unwatched;
+
+impl Progress for Unwatched {
+    fn step(&self, _step: Step) {}
+}
+
+/// A reader that reports how much has gone through it.
+///
+/// Wrapped *outside* the digest reader so what is reported is what was
+/// accepted, not what a source offered.
+#[derive(Debug)]
+struct Watched<'a, R> {
+    inner: R,
+    progress: &'a dyn Progress,
+    done: u64,
+    total: u64,
+    reported: u64,
+}
+
+impl<R: Read> Read for Watched<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.done += read as u64;
+        // Report on every 64 KiB and at the end, not on every `read`: a
+        // progress callback per 8 KiB chunk is a redraw storm on an e-ink
+        // panel, which is the one display where that actually costs something.
+        if read == 0 || self.done - self.reported >= 64 * 1024 {
+            self.reported = self.done;
+            self.progress.step(Step::Downloading {
+                done: self.done,
+                total: self.total,
+            });
+        }
+        Ok(read)
+    }
+}
+
 /// How an install should behave where §12 leaves a choice.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -221,6 +303,7 @@ impl PackageManager {
         archive: impl Read,
         options: &InstallOptions,
         guard: &dyn ActivationGuard,
+        progress: &dyn Progress,
     ) -> Result<Installed, InstallError> {
         self.layout.ensure()?;
         let signed = release.release();
@@ -262,13 +345,22 @@ impl PackageManager {
                 current,
                 options,
                 guard,
+                progress,
                 activate: options.activate,
                 already_present: true,
             });
         }
 
         let transaction = Transaction::begin(&self.layout, &app, &version)?;
-        let outcome = self.install_staged(&transaction, release, archive, options, guard, current);
+        let outcome = self.install_staged(
+            &transaction,
+            release,
+            archive,
+            options,
+            guard,
+            current,
+            progress,
+        );
         match outcome {
             Ok(installed) => {
                 transaction.finish()?;
@@ -285,6 +377,11 @@ impl PackageManager {
     }
 
     /// Everything between "staging exists" and "the new version is selected".
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one call site; a struct to carry six borrowed values through \
+                  a single call would be ceremony, not clarity"
+    )]
     fn install_staged(
         &self,
         transaction: &Transaction,
@@ -293,11 +390,12 @@ impl PackageManager {
         options: &InstallOptions,
         guard: &dyn ActivationGuard,
         current: Option<Version>,
+        progress: &dyn Progress,
     ) -> Result<Installed, InstallError> {
         let signed = release.release();
         let app = signed.app().clone();
         let version = signed.version().clone();
-        let staged = self.stage(transaction, signed, archive, options)?;
+        let staged = self.stage(transaction, signed, archive, options, progress)?;
 
         // The signed descriptor and the package's own manifest must agree.
         // Without this the signature covers a wrapper: anyone able to swap
@@ -318,6 +416,7 @@ impl PackageManager {
             &staged.payload.join(RELEASE_MARKER),
             marker.to_document().as_bytes(),
         )?;
+        progress.step(Step::Committing);
         store::commit_directory(&staged.payload, &self.layout.release_dir(&app, &version))?;
 
         self.finish(Finish {
@@ -327,6 +426,7 @@ impl PackageManager {
             current,
             options,
             guard,
+            progress,
             // A release built against a protocol this platform cannot run is
             // kept, and not selected. The App Store can hold it until the
             // platform catches up; selecting it would hand the host a binary
@@ -449,11 +549,23 @@ impl PackageManager {
         release: &Release,
         archive: impl Read,
         options: &InstallOptions,
+        progress: &dyn Progress,
     ) -> Result<Staged, InstallError> {
         let archive_path = transaction.dir.join("download.paperpkg");
+        progress.step(Step::Downloading {
+            done: 0,
+            total: release.size(),
+        });
         // The declared size *is* the limit. More bytes than the descriptor
         // promised is a failure, not something to notice afterwards.
-        let mut reader = MeasuredReader::new(archive, release.size());
+        let watched = Watched {
+            inner: archive,
+            progress,
+            done: 0,
+            total: release.size(),
+            reported: 0,
+        };
+        let mut reader = MeasuredReader::new(watched, release.size());
         let mut file = std::fs::File::create(&archive_path).map_err(|source| InstallError::Io {
             path: archive_path.clone(),
             source,
@@ -464,6 +576,7 @@ impl PackageManager {
         })?;
         drop(file);
 
+        progress.step(Step::Verifying);
         if copied != release.size() {
             return Err(InstallError::Size {
                 expected: release.size(),
@@ -478,6 +591,7 @@ impl PackageManager {
             });
         }
 
+        progress.step(Step::Extracting);
         let payload = transaction.dir.join("payload");
         std::fs::create_dir(&payload).map_err(|source| InstallError::Io {
             path: payload.clone(),
@@ -504,6 +618,7 @@ impl PackageManager {
             current,
             options,
             guard,
+            progress,
             activate,
             already_present,
         } = request;
@@ -513,6 +628,7 @@ impl PackageManager {
             if guard.is_running(app) {
                 return Err(InstallError::Running { app: app.clone() });
             }
+            progress.step(Step::Activating);
             let journal = Journal {
                 app: app.clone(),
                 version: version.clone(),
@@ -726,6 +842,7 @@ struct Finish<'a> {
     current: Option<Version>,
     options: &'a InstallOptions,
     guard: &'a dyn ActivationGuard,
+    progress: &'a dyn Progress,
     activate: bool,
     already_present: bool,
 }

@@ -31,6 +31,7 @@
 //! | [`store`] | The §11 layout, and the durability primitives |
 //! | [`install`] | The install transaction: stage, verify, commit, activate, recover |
 //! | [`launch`] | Whether a release has ever actually started |
+//! | [`inventory`] | What the App Store shows: installed and offered, merged |
 //! | [`publish`] | Writing a catalog. Publishing machines only |
 //!
 //! There is one path to each type. A type reachable through its module is not
@@ -46,6 +47,7 @@ mod digest;
 mod error;
 mod id;
 pub mod install;
+pub mod inventory;
 pub mod launch;
 mod manifest;
 mod path;

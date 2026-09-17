@@ -112,6 +112,42 @@ the new fallback, so it can be undone without going back to the catalog.
 `recover` finishes or undoes whatever an interrupted install left behind. It is
 safe when nothing is wrong, and the host will run the same code at start.
 
+## What the App Store will show
+
+The App Store *app* is not built yet — it needs the app lifecycle and rendering
+contract from WWW-5, which does not exist. What it will show does exist, as
+`paper_packages::inventory`:
+
+`Inventory::survey` merges three sources — what is installed, what a catalog
+offers, and what has actually managed to start — into one row per app: name,
+installed version, available version, fallback, every release on disk, launch
+health, and a one-word state. `paperctl list` renders exactly that model, so
+the CLI and the App Store cannot drift apart about what an update is.
+
+The states, and why each exists:
+
+| State | Meaning |
+|---|---|
+| `installed` | Installed, with no catalog to compare against. Not "up to date" — with nothing to compare, that is a claim nothing can support. |
+| `up to date` | Installed, and the newest the catalog offers. |
+| `update available` | The catalog offers something newer. |
+| `available` | Offered, not installed here. |
+| `installed; not in the catalog` | The catalog dropped it. It is still installed and still launchable — a catalog does not uninstall anything. |
+| `not starting` | Selected, and it has never managed to start. Outranks every other state, because it is the only one needing a person. |
+| `nothing selected` | Releases on disk, none selected. An install interrupted before activation. |
+
+Release notes are *not* fetched while surveying. Notes live in per-release
+descriptors, so fetching one per row would make opening a list N round trips
+over a LAN that may not be there. `Inventory::notes` fetches one, when someone
+asks to see one.
+
+Install progress is reported through `install::Progress`, as `Downloading`
+(with a total taken from the signed descriptor, so the fraction is trustworthy
+before a byte arrives), then `Verifying`, `Extracting`, `Committing`,
+`Activating`. Reporting only: a `Progress` cannot cancel or fail an install,
+and nothing waits on it. `paperctl install` prints these, which is what keeps
+the reporting honest — it has a second consumer.
+
 ## The store
 
 ```text

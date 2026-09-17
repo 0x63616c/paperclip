@@ -22,6 +22,7 @@ use paper_packages::archive;
 use paper_packages::catalog::{Catalog, CatalogError, FileTransport};
 use paper_packages::install::{
     ActivationGuard, InstallError, InstallOptions, Installed, NothingIsRunning, PackageManager,
+    Progress, Step, Unwatched,
 };
 use paper_packages::publish::Publisher;
 use paper_packages::signing::{SecretKey, TrustedKeys};
@@ -127,7 +128,8 @@ impl World {
             .expect("the catalog should offer that version");
         let release = catalog.release(entry).unwrap();
         let archive = catalog.open_archive(entry, &release).unwrap();
-        self.manager().install(&release, archive, options, guard)
+        self.manager()
+            .install(&release, archive, options, guard, &Unwatched)
     }
 
     /// The archive bytes a release descriptor points at, straight off disk.
@@ -159,6 +161,7 @@ impl World {
             source,
             &InstallOptions::default(),
             &NothingIsRunning,
+            &Unwatched,
         )
     }
 }
@@ -689,6 +692,115 @@ fn nothing_an_install_writes_is_executable_except_the_entrypoint() {
     assert_ne!(mode("bin/chess"), 0);
     assert_eq!(mode("assets/board.dat"), 0);
     assert_eq!(mode("paper.toml"), 0);
+}
+
+/// Records every step an install reports, in order.
+#[derive(Debug, Default)]
+struct Recorder {
+    steps: std::sync::Mutex<Vec<Step>>,
+}
+
+impl Progress for Recorder {
+    fn step(&self, step: Step) {
+        if let Ok(mut steps) = self.steps.lock() {
+            steps.push(step);
+        }
+    }
+}
+
+#[test]
+fn an_install_reports_its_progress_in_order() {
+    let world = World::new();
+    world.publish("0.1.0");
+
+    let recorder = Recorder::default();
+    let catalog = world.catalog();
+    let view = catalog.view().unwrap();
+    let entry = view.index.exact(&app(), &version("0.1.0")).unwrap();
+    let release = catalog.release(entry).unwrap();
+    let archive = catalog.open_archive(entry, &release).unwrap();
+    world
+        .manager()
+        .install(
+            &release,
+            archive,
+            &InstallOptions::default(),
+            &NothingIsRunning,
+            &recorder,
+        )
+        .unwrap();
+
+    let steps = recorder.steps.lock().unwrap().clone();
+    let named: Vec<&str> = steps
+        .iter()
+        .map(|step| match step {
+            Step::Downloading { .. } => "download",
+            Step::Verifying => "verify",
+            Step::Extracting => "extract",
+            Step::Committing => "commit",
+            Step::Activating => "activate",
+        })
+        .collect();
+
+    // Downloads may report many times; the rest exactly once, in this order.
+    let mut collapsed: Vec<&str> = Vec::new();
+    for name in named {
+        if collapsed.last() != Some(&name) {
+            collapsed.push(name);
+        }
+    }
+    assert_eq!(
+        collapsed,
+        vec!["download", "verify", "extract", "commit", "activate"],
+        "{steps:?}"
+    );
+
+    // The total is the signed size, known before a byte arrives, and the
+    // reported progress never exceeds it.
+    let signed = release.release().size();
+    for step in &steps {
+        if let Step::Downloading { done, total } = step {
+            assert_eq!(*total, signed);
+            assert!(*done <= signed, "reported {done} of {signed}");
+        }
+    }
+}
+
+#[test]
+fn a_failed_install_stops_reporting_where_it_failed() {
+    let world = World::new();
+    world.publish("0.1.0");
+    world.install("0.1.0").unwrap();
+    world.publish("0.2.0");
+
+    let mut damaged = world.archive_bytes("0.2.0");
+    let middle = damaged.len() / 2;
+    damaged[middle] ^= 0xff;
+
+    let recorder = Recorder::default();
+    let catalog = world.catalog();
+    let view = catalog.view().unwrap();
+    let entry = view.index.exact(&app(), &version("0.2.0")).unwrap();
+    let release = catalog.release(entry).unwrap();
+    assert!(
+        world
+            .manager()
+            .install(
+                &release,
+                &damaged[..],
+                &InstallOptions::default(),
+                &NothingIsRunning,
+                &recorder,
+            )
+            .is_err()
+    );
+
+    let steps = recorder.steps.lock().unwrap().clone();
+    // It got as far as verifying, and never claimed to commit or activate.
+    assert!(steps.contains(&Step::Verifying), "{steps:?}");
+    assert!(!steps.contains(&Step::Committing), "{steps:?}");
+    assert!(!steps.contains(&Step::Activating), "{steps:?}");
+    still_on_0_1_0(&world);
 }
 
 fn write_journal(world: &World, name: &str, body: &str) {

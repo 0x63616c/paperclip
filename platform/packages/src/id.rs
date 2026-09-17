@@ -28,6 +28,34 @@ impl DisplayName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// A drawable name from text that may not be one, never failing.
+    ///
+    /// For the one situation where refusing is not an option: a shelf or an
+    /// App Store row has to put *something* legible where the name goes, and
+    /// a blank tile is worse than a truncated one. Control characters go,
+    /// surrounding whitespace goes, anything over [`Self::MAX_LEN`] is
+    /// truncated on a character boundary, and text that had nothing usable in
+    /// it becomes a visible placeholder rather than an empty string.
+    ///
+    /// Not a way around validation. `FromStr` is still what a manifest goes
+    /// through, and it still rejects; this is only for text the platform is
+    /// deriving for itself.
+    pub fn from_lossy(text: &str) -> Self {
+        let cleaned: String = text
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect::<String>()
+            .trim()
+            .chars()
+            .take(Self::MAX_LEN)
+            .collect();
+        if cleaned.is_empty() {
+            Self("Unnamed app".to_owned())
+        } else {
+            Self(cleaned)
+        }
+    }
 }
 
 impl FromStr for DisplayName {
@@ -69,6 +97,30 @@ mod tests {
             "  Chess \n".parse::<DisplayName>().unwrap().as_str(),
             "Chess"
         );
+    }
+
+    #[test]
+    fn a_lossy_name_is_always_drawable() {
+        assert_eq!(DisplayName::from_lossy("Chess").as_str(), "Chess");
+        assert_eq!(DisplayName::from_lossy("  Chess \n").as_str(), "Chess");
+        assert_eq!(DisplayName::from_lossy("Che\u{7}ss").as_str(), "Chess");
+        assert_eq!(DisplayName::from_lossy("").as_str(), "Unnamed app");
+        assert_eq!(
+            DisplayName::from_lossy("\u{7}\u{7}").as_str(),
+            "Unnamed app"
+        );
+
+        let long = DisplayName::from_lossy(&"n".repeat(DisplayName::MAX_LEN * 2));
+        assert_eq!(long.as_str().chars().count(), DisplayName::MAX_LEN);
+        // Whatever it produces must itself be a valid name.
+        assert!(long.as_str().parse::<DisplayName>().is_ok());
+    }
+
+    #[test]
+    fn a_lossy_name_survives_multi_byte_truncation() {
+        let emoji = DisplayName::from_lossy(&"\u{1f600}".repeat(DisplayName::MAX_LEN * 2));
+        assert_eq!(emoji.as_str().chars().count(), DisplayName::MAX_LEN);
+        assert!(emoji.as_str().parse::<DisplayName>().is_ok());
     }
 
     #[test]
