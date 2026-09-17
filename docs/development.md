@@ -239,6 +239,22 @@ right — nothing in the process can see the glass, and `open` says
 a frame that rasterised to bare background refuses the takeover, because an
 empty panel and a perfect one produce identical logs from this side.
 
+**Exit codes, since WWW-31.** `open` exits non-zero when the readback cannot
+account for the frame — when no engine buffer comes back holding the pixels
+that were sent, or when the presenting half reported no verdict at all. That is
+reported separately from a stock regression, because the tablet is healthy and
+what failed is the evidence. Before WWW-31 the verdict was printed and then
+dropped, which is how every present orphaned by the WWW-29 detach exited 0. A
+zero exit still means only what the paragraph above says: the engine holds the
+bytes, not that the panel changed.
+
+**Golden frames.** `cargo test -p paperctl` freezes the digest of all four
+screens, so a takeover starts from a render that is known to be the reviewed
+one rather than a fallback or a half-built screen. When a deliberate UI change
+moves one, look at `paperctl screenshot`'s PNG, then update the table in
+`tools/paperctl/src/screens.rs` in the same commit as the change — a digest
+re-blessed in a commit of its own is the assertion switched off.
+
 It also refuses when `xochitl.service` is within two restarts of
 `StartLimitBurst=4`, before it takes the wakelock or stops anything — so a
 refused run costs the tablet nothing. `NRestarts` is cumulative and does not

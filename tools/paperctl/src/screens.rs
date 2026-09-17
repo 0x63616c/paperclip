@@ -346,3 +346,130 @@ fn parse_built_in(app: &'static str, text: &str) -> Result<Manifest, CommandErro
         .map_err(|source| CommandError::BuiltInManifest { app, source })?;
     Ok(manifest)
 }
+
+/// Golden frames: the digest each screen is frozen at.
+///
+/// `render_offscreen` is the one drawing path — `paperctl open` sends its
+/// canvas to the panel, `paperctl screenshot` writes the same canvas to a PNG.
+/// Up to now nothing asserted on either: the PNGs were looked at once by a
+/// human and the digests were only ever compared with themselves, which is how
+/// "was that digest a real shelf render or a fallback buffer?" stayed an open
+/// question through WWW-23 and WWW-27.
+///
+/// Freezing the digests answers it before a takeover starts, and answers it
+/// without a device, a mock or a window: if `paperctl open` prints the digest
+/// in this table then the frame it is about to present is the shelf that was
+/// reviewed, pixel for pixel, and not a blank buffer, a placeholder or a
+/// half-built screen. What it still says nothing about is the glass (§17).
+///
+/// **When one of these fails after a deliberate UI change**, look at the PNG
+/// — `paperctl screenshot`, which renders the same screens (Settings as one
+/// file per page) — satisfy yourself that the new picture is the intended one,
+/// and update the table in the same commit as the change. A digest re-blessed
+/// on its own, in a commit of its own, is the assertion switched off.
+#[cfg(test)]
+mod golden {
+    use paper_device::FrameDigest;
+    use paper_sdk::SCREEN;
+
+    use super::{Screen, Screens};
+
+    /// Screen, its frozen digest, and its ink coverage in per mille.
+    ///
+    /// Home's value is also device evidence rather than only a desktop
+    /// reading: `docs/device/www-23-first-light.md` records the tablet
+    /// computing `0fb73b27…b0b08dd2` at ink 318/1000 for this same render, on
+    /// aarch64, which is the one direct check that the digest a device run
+    /// reports and the digest a Mac run reports are the same number.
+    ///
+    /// The other three are desktop readings only. Rendering uses `sin`, `cos`
+    /// and `powf`, whose results are the platform's libm rather than something
+    /// IEEE 754 pins down, so a device run printing a different digest for
+    /// Chess, Settings or the App Store is a question to investigate — which
+    /// libm, and by how many pixels — and not by itself proof the render
+    /// drifted. Home matching across both platforms is the reason to expect
+    /// they agree, not a guarantee that they do.
+    const GOLDEN: [(Screen, &str, u32); 4] = [
+        (
+            Screen::Home,
+            "0fb73b27198efb386d8d5dc906b190430e9ef465f7243b69e8b72cb6b0b08dd2",
+            318,
+        ),
+        (
+            Screen::Chess,
+            "a56ceac7501a6013361a1c6ab268c8f85d2d1866c7402139ce9f609bbad572b9",
+            567,
+        ),
+        (
+            Screen::Settings,
+            "d9387dd736fd2424b8732a76c7bdcd6ff47507ad0c70dcfa4bbf7c5660b4eaaa",
+            132,
+        ),
+        (
+            Screen::AppStore,
+            "5aaf7f60493c7f8bda53fe2e694fa27d9993fd31db11f5616a652f819a191023",
+            165,
+        ),
+    ];
+
+    /// Every mismatch in one run, not just the first: a change that moves all
+    /// four screens should print all four new digests, so the table can be
+    /// checked against four PNGs and updated once.
+    #[test]
+    fn every_screen_renders_the_frame_it_is_frozen_at() {
+        let mut screens = Screens::new().expect("the built-in screens build");
+        let mut drift = Vec::new();
+        for (screen, digest, ink) in GOLDEN {
+            let canvas = screens
+                .render_offscreen(screen)
+                .expect("a screen renders offscreen");
+            let actual = FrameDigest::of(&canvas).expect("digests");
+            if actual.to_hex() != digest || actual.ink_per_mille() != ink {
+                drift.push(format!(
+                    "{}: expected sha256:{digest} at ink {ink}/1000, rendered {actual}",
+                    screen.slug()
+                ));
+            }
+        }
+        assert!(
+            drift.is_empty(),
+            "the golden frames moved:\n{}",
+            drift.join("\n")
+        );
+    }
+
+    /// The two failures a digest table cannot catch by matching, because a
+    /// wrong value frozen once matches forever: a screen that rendered nothing,
+    /// and two screens that are secretly the same picture. Both are what a
+    /// fallback or placeholder buffer looks like.
+    #[test]
+    fn each_frozen_frame_is_drawn_at_panel_size_and_distinct_from_the_others() {
+        let mut screens = Screens::new().expect("the built-in screens build");
+        let mut seen: Vec<(Screen, FrameDigest)> = Vec::new();
+        for (screen, _, _) in GOLDEN {
+            let canvas = screens
+                .render_offscreen(screen)
+                .expect("a screen renders offscreen");
+            let digest = FrameDigest::of(&canvas).expect("digests");
+            assert_eq!(
+                digest.size(),
+                SCREEN,
+                "{} is not panel-sized",
+                screen.slug()
+            );
+            assert!(
+                digest.looks_drawn(),
+                "{} rendered no ink at all",
+                screen.slug()
+            );
+            if let Some((other, _)) = seen.iter().find(|(_, other)| other == &digest) {
+                panic!(
+                    "{} and {} render the identical frame",
+                    screen.slug(),
+                    other.slug()
+                );
+            }
+            seen.push((screen, digest));
+        }
+    }
+}
