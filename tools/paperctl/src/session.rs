@@ -101,16 +101,54 @@ pub(crate) struct Session {
     host: UnixStream,
     next_frame: FrameId,
     shared: Arc<Mutex<Canvas>>,
+    /// What the app said changed, accumulated since the last time the
+    /// presenter took it.
+    ///
+    /// Only the device present loop reads it, and that is Linux-only, so on a
+    /// Mac build this field is written and never read. That is the honest
+    /// shape rather than a lie to the lint.
+    /// `None` means nothing has been published — which is not the same as
+    /// "everything changed", and is the difference between a panel update and
+    /// no panel update at all.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    damage: Arc<Mutex<Option<Damage>>>,
     app_thread: thread::JoinHandle<Result<paper_sdk::Outcome, paper_sdk::RuntimeError>>,
 }
 
 impl Session {
     /// The canvas the app most recently published.
+    ///
+    /// Clones the whole surface. Prefer [`Self::with_frame`] on any path that
+    /// runs per input event: at panel size this is a 14 MB memcpy, and doing
+    /// it per touch sample is most of what made an interactive session
+    /// unusable.
     pub(crate) fn frame(&self) -> Canvas {
         self.shared
             .lock()
             .expect("the app thread does not panic while holding this lock")
             .clone()
+    }
+
+    /// Runs `f` against the published canvas without copying it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn with_frame<R>(&self, f: impl FnOnce(&Canvas) -> R) -> R {
+        let frame = self
+            .shared
+            .lock()
+            .expect("the app thread does not panic while holding this lock");
+        f(&frame)
+    }
+
+    /// Takes what the app reported as changed since this was last called.
+    ///
+    /// `None` means the app published nothing, so there is nothing to put on
+    /// the panel — the cheapest possible update.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn take_damage(&self) -> Option<Damage> {
+        self.damage
+            .lock()
+            .expect("the app thread does not panic while holding this lock")
+            .take()
     }
 
     /// The read timeout actually in force on the loopback socket — a way for
@@ -287,11 +325,13 @@ pub(crate) fn open_session(
     // Long enough that no legitimate draw or save ever trips it.
     host.set_read_timeout(Some(READ_TIMEOUT))?;
     let reader = app_side.try_clone()?;
+    let damage_slot: Arc<Mutex<Option<Damage>>> = Arc::new(Mutex::new(None));
     let shared = Arc::new(Mutex::new(
         Canvas::new(SCREEN).expect("SCREEN is always a valid canvas size"),
     ));
     let surfaces = BridgeSurfaces {
         shared: shared.clone(),
+        damage: damage_slot.clone(),
     };
     let app_thread = thread::spawn(move || paper_sdk::run(app, reader, app_side, surfaces));
 
@@ -322,6 +362,7 @@ pub(crate) fn open_session(
         host,
         next_frame: FrameId::FIRST,
         shared,
+        damage: damage_slot,
         app_thread,
     };
     session.request_frame(DrawReason::First)?;
@@ -334,6 +375,7 @@ pub(crate) fn open_session(
 struct BridgeSurface {
     canvas: Canvas,
     shared: Arc<Mutex<Canvas>>,
+    damage: Arc<Mutex<Option<Damage>>>,
 }
 
 impl Surface for BridgeSurface {
@@ -341,9 +383,26 @@ impl Surface for BridgeSurface {
         &mut self.canvas
     }
 
-    fn publish(&mut self, _damage: &Damage) -> Result<(), SurfaceError> {
+    fn publish(&mut self, damage: &Damage) -> Result<(), SurfaceError> {
         if let Ok(mut frame) = self.shared.lock() {
             *frame = self.canvas.clone();
+        }
+        /* Accumulate rather than overwrite: several publishes can land between
+         * two presents, and the panel must be told about all of them. Merging
+         * into Full is deliberately sticky — once anything claims the whole
+         * surface, a partial update would leave the rest stale. */
+        if let Ok(mut slot) = self.damage.lock() {
+            *slot = Some(match (slot.take(), damage) {
+                (None, fresh) => fresh.clone(),
+                (Some(Damage::Full), _) | (Some(_), Damage::Full) => Damage::Full,
+                (Some(Damage::Regions { regions: mut have }), Damage::Regions { regions: add }) => {
+                    have.extend_from_slice(add);
+                    Damage::Regions { regions: have }
+                }
+                /* A damage kind this build does not know about cannot be
+                 * narrowed safely, so treat it as the whole surface. */
+                (Some(_), _) => Damage::Full,
+            });
         }
         Ok(())
     }
@@ -351,6 +410,7 @@ impl Surface for BridgeSurface {
 
 struct BridgeSurfaces {
     shared: Arc<Mutex<Canvas>>,
+    damage: Arc<Mutex<Option<Damage>>>,
 }
 
 impl SurfaceProvider for BridgeSurfaces {
@@ -375,6 +435,7 @@ impl SurfaceProvider for BridgeSurfaces {
         Ok(BridgeSurface {
             canvas,
             shared: self.shared.clone(),
+            damage: self.damage.clone(),
         })
     }
 }
@@ -408,6 +469,7 @@ mod tests {
             host,
             next_frame: FrameId::FIRST,
             shared: Arc::new(Mutex::new(Canvas::new(SCREEN).expect("allocates"))),
+            damage: Arc::new(Mutex::new(None)),
             app_thread,
         }
     }

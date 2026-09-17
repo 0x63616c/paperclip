@@ -197,7 +197,7 @@ mod interactive {
         ContactIds, DeviceError, FrameDigest, InputRole, PanelRecord, PenDecoder, PixelRect,
         PointerTransform, Refresh, TouchDecoder, Waveform,
     };
-    use paper_protocol::{ExitReason, Request};
+    use paper_protocol::{Damage, ExitReason, Request, Size};
     use paper_sdk::PointerEvent;
 
     use crate::session;
@@ -224,6 +224,45 @@ mod interactive {
     /// before Xochitl can start again. Nothing here stops or starts Xochitl,
     /// takes the wakelock, or holds an opinion about systemd — that is
     /// entirely [`paper_device::open_and_run`]'s, in the parent process.
+    /// How many queued pointer samples to fold into one paint.
+    ///
+    /// Bounded so a stream of input cannot starve the exit checks below; the
+    /// panel is the slow part, so this only needs to outrun one waveform.
+    const MAX_COALESCED_POINTERS: usize = 64;
+
+    /// The panel rectangle a [`Damage`] claims.
+    ///
+    /// `Full` is the whole panel. `Regions` collapses to the bounding box:
+    /// the engine coalesces overlapping updates anyway, and one rectangle
+    /// costs one waveform where several cost several.
+    fn damaged_rect(damage: &Damage, panel: Size) -> PixelRect {
+        let Some(regions) = damage.regions() else {
+            return PixelRect::whole(panel);
+        };
+        let mut left = f32::MAX;
+        let mut top = f32::MAX;
+        let mut right = f32::MIN;
+        let mut bottom = f32::MIN;
+        for region in regions {
+            left = left.min(region.x);
+            top = top.min(region.y);
+            right = right.max(region.x + region.width);
+            bottom = bottom.max(region.y + region.height);
+        }
+        if !(left.is_finite() && top.is_finite() && right > left && bottom > top) {
+            return PixelRect::new(0, 0, 0, 0);
+        }
+        let x = left.floor().max(0.0) as u32;
+        let y = top.floor().max(0.0) as u32;
+        let w = (right.ceil() as u32)
+            .saturating_sub(x)
+            .min(panel.width.saturating_sub(x));
+        let h = (bottom.ceil() as u32)
+            .saturating_sub(y)
+            .min(panel.height.saturating_sub(y));
+        PixelRect::new(x, y, w, h)
+    }
+
     pub(super) fn run_on_panel(app_slug: &str) -> Result<PanelRecord, DeviceError> {
         let mut panel = paper_device::open_panel()?;
         let real_panel = paper_device::is_real_device();
@@ -279,19 +318,46 @@ mod interactive {
             let exit = loop {
                 match events.recv_timeout(Duration::from_millis(200)) {
                     Ok(pointer) => {
-                        let request = current
+                        // Coalesce. A finger on the glass emits samples far
+                        // faster than any waveform can land, and presenting
+                        // one-per-sample puts the panel permanently behind the
+                        // hand. Feed every queued sample to the app — it needs
+                        // them all to track a drag — then paint once, from the
+                        // state they leave behind.
+                        let mut request = current
                             .pointer(pointer)
                             .map_err(|error| DeviceError::unexpected(error.to_string()))?;
-                        let canvas = current.frame();
-                        if FrameDigest::of(&canvas)?.looks_drawn() {
-                            paper_device::present(
-                                panel.as_mut(),
-                                &canvas,
-                                PixelRect::whole(panel_size),
-                                Waveform::MONO_QUALITY,
-                                Refresh::Partial,
-                            )?;
-                            frames_presented += 1;
+                        let mut coalesced = 0_usize;
+                        while coalesced < MAX_COALESCED_POINTERS {
+                            let Ok(queued) = events.try_recv() else { break };
+                            if let Some(later) = current
+                                .pointer(queued)
+                                .map_err(|error| DeviceError::unexpected(error.to_string()))?
+                            {
+                                request = Some(later);
+                            }
+                            coalesced += 1;
+                        }
+
+                        // Paint only what the app says changed. No publish
+                        // means nothing to show: the cheapest update is the
+                        // one that never reaches the panel. Previously this
+                        // cloned the whole 14 MB canvas, hashed it, and drove
+                        // a full-panel waveform for every single sample.
+                        if let Some(damage) = current.take_damage() {
+                            let rect = damaged_rect(&damage, panel_size);
+                            if !rect.is_empty() {
+                                current.with_frame(|canvas| {
+                                    paper_device::present(
+                                        panel.as_mut(),
+                                        canvas,
+                                        rect,
+                                        Waveform::INK,
+                                        Refresh::Partial,
+                                    )
+                                })?;
+                                frames_presented += 1;
+                            }
                         }
                         match request {
                             Some(Request::Home) => break Exit::Switch("home".to_owned()),
