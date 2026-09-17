@@ -16,36 +16,38 @@ a real systemd on aarch64. It is not device qualification, and the isolation rep
 prints for this machine is not the one that applies to the Paper Pro — see the
 `facilities` case, which asserts the two are different.
 
-26/26 cases passed.
+28/28 cases passed.
 
 | Case | Requirement | Result | Took |
 |---|---|---|---|
 | `facilities` | §11 — the isolation report describes THIS machine, not a wish list | **pass** | 0.0s |
 | `directives-applied` | §11 — what the unit says is what systemd is enforcing | **pass** | 1.2s |
-| `app-crash-panic` | App/Home crash — terminate remaining processes, release display, restore stock | **pass** | 3.7s |
+| `app-crash-panic` | App/Home crash — terminate remaining processes, release display, restore stock | **pass** | 3.9s |
 | `app-crash-abort` | App/Home crash — abort() is a signal death, not an exit code | **pass** | 3.7s |
 | `app-hang` | App hang — deadline, graceful termination, bounded force termination | **pass** | 4.3s |
-| `heartbeat-is-not-progress` | App hang — a heartbeat on an unrelated thread does not prove the UI works | **pass** | 4.3s |
+| `heartbeat-is-not-progress` | App hang — a heartbeat on an unrelated thread does not prove the UI works | **pass** | 4.4s |
 | `ignored-termination` | App hang — a session that refuses SIGTERM is still bounded | **pass** | 6.7s |
-| `lingering-children` | Child survives parent — contain and terminate the complete tree | **pass** | 3.7s |
+| `lingering-children` | Child survives parent — contain and terminate the complete tree | **pass** | 3.8s |
 | `display-process-crash` | Display process crash — terminate the dependent session, restore stock | **pass** | 1.7s |
-| `host-crash` | Host crash — an independent systemd path cleans up and restores stock | **pass** | 1.3s |
+| `host-crash` | Host crash — an independent systemd path cleans up and restores stock | **pass** | 1.4s |
 | `ssh-disconnect` | SSH disconnect — the session does not depend on the terminal that started it | **pass** | 2.2s |
-| `repeated-failures` | Repeated failures — stop retrying, no restart loops, diagnostics left behind | **pass** | 15.7s |
-| `stock-fails-to-start` | Xochitl fails to start — explicit failed state, preserved logs, no false claim | **pass** | 102.1s |
+| `repeated-failures` | Repeated failures — stop retrying, no restart loops, diagnostics left behind | **pass** | 15.8s |
+| `stock-fails-to-start` | Xochitl fails to start — explicit failed state, preserved logs, no false claim | **pass** | 102.6s |
 | `start-budget-refusal` | Never let stock fail — refuse to take the display near StartLimitBurst | **pass** | 6.0s |
 | `reboot` | Reboot — stock startup stays the default; no automatic takeover | **pass** | 0.2s |
 | `memory-pressure` | Extra hazard — memory exhaustion is contained and attributable | **pass** | 3.7s |
 | `disk-full` | Extra hazard — a full writable grant does not take the device with it | **pass** | 3.6s |
 | `write-outside-grants` | Extra hazard — a write outside the granted paths is refused | **pass** | 3.8s |
 | `upgrade-healthy` | §13 — a healthy release is committed and the old one becomes the fallback | **pass** | 0.4s |
+| `upgrade-with-active-session` | §13 — a healthy upgrade stands a running session down before the swap | **pass** | 2.9s |
 | `upgrade-panics` | §13 — a release that panics on start is rolled back | **pass** | 0.5s |
-| `upgrade-never-ready` | §13 — a release that starts but never reaches `ready` is rolled back | **pass** | 35.3s |
-| `upgrade-middle-rung` | §13 — a release that stalls mid-ladder is rolled back, naming the rung | **pass** | 35.4s |
+| `upgrade-never-ready` | §13 — a release that starts but never reaches `ready` is rolled back | **pass** | 35.5s |
+| `upgrade-middle-rung` | §13 — a release that stalls mid-ladder is rolled back, naming the rung | **pass** | 35.3s |
 | `upgrade-power-loss` | §13 — killed between ACTIVATE and COMMIT, reconcile reverts rather than resumes | **pass** | 0.2s |
 | `upgrade-reboot` | §13 — a reboot mid-update leaves stock startup available and a reconcilable journal | **pass** | 0.0s |
 | `setup-is-idempotent` | §14 — setup inspects real prerequisites, and running it twice changes nothing | **pass** | 0.0s |
 | `upgrade-cannot-replace-the-bootstrap` | §13 — an ordinary upgrade replaces nothing outside releases/ | **pass** | 0.4s |
+| `install-power-loss` | §12 — an app install SIGKILLed mid-transaction leaves the old release usable | **pass** | 0.8s |
 
 ## What each case observed
 
@@ -99,7 +101,7 @@ App hang — deadline, graceful termination, bounded force termination
 - paperclip-harness-stock.service active again
 - paperclip-app@dev.calum.hang.service cgroup empty
 - paperclip-session.target inactive
-- detected and recovered in 3.2s (stall budget 2.5s)
+- detected and recovered in 3.1s (stall budget 2.5s)
 - every process of the hung session is gone
 
 ### `heartbeat-is-not-progress` — pass
@@ -135,7 +137,7 @@ Child survives parent — contain and terminate the complete tree
 
 Display process crash — terminate the dependent session, restore stock
 
-- display owner was pid 18133; registry cleared
+- display owner was pid 6057; registry cleared
 - paperclip-harness-stock.service active again
 - paperclip-app@dev.calum.display.service cgroup empty
 - paperclip-session.target inactive
@@ -145,7 +147,7 @@ Display process crash — terminate the dependent session, restore stock
 
 Host crash — an independent systemd path cleans up and restores stock
 
-- supervisor pid 18167 killed with SIGKILL
+- supervisor pid 6091 killed with SIGKILL
 - paperclip-restore-stock.service ran from systemd's OnFailure= with no supervisor alive
 - paperclip-harness-stock.service active again
 - paperclip-app@dev.calum.orphaned.service cgroup empty
@@ -155,7 +157,7 @@ Host crash — an independent systemd path cleans up and restores stock
 
 SSH disconnect — the session does not depend on the terminal that started it
 
-- stand-in login session 18212 killed
+- stand-in login session 6135 killed
 - session and supervisor still running (1 process(es))
 - session cgroup is /paperclip.slice/paperclip-app@dev.calum.remote.service — systemd's, not a login scope
 - paperclip-harness-stock.service active again
@@ -178,7 +180,7 @@ Repeated failures — stop retrying, no restart loops, diagnostics left behind
 Xochitl fails to start — explicit failed state, preserved logs, no false claim
 
 - supervisor state is `failed`
-- 26424 bytes of preserved logs at /run/paperclip-harness/diagnostics/last-failure.txt
+- 26475 bytes of preserved logs at /run/paperclip-harness/diagnostics/last-failure.txt
 - no claim of a successful recovery anywhere in the status
 - `paperctl stock` failed explicitly and independently of the supervisor
 - stock start attempts recorded: 0
@@ -237,6 +239,15 @@ Extra hazard — a write outside the granted paths is refused
 - upgrade reported: Paperclip 0.1.0 -> 0.2.0: ready in 0.3s
 - current 0.2.0, previous 0.1.0, journal at commit
 
+### `upgrade-with-active-session` — pass
+
+§13 — a healthy upgrade stands a running session down before the swap
+
+- brought up paperclip-app@dev.calum.upgrade-session.service before upgrading
+- the session was stood down before the binary underneath it moved
+- upgrade reported: Paperclip 0.1.0 -> 0.2.0: ready in 0.6s
+- current 0.2.0; the new supervisor is running and no session process survived the swap
+
 ### `upgrade-panics` — pass
 
 §13 — a release that panics on start is rolled back
@@ -287,4 +298,14 @@ Extra hazard — a write outside the granted paths is refused
 
 - the bootstrap and the trusted keys are byte-identical after a platform upgrade
 - nothing was written outside the release tree
+
+### `install-power-loss` — pass
+
+§12 — an app install SIGKILLed mid-transaction leaves the old release usable
+
+- killed mid-transaction with SIGKILL while installing 0.2.0
+- 0.1.0 stayed selected and launchable throughout
+- recover: cleaned    1 staging directories | cleared    1 lock(s) left by a killed process
+- staging and the journal were both swept clean
+- found (not fixed here): 1 `.paperclip-tmp.*` file(s) left in state/journal — a kill between atomic_write's temp file and its rename is never swept by recover; harmless to selection, a permanent small leak
 

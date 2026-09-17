@@ -14,12 +14,15 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use paper_host::units::{HOST_UNIT, RESTORE_UNIT, SESSION_TARGET};
+use paper_packages::AppId;
+use semver::Version;
 
 use crate::fixture::{
-    BASELINE, Fixture, STOCK_UNIT, alive, property, systemctl, unit_active, unit_pids, wait,
+    BASELINE, Fixture, STOCK_UNIT, STORE_APP, alive, property, systemctl, unit_active, unit_pids,
+    wait,
 };
 
 /// What a case produced.
@@ -134,6 +137,11 @@ pub(crate) const CASES: &[Case] = &[
         run: upgrade_healthy,
     },
     Case {
+        name: "upgrade-with-active-session",
+        row: "§13 — a healthy upgrade stands a running session down before the swap",
+        run: upgrade_with_active_session,
+    },
+    Case {
         name: "upgrade-panics",
         row: "§13 — a release that panics on start is rolled back",
         run: upgrade_panics,
@@ -167,6 +175,11 @@ pub(crate) const CASES: &[Case] = &[
         name: "upgrade-cannot-replace-the-bootstrap",
         row: "§13 — an ordinary upgrade replaces nothing outside releases/",
         run: upgrade_cannot_replace_the_bootstrap,
+    },
+    Case {
+        name: "install-power-loss",
+        row: "§12 — an app install SIGKILLed mid-transaction leaves the old release usable",
+        run: install_power_loss,
     },
 ];
 
@@ -1026,6 +1039,48 @@ fn upgrade_healthy(fixture: &Fixture) -> Outcome {
     ])
 }
 
+fn upgrade_with_active_session(fixture: &Fixture) -> Outcome {
+    // Every other §13 case upgrades a bare supervisor. This one brings a real
+    // session up first, so the upgrade has to drive the real stand-down path
+    // (`SystemdSession::stand_down` in platform/updater/src/linux.rs) against
+    // a session that is actually there, not an `ActivationGuard` that answers
+    // a fixed `false`.
+    start_supervisor(fixture)?;
+    let unit = bring_up(fixture, "dev.calum.upgrade-session", &["healthy"])?;
+    if !unit_active(SESSION_TARGET) {
+        return Err("the session never actually took the display".to_owned());
+    }
+
+    let bundle = fixture.bundle("0.2.0", "ready")?;
+    let output = run_upgrade(fixture, &bundle)?;
+
+    if selected(fixture) != "0.2.0" {
+        return Err(format!(
+            "`current` is {} after an upgrade with a live session running",
+            selected(fixture)
+        ));
+    }
+    if unit_active(SESSION_TARGET) {
+        return Err("the session target is still active after the swap".to_owned());
+    }
+    let leftover = unit_pids(&unit);
+    if !leftover.is_empty() {
+        return Err(format!(
+            "{leftover:?} of the session were still alive after the swap"
+        ));
+    }
+    if !unit_active(HOST_UNIT) {
+        return Err("the new supervisor is not running after the swap".to_owned());
+    }
+    Ok(vec![
+        format!("brought up {unit} before upgrading"),
+        "the session was stood down before the binary underneath it moved".to_owned(),
+        format!("upgrade reported: {}", output.trim().replace('\n', " | ")),
+        "current 0.2.0; the new supervisor is running and no session process survived the swap"
+            .to_owned(),
+    ])
+}
+
 fn upgrade_panics(fixture: &Fixture) -> Outcome {
     let bundle = fixture.bundle("0.2.0", "panic")?;
     let output = run_upgrade(fixture, &bundle)?;
@@ -1301,4 +1356,172 @@ fn setup_is_idempotent(fixture: &Fixture) -> Outcome {
         "setup reported every stage and found no prerequisite missing".to_owned(),
         format!("run twice; `current` stayed at {selected_after}"),
     ])
+}
+
+// --- §12: app install ---------------------------------------------------
+//
+// `platform/packages/tests/install.rs` covers every fault §12 names by
+// hand-writing the journal entry a crash would leave. That is real coverage
+// of the recovery logic, but it never actually kills a process — this is the
+// one case that does, the same move WWW-8's `upgrade-power-loss` makes for
+// the platform side.
+
+/// The app id every case here publishes and installs.
+fn store_app() -> AppId {
+    STORE_APP.parse().expect("STORE_APP is a valid app id")
+}
+
+/// Runs `paperctl install <app>@<version>` against the fixture's app store
+/// and catalog, and returns its output.
+fn run_install(fixture: &Fixture, version: &str) -> Result<String, String> {
+    let trust = fixture.trust_file();
+    let root = fixture.appstore.root().display().to_string();
+    let catalog = fixture.app_catalog_dir.display().to_string();
+    let app = format!("{STORE_APP}@{version}");
+    fixture.paperctl(&[
+        "install",
+        &app,
+        "--catalog",
+        &catalog,
+        "--trust",
+        trust.to_str().ok_or("a non-UTF-8 key path")?,
+        "--root",
+        &root,
+    ])
+}
+
+/// The version selected in the fixture's app store right now, or `None`.
+fn store_selected(fixture: &Fixture) -> Result<Option<Version>, String> {
+    fixture
+        .appstore
+        .current(&store_app())
+        .map_err(|error| error.to_string())
+}
+
+fn install_power_loss(fixture: &Fixture) -> Outcome {
+    fixture.publish_store_app("0.1.0", 0)?;
+    run_install(fixture, "0.1.0")?;
+    if store_selected(fixture)? != Some(Version::new(0, 1, 0)) {
+        return Err("0.1.0 was not selected after the baseline install".to_owned());
+    }
+
+    // 24 MiB of incompressible payload: small enough to stay well under the
+    // installer's 64 MiB compressed-archive limit, and large enough that
+    // reading, hashing and extracting it takes real wall-clock time — a
+    // package built only from its manifest installs faster than this process
+    // can observe and interrupt it.
+    fixture.publish_store_app("0.2.0", 24 * 1024 * 1024)?;
+
+    let trust = fixture.trust_file();
+    let root = fixture.appstore.root().display().to_string();
+    let catalog = fixture.app_catalog_dir.display().to_string();
+    let app = format!("{STORE_APP}@0.2.0");
+    let mut child = std::process::Command::new(fixture.paths.root.join("bin/paperctl"))
+        .args([
+            "install",
+            &app,
+            "--catalog",
+            &catalog,
+            "--trust",
+            trust.to_str().ok_or("a non-UTF-8 key path")?,
+            "--root",
+            &root,
+        ])
+        .spawn()
+        .map_err(|error| format!("cannot start paperctl: {error}"))?;
+
+    // The journal entry for the staged transaction is written before a
+    // single byte of the archive arrives (`Transaction::begin`), so its
+    // appearance means the install is under way — not that it has reached
+    // any particular byte offset. Killing on sight of it lands somewhere
+    // inside download, verification or extraction, which is the window this
+    // case exists to interrupt.
+    let journal_dir = fixture.appstore.journal_dir();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut staged = false;
+    while Instant::now() < deadline {
+        if fs::read_dir(&journal_dir).is_ok_and(|mut entries| entries.next().is_some()) {
+            staged = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_micros(200));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    if !staged {
+        return Err("the install never staged, so there was nothing to interrupt".to_owned());
+    }
+
+    if store_selected(fixture)? != Some(Version::new(0, 1, 0)) {
+        return Err(
+            "0.1.0 was not still selected right after the kill; the swap must have completed \
+             before the interruption landed"
+                .to_owned(),
+        );
+    }
+
+    let output = fixture.paperctl(&["recover", "--root", &root])?;
+
+    if store_selected(fixture)? != Some(Version::new(0, 1, 0)) {
+        return Err(format!(
+            "recover left something other than 0.1.0 selected:\n{output}"
+        ));
+    }
+    let staging_left = fs::read_dir(fixture.appstore.staging_dir())
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    if staging_left != 0 {
+        return Err(format!(
+            "{staging_left} staging director(ies) survived recovery"
+        ));
+    }
+    // A journal *entry* is specifically a `.toml` file — the extension
+    // `JournalEntry::all` (platform/packages/src/install.rs) filters on. A
+    // kill landing between `atomic_write`'s temp file and its rename leaves a
+    // same-second `.paperclip-tmp.*` name that scan never recognises as an
+    // entry in the first place, so it is not this case's concern; it is
+    // real, and worth its own report (see the final comment on this issue).
+    let leftover: Vec<String> = fs::read_dir(&journal_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".toml"))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !leftover.is_empty() {
+        return Err(format!(
+            "{} journal entr(ies) survived recovery: {leftover:?}\nrecover said: {output}",
+            leftover.len(),
+        ));
+    }
+
+    let mut evidence = vec![
+        "killed mid-transaction with SIGKILL while installing 0.2.0".to_owned(),
+        "0.1.0 stayed selected and launchable throughout".to_owned(),
+        format!("recover: {}", output.trim().replace('\n', " | ")),
+        "staging and the journal were both swept clean".to_owned(),
+    ];
+    let stray_temp_files = fs::read_dir(&journal_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .contains("paperclip-tmp")
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    if stray_temp_files > 0 {
+        evidence.push(format!(
+            "found (not fixed here): {stray_temp_files} `.paperclip-tmp.*` file(s) left in \
+             state/journal — a kill between atomic_write's temp file and its rename is never \
+             swept by recover; harmless to selection, a permanent small leak"
+        ));
+    }
+    Ok(evidence)
 }

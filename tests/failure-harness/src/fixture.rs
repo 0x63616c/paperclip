@@ -31,11 +31,17 @@ use paper_host::units::{
     APP_UNIT, HOST_UNIT, RESTORE_UNIT, SESSION_TARGET, SessionGrants, SessionPaths, SessionSpec,
     UnitSet,
 };
+use paper_packages::archive;
+use paper_packages::publish::Publisher;
 use paper_packages::signing::{Domain, SecretKey};
+use paper_packages::store::Layout as AppStoreLayout;
 use paper_packages::{Capability, InstallPolicy, InstalledApp, Manifest};
 use paper_updater::bundle;
 use paper_updater::layout::PlatformLayout;
 use semver::Version;
+
+/// The app id the §12 install cases publish and install.
+pub(crate) const STORE_APP: &str = "dev.calum.storeapp";
 
 /// The stand-in for `xochitl.service`.
 pub(crate) const STOCK_UNIT: &str = "paperclip-harness-stock.service";
@@ -67,6 +73,15 @@ pub(crate) struct Fixture {
     pub(crate) facilities: Facilities,
     /// The platform release tree, for the WWW-8 upgrade cases.
     pub(crate) platform: PlatformLayout,
+    /// The app store root, for the §12 install cases. A sibling of
+    /// `paths.root`, never nested inside it — an app store inside the
+    /// platform root would let an app install reach the host, which is
+    /// exactly the containment `PlatformLayout::separate_from` exists to
+    /// refuse (see `platform/updater/tests/upgrade.rs`).
+    pub(crate) appstore: AppStoreLayout,
+    /// Where the §12 cases publish packages, read back through
+    /// `paperctl install --catalog`.
+    pub(crate) app_catalog_dir: PathBuf,
 }
 
 impl Fixture {
@@ -87,6 +102,7 @@ impl Fixture {
             storage: PathBuf::from("/opt/paperclip-harness/storage"),
         };
         let platform = PlatformLayout::new(&paths.root);
+        let appstore = AppStoreLayout::new("/opt/paperclip-harness-appstore");
         let fixture = Self {
             paths,
             locks_dir: PathBuf::from("/tmp/paperclip-harness"),
@@ -94,12 +110,15 @@ impl Fixture {
             bin_dir: bin_dir.to_path_buf(),
             facilities,
             platform,
+            appstore,
+            app_catalog_dir: PathBuf::from("/opt/paperclip-harness-appstore-catalog"),
         };
 
         fixture.make_user()?;
         fixture.make_directories()?;
         fixture.install_binaries()?;
         fixture.install_platform()?;
+        fixture.install_appstore()?;
         fixture.write_config()?;
         fixture.install_units()?;
         fixture.stock_should_start()?;
@@ -136,6 +155,10 @@ impl Fixture {
         // releases behind. A case that inherited any of that would be graded
         // against its predecessor's platform.
         self.restore_baseline()?;
+        // The install cases do the same to the app store: a leftover journal
+        // entry or a stray staging directory would make the next case's
+        // recovery assertions meaningless.
+        self.clear_appstore()?;
         self.stock_should_start()?;
         systemctl(&["start", STOCK_UNIT])?;
         if !wait(Duration::from_secs(10), || unit_active(STOCK_UNIT)) {
@@ -453,6 +476,82 @@ impl Fixture {
         Ok(())
     }
 
+    /// Establishes the app store root and the catalog directory the §12
+    /// cases publish into.
+    fn install_appstore(&self) -> Result<(), String> {
+        self.appstore
+            .ensure()
+            .map_err(|error| format!("app store root: {error}"))?;
+        fs::create_dir_all(&self.app_catalog_dir).map_err(|error| error.to_string())
+    }
+
+    /// Wipes whatever the previous case's install left selected, staged or
+    /// journalled, and wipes the catalog too — a case that inherited a
+    /// published version could not tell "refused" from "already installed".
+    fn clear_appstore(&self) -> Result<(), String> {
+        let _ = fs::remove_dir_all(self.appstore.root());
+        let _ = fs::remove_dir_all(&self.app_catalog_dir);
+        self.install_appstore()
+    }
+
+    /// Builds and publishes a release of the harness's store app, padded with
+    /// `payload_bytes` of incompressible data.
+    ///
+    /// The padding exists for `install-power-loss`: a package built only from
+    /// its manifest and a one-line entrypoint installs faster than this
+    /// process can observe and kill it, and a compressible payload would
+    /// collapse back down to the same problem inside the `.paperpkg`.
+    ///
+    /// # Errors
+    ///
+    /// Any failure to build, archive or publish the package.
+    pub(crate) fn publish_store_app(
+        &self,
+        version: &str,
+        payload_bytes: usize,
+    ) -> Result<(), String> {
+        let source = self
+            .paths
+            .root
+            .join("bundles")
+            .join(format!("store-src-{version}"));
+        let _ = fs::remove_dir_all(&source);
+        fs::create_dir_all(source.join("bin")).map_err(|error| error.to_string())?;
+        fs::create_dir_all(source.join("assets")).map_err(|error| error.to_string())?;
+        fs::write(
+            source.join("paper.toml"),
+            format!(
+                "[app]\nid = \"{STORE_APP}\"\nname = \"Harness Store App\"\n\
+                 version = \"{version}\"\nprotocol = \"1.0\"\nentrypoint = \"bin/app\"\n\
+                 assets = [\"assets/payload.bin\"]\n"
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+        fs::write(source.join("bin/app"), format!("store app {version}"))
+            .map_err(|error| error.to_string())?;
+        fs::write(
+            source.join("assets/payload.bin"),
+            incompressible(payload_bytes),
+        )
+        .map_err(|error| error.to_string())?;
+
+        let mut bytes = Vec::new();
+        archive::build(&source, &mut bytes).map_err(|error| error.to_string())?;
+        let package = self
+            .paths
+            .root
+            .join("bundles")
+            .join(format!("store-{version}.paperpkg"));
+        fs::write(&package, &bytes).map_err(|error| error.to_string())?;
+
+        let publisher = Publisher::open(&self.app_catalog_dir, "harness-store")
+            .map_err(|error| error.to_string())?;
+        publisher
+            .publish(&package, &self.key(), "harness release", 1_000)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     /// Builds a signed bundle for `version` whose supervisor behaves as
     /// `ladder` says.
     ///
@@ -682,6 +781,22 @@ fn installed_app() -> InstalledApp {
     let mut policy = InstallPolicy::deny_all();
     policy.allow(manifest.id(), Capability::Storage);
     InstalledApp::install(manifest, &policy)
+}
+
+/// `len` bytes that gzip cannot shrink meaningfully, so a package built from
+/// them takes real wall-clock time to write, hash and extract instead of
+/// collapsing to a few bytes on the wire.
+fn incompressible(len: usize) -> Vec<u8> {
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut bytes = Vec::with_capacity(len);
+    while bytes.len() < len {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        bytes.extend_from_slice(&state.to_le_bytes());
+    }
+    bytes.truncate(len);
+    bytes
 }
 
 fn chown(path: &Path, user: &str) -> Result<(), String> {

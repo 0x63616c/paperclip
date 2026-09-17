@@ -6,9 +6,11 @@ Host, Home, the App Store and Settings, which ship as **one release** and move
 together (§13).
 
 > **Not yet run on hardware.** Everything here is implemented and exercised in
-> the Linux VM harness. No platform upgrade has been performed on the tablet.
-> Treat the procedure as untested on the device until the §17 acceptance run
-> says otherwise.
+> the Linux VM harness (`docs/device/www-8-upgrade-harness.md`; WWW-41 added
+> the app-install and active-session cases). No platform upgrade has been
+> performed on the tablet. `tools/device-acceptance/run.sh` is the §17
+> acceptance run this note refers to — written, not yet executed against the
+> real device. Treat the procedure as untested on the device until it has.
 
 ## Setting a tablet up
 
