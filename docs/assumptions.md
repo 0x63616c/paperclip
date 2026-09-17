@@ -51,6 +51,25 @@ WWW-5 must design against.
   `/tmp/epd.lock` and `/tmp/epframebuffer.lock`, the latter a registry of
   PID/process/hostname/machine-id/boot-id. The Host must participate.
 
+## What Stage 4 added
+
+Facts the supervisor is built against, established by probing rather than
+assumed. `paperctl isolation --target paper-pro` prints the current derived
+answer; `docs/isolation.md` is the written version.
+
+- **`MemoryMax=` does nothing on the device**, so it is not written into any
+  unit. `LimitAS=` is, and it is an rlimit rather than a per-session bound.
+- **The network capability is not an enforced boundary on the device.**
+  `IPAddressDeny=` needs systemd's BPF framework and `RestrictAddressFamilies=`
+  needs seccomp; the device has no seccomp, and whether it has BPF has **not
+  been established** — so neither directive is written and no boundary is
+  claimed. One line of `systemctl --version` on the tablet closes this.
+- **`/tmp` is writable by every foreground session**, because display ownership
+  is registered there and `PrivateTmp=` would hide the registry. Not an
+  oversight; recorded in the isolation report.
+- **systemd's version on the device is unrecorded.** The profile says
+  `unknown` rather than guessing, and the generator copes.
+
 ## What Stage 1 does not establish
 
 None of the following is touched by anything in this repository, and no test

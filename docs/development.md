@@ -1,8 +1,14 @@
 # Development
 
-Everything here runs on the Mac. Code for the tablet *cross-compiles* here too
-— see "Building for the tablet" — but nothing in this repository has run on the
-tablet. See `recovery.md` for what exists on that side and what does not.
+Most of this runs on the Mac, and the tablet's code cross-compiles here — see
+"Building for the tablet". One thing does not: the supervisor's *enforcement*
+is only testable on Linux, so `tests/failure-harness` runs in a VM and refuses
+to run anywhere else. Its *decisions* are tested on the Mac like everything
+else, and the two are kept apart on purpose.
+
+Nothing in this repository has run on the tablet. See `recovery.md` for what
+exists on that side and what does not, and `isolation.md` for what the
+isolation really enforces.
 
 ## Prerequisites
 
@@ -115,6 +121,54 @@ a shape that does not match the canvas to see the bars.
 `artifacts/` is git-ignored. Screenshots that matter belong attached to an
 issue, not committed.
 
+## The supervisor
+
+```sh
+# What a platform actually enforces (§11). Works on a Mac for the recorded
+# device profile; `--target here` needs Linux and refuses elsewhere.
+cargo run -p paperctl -- isolation --target paper-pro
+cargo run -p paperctl -- isolation --target paper-pro --markdown
+
+# The runtime units a session would be given.
+cargo run -p paperctl -- units --target paper-pro
+```
+
+The device build of `paperctl` has no windowing stack, because the tablet has
+none — no libEGL, no Mesa, no GPU (WWW-1 §3):
+
+```sh
+cargo build -p paperctl --no-default-features   # what ships to /home/root/paperclip/bin
+```
+
+`paperctl stock` — the independent recovery path — exists only in a Linux
+build. On a Mac it says so rather than pretending.
+
+## The failure harness
+
+Every §10 recovery row, caused for real against systemd, in an aarch64 Linux
+VM. It is a binary rather than a `cargo test` target so that it cannot quietly
+skip on a Mac and leave a green line behind.
+
+```sh
+brew install qemu
+tools/vm-harness/create-vm.sh ~/paperclip-vm
+tools/vm-harness/run-harness.sh ~/paperclip-vm
+```
+
+About three minutes for the VM, about a minute for the run. It writes
+`docs/device/www-4-failure-harness.md`, which names the kernel and systemd
+build it came from.
+
+```sh
+~/paperclip-vm/vmsh 'sudo ~/bin/paperclip-failure-harness --bin-dir ~/bin --list'
+~/paperclip-vm/vmsh 'sudo ~/bin/paperclip-failure-harness --bin-dir ~/bin --case app-hang'
+```
+
+**A container will not do**, however convenient. LXC — which is what OrbStack
+and Docker run systemd inside — installs a generator that disables every
+sandboxing directive for every service on the machine, so the harness reports
+that nothing is enforced and cannot tell that from a broken unit file.
+
 ## Manifests
 
 ```sh
@@ -135,19 +189,25 @@ platform/packages   paper.toml: parsing, validation, capability grants
 platform/sdk        canvas, palette, text, display mapping, input, desktop backend
 platform/device     the tablet adapter: waveform presentation, evdev, session locks
 platform/device/native  the only C++: a C ABI over the vendor waveform engine
+platform/host       the supervisor: state machine, deadlines, units, recovery
 apps/home           the home screen
 apps/chess          the Chess screen
-tools/paperctl      the command line
+tools/paperctl      the command line, including `paperctl stock`
+tools/fault-app     a session that misbehaves to order, for the harness
+tools/vm-harness    scripts that build the VM the harness runs in
 tools/cross         the zig cc linker wrapper for the device triple
 tools/device-probe  one-off device probes and the vendor-library pull script
 tests/system        cross-crate tests
+tests/failure-harness  the §10 failure harness (a binary, run in the VM)
 docs/               this, plus ADRs
 ```
 
-Crates appear as their functionality lands. The full §7 layout —
-`platform/host`, `platform/updater`, `apps/app-store`, `packaging/systemd` —
-is the destination, and creating those directories empty now would just be
-scaffolding to delete later.
+Crates appear as their functionality lands. The rest of the §7 layout —
+`platform/updater`, `apps/app-store` — is the destination, and creating those
+directories empty now would just be scaffolding to delete later.
+`packaging/systemd` will stay empty permanently: units are generated at session
+start into `/run/systemd/system` and nothing is packaged for the root
+filesystem (ADR-0008).
 
 Nothing above `platform/device` may import Qt types, Linux device paths, SSH,
 systemd or Xochitl controls. That surface belongs to the adapter and the host.
