@@ -89,17 +89,26 @@ pub(crate) fn launch_target(id: &AppId) -> Option<&'static str> {
     }
 }
 
-fn home_screen(chess: &Manifest, settings: &Manifest, status: &str, mode_fact: &str) -> HomeScreen {
-    HomeScreen {
+/// The shelf an interactive session shows, built from the compiled-in
+/// manifests.
+///
+/// `pub(crate)` so `screens::golden::both_shelves_list_the_same_apps` can
+/// compare it against the shelf `screenshot` and `open` render, rather than
+/// against a list of names someone has to remember to update — which is the
+/// failure that put Settings on one shelf and not the other.
+pub(crate) fn home_screen(status: &str, mode_fact: &str) -> Result<HomeScreen, SessionError> {
+    let chess = Manifest::parse(CHESS_MANIFEST)?;
+    let settings = Manifest::parse(SETTINGS_MANIFEST)?;
+    Ok(HomeScreen {
         entries: vec![
-            ShelfEntry::from_manifest(chess, ShelfGlyph::Board),
-            ShelfEntry::from_manifest(settings, ShelfGlyph::Gear),
+            ShelfEntry::from_manifest(&chess, ShelfGlyph::Board),
+            ShelfEntry::from_manifest(&settings, ShelfGlyph::Gear),
             ShelfEntry::action("Return to stock", "REMARKABLE", ShelfGlyph::Stock),
         ],
         facts: vec![SystemFact::new("Mode", mode_fact)],
         pressed: None,
         status: status.to_owned(),
-    }
+    })
 }
 
 /// The live half of a session: the loopback connection to the app thread, and
@@ -321,16 +330,9 @@ pub(crate) fn open_session(
     status: &str,
     mode_fact: &str,
 ) -> Result<Session, SessionError> {
-    let chess_manifest = Manifest::parse(CHESS_MANIFEST)?;
-    let settings_manifest = Manifest::parse(SETTINGS_MANIFEST)?;
     let app = match app_slug {
         "chess" => DevApp::Chess(Box::new(ChessApp::new())),
-        "home" => DevApp::Home(HomeApp::new(home_screen(
-            &chess_manifest,
-            &settings_manifest,
-            status,
-            mode_fact,
-        ))),
+        "home" => DevApp::Home(HomeApp::new(home_screen(status, mode_fact)?)),
         // The real store, not the fixture the desktop preview draws: a
         // Settings page that invented its numbers would be worse than one
         // that reports an empty store, which is what a Mac with no

@@ -487,26 +487,6 @@ mod golden {
     /// a digest that changed with whatever is installed locally would assert
     /// nothing. What a real session uses is `LiveHost` — see
     /// `session::open_session`.
-    /// The shelf `screenshot` and `open` render must list the same apps as the
-    /// one an interactive `run` session shows.
-    ///
-    /// They were built in two places and drifted: Settings was added to
-    /// `session::home_screen` and not here, so the tile appeared in a session
-    /// and was absent from the panel. Nothing failed — both shelves rendered
-    /// perfectly, they just disagreed about what Paperclip contains.
-    #[test]
-    fn both_shelves_list_the_same_apps() {
-        let screens = Screens::new().expect("the built-in manifests parse");
-        let rendered: Vec<&str> = screens.home.entries.iter().map(|e| e.label()).collect();
-        for expected in ["Chess", "Settings", "Return to stock"] {
-            assert!(
-                rendered.iter().any(|t| t.eq_ignore_ascii_case(expected)),
-                "the rendered shelf is missing `{expected}`: {rendered:?}. \
-                 `session::home_screen` lists it; these two must agree."
-            );
-        }
-    }
-
     #[test]
     fn the_settings_app_launches_into_the_frame_the_settings_screen_is_frozen_at() {
         let (_, frozen, ink) = GOLDEN
@@ -533,6 +513,50 @@ mod golden {
             (digest.to_hex().as_str(), digest.ink_per_mille()),
             (frozen, ink),
             "the launched Settings app drew {digest}, not the frozen screen"
+        );
+    }
+
+    /// The shelf `screenshot` and `open` render must offer the same apps as
+    /// the one an interactive `run` session shows.
+    ///
+    /// They are built in two places and drifted: Settings was added to
+    /// `session::home_screen` and not here, so the tile appeared in a session
+    /// and was absent from the panel. Nothing failed — both shelves rendered
+    /// perfectly, they just disagreed about what Paperclip contains.
+    ///
+    /// Compared by launchable app id, read from both constructions, rather
+    /// than against a list of names written down here: a list is a third
+    /// place to forget, and forgetting is the whole failure. What that
+    /// deliberately does not compare is an entry with no id — the preview's
+    /// `App Store` placeholder and `Return to stock` launch nothing, and the
+    /// placeholder is a known difference until WWW-38 gives the App Store a
+    /// real entry. The moment it does, on either shelf alone, the ids stop
+    /// matching and this fails.
+    #[test]
+    fn both_shelves_offer_the_same_apps() {
+        fn launchable(entries: &[paper_home::ShelfEntry]) -> Vec<String> {
+            let mut ids: Vec<String> = entries
+                .iter()
+                .filter_map(|entry| entry.launch().map(|id| id.as_str().to_owned()))
+                .collect();
+            ids.sort();
+            ids
+        }
+
+        let rendered = Screens::new().expect("the built-in manifests parse");
+        let session =
+            crate::session::home_screen("TEST", "unit test").expect("the built-in manifests parse");
+
+        assert_eq!(
+            launchable(&rendered.home.entries),
+            launchable(&session.entries),
+            "the shelf `screenshot` and `open` render offers different apps to the one \
+             `paperctl run` shows; both are built by hand and both have to list every \
+             default app (ADR-0015)"
+        );
+        assert!(
+            !launchable(&session.entries).is_empty(),
+            "comparing two empty shelves would pass forever"
         );
     }
 }
