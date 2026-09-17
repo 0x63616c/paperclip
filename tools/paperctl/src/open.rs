@@ -63,6 +63,17 @@ pub(crate) struct OpenArgs {
     /// same digest the device run reports, so the two can be compared.
     #[arg(long)]
     dry_run: bool,
+    /// Internal: be the presenting half, and nothing else.
+    ///
+    /// Opens the vendor engine, presents, holds, clears, writes its report to
+    /// `--report-to` and exits. It never stops or starts Xochitl — it cannot,
+    /// see `paper_device::hold`. Hidden because running it by hand takes the
+    /// panel out from under a live Xochitl.
+    #[arg(long, hide = true)]
+    present_only: bool,
+    /// Internal: where the presenting half leaves its report.
+    #[arg(long, hide = true, value_name = "PATH")]
+    report_to: Option<std::path::PathBuf>,
 }
 
 /// Which waveform to ask the engine for.
@@ -77,11 +88,36 @@ pub(crate) enum WaveformArg {
 }
 
 impl WaveformArg {
+    /// The spelling `--waveform` accepts, so the presenting half can be given
+    /// back exactly what this half was given.
+    #[cfg(target_os = "linux")]
+    fn slug(self) -> &'static str {
+        match self {
+            WaveformArg::MonoInk => "mono-ink",
+            WaveformArg::MonoQuality => "mono-quality",
+            WaveformArg::Colour => "colour",
+        }
+    }
+
     fn waveform(self) -> Waveform {
         match self {
             WaveformArg::MonoInk => Waveform::INK,
             WaveformArg::MonoQuality => Waveform::MONO_QUALITY,
             WaveformArg::Colour => Waveform::COLOR,
+        }
+    }
+}
+
+impl OpenArgs {
+    /// The spelling `--screen` accepts for whatever was chosen.
+    #[cfg(target_os = "linux")]
+    fn screen_slug(&self) -> &'static str {
+        match self.screen {
+            ScreenArg::Home => "home",
+            ScreenArg::Chess => "chess",
+            ScreenArg::Settings => "settings",
+            ScreenArg::AppStore => "app-store",
+            ScreenArg::All => "home",
         }
     }
 }
@@ -116,7 +152,10 @@ pub(crate) fn run(args: &OpenArgs) -> Result<(), CommandError> {
     if args.dry_run {
         return dry_run(&canvas, &plan);
     }
-    present(&canvas, &plan)
+    if args.present_only {
+        return present_only(&canvas, &plan, args.report_to.as_deref());
+    }
+    present(&canvas, &plan, args)
 }
 
 /// Draws the screen at panel resolution, through WWW-2's renderer.
@@ -153,6 +192,62 @@ fn plan_from(args: &OpenArgs) -> HoldPlan {
     }
 }
 
+/// Runs this same binary as the presenting half and waits for it to finish.
+///
+/// `wait` is load-bearing: it is what turns "the presenter is done" into "the
+/// process holding the vendor lock no longer exists", which is what makes the
+/// Xochitl start that follows able to succeed. stdout and stderr are inherited
+/// so the vendor engine's own diagnostics — panel lot, waveform table, pmic
+/// rails — reach the operator live rather than being parsed out of a pipe.
+///
+/// `/tmp` for the report, never `/home` or the root filesystem: tmpfs, cleared
+/// at reboot, and the same place the start record already lives.
+#[cfg(target_os = "linux")]
+fn spawn_presenter(
+    args: &OpenArgs,
+) -> Result<paper_device::PanelRecord, paper_device::DeviceError> {
+    use std::process::Command;
+
+    let binary = std::env::current_exe().map_err(|source| {
+        paper_device::DeviceError::io("find this binary for", "paperctl", source)
+    })?;
+    let report =
+        std::path::PathBuf::from(format!("/tmp/paperclip-open-{}.report", std::process::id()));
+    let _ = std::fs::remove_file(&report);
+
+    let mut command = Command::new(&binary);
+    command
+        .arg("open")
+        .arg("--present-only")
+        .arg("--report-to")
+        .arg(&report)
+        .arg("--screen")
+        .arg(args.screen_slug())
+        .arg("--hold")
+        .arg(args.hold.to_string())
+        .arg("--waveform")
+        .arg(args.waveform.slug())
+        .arg("--sample-every")
+        .arg(args.sample_every.to_string());
+    if args.partial {
+        command.arg("--partial");
+    }
+
+    let status = command.status().map_err(|source| {
+        paper_device::DeviceError::io("run the presenting half of", &binary, source)
+    })?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&report);
+        return Err(paper_device::DeviceError::unexpected(format!(
+            "the presenting half exited with {status}; the display was not left taken, \
+             but nothing was shown"
+        )));
+    }
+    let record = paper_device::PanelRecord::read(&report);
+    let _ = std::fs::remove_file(&report);
+    record
+}
+
 /// Everything except the glass: the render, the digest, the swap it would ask
 /// for. The hold is skipped — there is nothing to look at.
 fn dry_run(canvas: &Canvas, plan: &HoldPlan) -> Result<(), CommandError> {
@@ -176,21 +271,64 @@ fn dry_run(canvas: &Canvas, plan: &HoldPlan) -> Result<(), CommandError> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn present(_canvas: &Canvas, _plan: &HoldPlan) -> Result<(), CommandError> {
+fn present(_canvas: &Canvas, _plan: &HoldPlan, _args: &OpenArgs) -> Result<(), CommandError> {
     Err(CommandError::NotOnDevice {
         what: "presenting a screen on the panel (try --dry-run)",
     })
 }
 
+#[cfg(not(target_os = "linux"))]
+fn present_only(
+    _canvas: &Canvas,
+    _plan: &HoldPlan,
+    _report_to: Option<&std::path::Path>,
+) -> Result<(), CommandError> {
+    Err(CommandError::NotOnDevice {
+        what: "presenting a screen on the panel (try --dry-run)",
+    })
+}
+
+/// The presenting half: open the engine, show the frame, write down what
+/// happened, and — most importantly — **exit**.
+///
+/// Its exit is the whole safety property. `libqsgepaper`'s `EPFramebuffer` is
+/// a singleton whose lock `checkLockFile()` takes and nothing gives back, so
+/// while this process lives no Xochitl can start. WWW-23 found that out by
+/// rebooting the tablet.
 #[cfg(target_os = "linux")]
-fn present(canvas: &Canvas, plan: &HoldPlan) -> Result<(), CommandError> {
+fn present_only(
+    canvas: &Canvas,
+    plan: &HoldPlan,
+    report_to: Option<&std::path::Path>,
+) -> Result<(), CommandError> {
+    if !paper_device::is_real_device() {
+        return Err(CommandError::NoVendorEngine);
+    }
+    let work = paper_device::present_only(canvas, plan).map_err(CommandError::Device)?;
+    println!("{work}");
+    if let Some(path) = report_to {
+        paper_device::PanelRecord::of(&work)
+            .write(path)
+            .map_err(CommandError::Device)?;
+    }
+    Ok(())
+}
+
+/// The surviving half: preflight, take the display, run the presenter as a
+/// child, put stock back and check it.
+///
+/// This process never opens the vendor engine. That is not tidiness — it is
+/// the reason it is able to start Xochitl at all.
+#[cfg(target_os = "linux")]
+fn present(canvas: &Canvas, plan: &HoldPlan, args: &OpenArgs) -> Result<(), CommandError> {
     // A device build without `vendor-engine` opens a `MemoryPanel`. Stopping
     // Xochitl to draw into one would be all of the risk and none of the point,
     // so it is refused here rather than discovered in the report afterwards.
     if !paper_device::is_real_device() {
         return Err(CommandError::NoVendorEngine);
     }
-    let report = paper_device::open_and_hold(canvas, plan).map_err(CommandError::Device)?;
+    let report = paper_device::open_and_hold(canvas, plan, || spawn_presenter(args))
+        .map_err(CommandError::Device)?;
     println!("{report}");
     if !report.stock_restored_cleanly() {
         return Err(CommandError::StockRegressed {

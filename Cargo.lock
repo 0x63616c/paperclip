@@ -1415,6 +1415,9 @@ version = "0.1.0"
 dependencies = [
  "paper-host",
  "paper-packages",
+ "paper-protocol",
+ "paper-updater",
+ "semver",
 ]
 
 [[package]]
@@ -1542,6 +1545,7 @@ dependencies = [
  "paper-protocol",
  "paper-sdk",
  "paper-settings",
+ "paper-updater",
  "semver",
  "thiserror 2.0.20",
 ]

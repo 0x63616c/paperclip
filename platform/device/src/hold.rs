@@ -507,6 +507,82 @@ impl fmt::Display for PanelWork {
     }
 }
 
+/// A [`PanelWork`] flattened so it can cross a process boundary.
+///
+/// It has to cross one. `EPFramebuffer` is a singleton inside
+/// `libqsgepaper`, `checkLockFile()` *takes* the vendor lock rather than
+/// merely reading it, and the library exposes nothing that gives it back:
+/// `paperclip_ep_close` deletes our handle and our `QCoreApplication`, and the
+/// engine — and its lock — outlive both. The only thing that releases it is
+/// the process exiting.
+///
+/// So the process that presents cannot also be the process that starts
+/// Xochitl, and what it learned has to come back as data rather than as a
+/// return value. `lines` is the report it printed, carried verbatim so the
+/// parent can reprint it without pretending to have observed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanelRecord {
+    /// Whether those pixels could reach glass.
+    pub real_panel: bool,
+    /// The digest of the frame the presenter actually sent.
+    pub digest: String,
+    /// The presenter's own report, one line each.
+    pub lines: Vec<String>,
+}
+
+impl PanelRecord {
+    /// The record a presenter leaves behind.
+    pub fn of(work: &PanelWork) -> Self {
+        Self {
+            real_panel: work.real_panel,
+            digest: format!("sha256:{}", work.digest.to_hex()),
+            lines: work.to_string().lines().map(str::to_owned).collect(),
+        }
+    }
+
+    /// Writes it where the parent will look.
+    ///
+    /// Deliberately a file rather than a pipe: the vendor engine writes its own
+    /// diagnostics to stdout — panel lot ids, waveform table, pmic rails — and
+    /// those belong in front of the operator, not parsed out of a stream.
+    pub fn write(&self, path: &Path) -> Result<(), DeviceError> {
+        let mut text = format!("real_panel={}\ndigest={}\n", self.real_panel, self.digest);
+        for line in &self.lines {
+            // The report is human text and may hold anything but a newline,
+            // which is the one character the format cannot carry.
+            text.push_str(&format!("line={}\n", line.replace('\n', " ")));
+        }
+        fs::write(path, text)
+            .map_err(|source| DeviceError::io("write a panel record to", path, source))
+    }
+
+    /// Reads one back, or says why it could not.
+    pub fn read(path: &Path) -> Result<Self, DeviceError> {
+        let text = fs::read_to_string(path)
+            .map_err(|source| DeviceError::io("read the panel record at", path, source))?;
+        let mut record = Self {
+            real_panel: false,
+            digest: String::new(),
+            lines: Vec::new(),
+        };
+        for line in text.lines() {
+            match line.split_once('=') {
+                Some(("real_panel", value)) => record.real_panel = value == "true",
+                Some(("digest", value)) => record.digest = value.to_owned(),
+                Some(("line", value)) => record.lines.push(value.to_owned()),
+                _ => {}
+            }
+        }
+        if record.digest.is_empty() {
+            return Err(DeviceError::unexpected(format!(
+                "the panel record at {} names no digest; the presenter did not finish",
+                path.display()
+            )));
+        }
+        Ok(record)
+    }
+}
+
 /// Draws `canvas` onto `panel`, holds it, then clears — the part that has no
 /// opinion about Xochitl, systemd or wakelocks.
 ///
@@ -577,7 +653,7 @@ pub fn present_and_hold(
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{HoldReport, RegistryCheck, open_and_hold};
+pub use linux::{HoldReport, RegistryCheck, open_and_hold, present_only};
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -587,7 +663,9 @@ mod linux {
 
     use paper_sdk::Canvas;
 
-    use super::{DisplayProbe, HoldPlan, PanelWork, REGISTRY_RECLAIM_TIMEOUT, present_and_hold};
+    use super::{
+        DisplayProbe, HoldPlan, PanelRecord, PanelWork, REGISTRY_RECLAIM_TIMEOUT, present_and_hold,
+    };
     use crate::error::DeviceError;
     use crate::session::{EPFRAMEBUFFER_LOCK, VendorLockState, WakeLock};
     use crate::stock::{StartBudget, StockHealth, Systemctl};
@@ -649,8 +727,8 @@ mod linux {
         pub before: StockHealth,
         /// Stock after the display was handed back.
         pub after: StockHealth,
-        /// What the panel half did.
-        pub panel: PanelWork,
+        /// What the presenting process reported back.
+        pub panel: PanelRecord,
         /// Whether the registry went back to Xochitl.
         pub registry: RegistryCheck,
         /// Health differences that mean this session did damage. Empty is the
@@ -668,7 +746,9 @@ mod linux {
     impl fmt::Display for HoldReport {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             writeln!(f, "preflight   {:?}", self.before)?;
-            writeln!(f, "{}", self.panel)?;
+            for line in &self.panel.lines {
+                writeln!(f, "{line}")?;
+            }
             writeln!(f, "postflight  {:?}", self.after)?;
             writeln!(
                 f,
@@ -687,13 +767,68 @@ mod linux {
         }
     }
 
-    /// Runs the whole thing on the tablet.
+    /// Presents on the panel and returns what it did — and **nothing else**.
     ///
-    /// Every early return leaves stock untouched; every late one goes through
-    /// [`Takeover`]'s release, which is also what `Drop` and the detached
-    /// watchdog run. There is no path out of this function that leaves the
-    /// display taken.
-    pub fn open_and_hold(canvas: &Canvas, plan: &HoldPlan) -> Result<HoldReport, DeviceError> {
+    /// This is the half that opens the vendor engine, and therefore the half
+    /// that must die before Xochitl is started again. It stops nothing, starts
+    /// nothing, takes no wakelock and holds no opinion about systemd. Call it
+    /// only from a process whose exit you control.
+    pub fn present_only(canvas: &Canvas, plan: &HoldPlan) -> Result<PanelWork, DeviceError> {
+        let probe = DisplayProbe::device();
+        let opened = Instant::now();
+        let mut panel = open_panel()?;
+        let open_took = opened.elapsed();
+        let mut work = present_and_hold(
+            panel.as_mut(),
+            canvas,
+            plan,
+            &probe,
+            is_real_device(),
+            thread::sleep,
+        )?;
+        work.open = open_took;
+        // Closed here rather than left to the end of the function, so the
+        // engine's own shutdown ("waiting for updates to complete...") has
+        // happened before anything reads this result.
+        drop(panel);
+        Ok(work)
+    }
+
+    /// Runs a whole session on the tablet, presenting through `present`.
+    ///
+    /// ## Why presentation is a callback
+    ///
+    /// Because it has to happen in a different process, and this one must not
+    /// know how that process is started.
+    ///
+    /// WWW-23 established the reason on hardware, expensively.
+    /// `EPFramebuffer::checkLockFile()` is not a query — it *acquires* the
+    /// vendor lock — and `libqsgepaper` exposes no way to release it. The
+    /// engine is a singleton that outlives our handle and our
+    /// `QCoreApplication`; only the process exiting frees what it holds. So a
+    /// process that has opened the engine can never successfully start
+    /// Xochitl: the new Xochitl reaches its own `checkLockFile()` about 1.8
+    /// seconds in, finds ours, logs "another instance is already running",
+    /// fails `SWTCON` and aborts — four times, into `StartLimitBurst`, and on
+    /// this image `OnFailure=` reboots the tablet.
+    ///
+    /// WWW-3 survived this by accident: its example exited within that 1.8s
+    /// window. Adding a fifteen-second registry poll after the restart turned
+    /// the race into a certainty and rebooted the device. Timing was never the
+    /// fix; process lifetime is.
+    ///
+    /// `restore_locks` therefore runs only after `present` has *returned*, and
+    /// `present` is required to have reaped the presenting process before it
+    /// does. Everything here — preflight, wakelock, stop, restart, verify — is
+    /// in a process that never opens the engine at all.
+    pub fn open_and_hold<P>(
+        canvas: &Canvas,
+        plan: &HoldPlan,
+        present: P,
+    ) -> Result<HoldReport, DeviceError>
+    where
+        P: FnOnce() -> Result<PanelRecord, DeviceError>,
+    {
         let systemctl = Systemctl;
         let before = systemctl.health();
         if !before.is_healthy() {
@@ -711,12 +846,14 @@ mod linux {
                 "the frame is entirely background; refusing to take the display for an empty panel",
             ));
         }
+        let expected = format!("sha256:{}", digest.to_hex());
 
         let locks = VendorLockState::capture()?;
-        let probe = DisplayProbe::device();
 
         // Wakelock before the display, always: the window between the stop and
         // the wakelock is the window a suspend resumes into a second Xochitl.
+        // It is held *here*, in the surviving process, so a presenter that dies
+        // cannot take it with it.
         let wake = WakeLock::acquire(WAKELOCK_TAG)?;
         let stock = Stock::new(Systemctl, StartBudget::shared());
         let session = match Takeover::acquire(
@@ -731,39 +868,28 @@ mod linux {
             Err((error, _wake)) => return Err(error),
         };
 
-        // The panel is opened, used and dropped inside this block, so it is
-        // always closed before the release runs — including when the present
-        // fails and `work` is an error.
-        let work = {
-            let opened = Instant::now();
-            match open_panel() {
-                Err(error) => Err(error),
-                Ok(mut panel) => {
-                    let open_took = opened.elapsed();
-                    present_and_hold(
-                        panel.as_mut(),
-                        canvas,
-                        plan,
-                        &probe,
-                        is_real_device(),
-                        thread::sleep,
-                    )
-                    .map(|mut work| {
-                        work.open = open_took;
-                        work
-                    })
-                }
-            }
-        };
+        let record = present();
 
-        // Release regardless of how the panel went. Reported second, because a
-        // failed restore outranks a failed present.
+        // Release regardless of how the presentation went, and only now: the
+        // presenter has returned, which is this function's guarantee that the
+        // process holding the engine is gone.
         let released = Takeover::release(session, SystemTime::now());
-        let work = match (work, released) {
+        let record = match (record, released) {
             (_, Err(error)) => return Err(error),
             (Err(error), Ok(())) => return Err(error),
-            (Ok(work), Ok(())) => work,
+            (Ok(record), Ok(())) => record,
         };
+
+        // The two processes rendered the frame independently. Agreeing is not
+        // decoration: it is the check that the thing put on the panel is the
+        // thing this process refused to take the display for if it were blank.
+        if record.digest != expected {
+            return Err(DeviceError::unexpected(format!(
+                "the presenter sent {} but this process rendered {expected}; \
+                 the two halves do not agree on what was shown",
+                record.digest
+            )));
+        }
 
         let registry = wait_for_registry(&systemctl);
         let after = systemctl.health();
@@ -771,7 +897,7 @@ mod linux {
         Ok(HoldReport {
             before,
             after,
-            panel: work,
+            panel: record,
             registry,
             regressions,
         })
@@ -900,6 +1026,50 @@ mod tests {
             work.claim(),
             "not presented: the frame went to a memory panel, not to the glass"
         );
+    }
+
+    #[test]
+    fn a_panel_record_survives_the_process_boundary_it_has_to_cross() {
+        let mut panel = MemoryPanel::new(SCREEN);
+        let plan = HoldPlan {
+            hold: Duration::ZERO,
+            ..HoldPlan::first_light()
+        };
+        let work = present_and_hold(
+            &mut panel,
+            &drawn(),
+            &plan,
+            &DisplayProbe::rooted(std::path::Path::new("/nonexistent")),
+            false,
+            |_| {},
+        )
+        .expect("presents");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("record");
+        let written = super::PanelRecord::of(&work);
+        written.write(&path).expect("writes");
+        let read = super::PanelRecord::read(&path).expect("reads");
+
+        assert_eq!(read, written);
+        assert_eq!(read.digest, format!("sha256:{}", work.digest.to_hex()));
+        assert!(!read.real_panel);
+        // The report comes back verbatim, including the claim — the parent
+        // reprints it rather than restating it, so it cannot drift.
+        assert!(read.lines.iter().any(|line| line.contains(work.claim())));
+    }
+
+    #[test]
+    fn a_presenter_that_wrote_nothing_is_an_error_rather_than_an_empty_report() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("record");
+        // Killed before it finished: the file exists but names no digest.
+        std::fs::write(&path, "real_panel=true\nline=opened the panel\n").expect("writes");
+        let error = super::PanelRecord::read(&path).expect_err("refuses");
+        assert!(error.to_string().contains("did not finish"), "{error}");
+
+        let missing = dir.path().join("never-written");
+        super::PanelRecord::read(&missing).expect_err("refuses a record that is not there");
     }
 
     #[test]

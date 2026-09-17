@@ -64,7 +64,8 @@ pub mod vendor;
 
 pub use error::{DeviceError, VendorStatus};
 pub use hold::{
-    DEFAULT_HOLD, DisplayProbe, DisplaySample, FrameDigest, HoldPlan, PanelWork, present_and_hold,
+    DEFAULT_HOLD, DisplayProbe, DisplaySample, FrameDigest, HoldPlan, PanelRecord, PanelWork,
+    present_and_hold,
 };
 pub use input::{
     ContactIds, InputNode, InputRole, PenDecoder, PointerTransform, RawEvent, TouchDecoder,
@@ -76,7 +77,7 @@ pub use takeover::{Takeover, WAKELOCK_TAG, Watchdog};
 pub use waveform::{ContentType, GhostControl, PixelRect, Refresh, Waveform};
 
 #[cfg(target_os = "linux")]
-pub use hold::{HoldReport, RegistryCheck, open_and_hold};
+pub use hold::{HoldReport, RegistryCheck, open_and_hold, present_only};
 
 #[cfg(feature = "vendor-engine")]
 pub use vendor::VendorPanel;
