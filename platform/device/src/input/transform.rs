@@ -8,34 +8,34 @@
 //! 11180 / 2064 = 5.4166…       15340 / 2832 = 5.4166…       (both 65/12)
 //! ```
 //!
-//! so one calibration answers both. The scales below are the ones WWW-3 was
-//! handed as settled:
+//! so one transform answers both. These scales are a hardware constant, not a
+//! per-device calibration (ADR-0008):
 //!
 //! ```text
 //! touch:  x * 1620 / 2064      y * 2160 / 2832
 //! pen:    x * 1620 / 11180     y * 2160 / 15340
 //! ```
 //!
-//! ## The offset, and why it is a field rather than a zero
+//! No axis swap and no inversion on the stock firmware path. Corroborated by
+//! rmweb's input research and KOReader's verified device table, which give
+//! these ratios independently of the 65/12 derivation above.
 //!
-//! Neither digitizer space matches the panel's aspect ratio — 0.729 against
-//! 0.750 — so the active sensing area is taller than the glass and a pure
-//! scale cannot be exactly right everywhere. The scales above are what this
-//! stage was told to implement, and they are the defaults. The offset exists,
-//! zeroed, so that the measured correction WWW-21 produces is a number to set
-//! rather than a type to redesign.
+//! ## The offset is not expected to be needed
 //!
-//! WWW-20's second calibration attempt narrows how large that correction can
-//! be: real touches reached x=33 and x=2003 against an axis maximum of 2064,
-//! and y=0 and y=2726 against 2832. So the reported range is physically
-//! reachable and there is no large dead margin between digitizer and glass —
-//! which is why a zeroed offset is a reasonable default rather than a
-//! placeholder. It is still not a measured transform: nine contacts whose
-//! intended targets are unknown do not determine one.
+//! The digitizer aspect (0.729) differs from the panel's (0.750), but that is
+//! absorbed by the two axes carrying *different* scale factors — which is
+//! exactly what the formulas express. An earlier reading of this crate's
+//! history claimed the sensing area is taller than the glass and therefore
+//! needs a measured offset; that claim is withdrawn.
 //!
-//! [`PointerTransform::mirror_y`] is likewise present and off: the single
-//! orientation check is deferred to WWW-21, and a flag defaulted to the
-//! unmirrored reading is the honest way to carry an unanswered question.
+//! [`PointerTransform::with_offset`] therefore has no known caller and is a
+//! candidate for removal — §7 forbids speculative scaffolding. It is left in
+//! place only so that removing it is WWW-3's call rather than an edit landed
+//! underneath it mid-stage.
+//!
+//! [`PointerTransform::mirror_y`] stays, off by default, for a real open
+//! question: some firmware reportedly inverts Y on a mainline-kernel input
+//! path. One tap on a top-left mark rules it out, deferred to WWW-21.
 
 use paper_sdk::{Point, SCREEN, Size};
 
@@ -74,8 +74,11 @@ impl PointerTransform {
         }
     }
 
-    /// The same transform with a measured offset in panel pixels, applied
-    /// after scaling.
+    /// The same transform with an offset in panel pixels, applied after
+    /// scaling.
+    ///
+    /// No known caller: ADR-0008 establishes the transform is a pure per-axis
+    /// scale. Retained pending WWW-3's decision to remove it.
     pub const fn with_offset(mut self, offset: Point) -> Self {
         self.offset = offset;
         self
@@ -83,8 +86,9 @@ impl PointerTransform {
 
     /// The same transform with the vertical axis flipped.
     ///
-    /// Off by default and deliberately not exercised: nothing has checked the
-    /// tablet's orientation against rendered content yet (WWW-21).
+    /// Off by default: the stock firmware path has no inversion, but some
+    /// firmware reportedly inverts Y on a mainline-kernel input path. One tap
+    /// on a top-left mark settles it (WWW-21).
     pub const fn mirror_y(mut self, mirrored: bool) -> Self {
         self.mirror_y = mirrored;
         self
@@ -102,10 +106,10 @@ impl PointerTransform {
 
     /// Maps a raw report to panel coordinates.
     ///
-    /// The result may fall outside the panel, and that is not an error: the
-    /// sensing area is taller than the glass, so a touch on the bezel is a
-    /// real report at a real coordinate that is not on screen. Deciding what
-    /// to do about it is [`Self::map_on_panel`]'s, or the caller's.
+    /// The result may fall outside the panel, and that is not an error: a
+    /// report can legitimately land on the bezel, and the digitizer reports it
+    /// at a real coordinate that is not on screen. Deciding what to do about
+    /// it is [`Self::map_on_panel`]'s, or the caller's.
     pub fn map(self, raw_x: i32, raw_y: i32) -> Point {
         if self.extent.is_empty() {
             return Point::new(0.0, 0.0);

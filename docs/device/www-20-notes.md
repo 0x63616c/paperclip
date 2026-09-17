@@ -80,16 +80,18 @@ Pen (`event2`) is 11180 x 15340; touch (`event3`) is 2064 x 2832.
 ```
 
 The two digitizer spaces are therefore the *same* physical space at a fixed
-65/12 scale — one calibration against the panel yields both transforms. Neither
-matches the panel's 1620 x 2160 aspect (0.729 vs 0.750), so the digitizer's
-active area is taller than the visible panel and the mapping needs a measured
-offset, not just a scale.
+65/12 scale — one transform yields both. **Superseded by ADR-0008:** the aspect
+mismatch (0.729 vs 0.750) is absorbed by the two axes carrying different scale
+factors, so no measured offset is needed and no calibration session was ever
+required. The 65/12 derivation here was made before the search and corroborates
+the published constants.
 
 ## Still open
 
 - Whether the pixels written under any candidate packing are legible on the
   panel. Requires a person looking at the tablet.
-- The panel-to-digitizer transform, which requires taps on rendered fiducials.
+- ~~The panel-to-digitizer transform.~~ Closed by prior art (ADR-0008); no
+  fiducials required.
 - What happens to a custom display session across an actual suspend. Could not
   be forced: `/sys/power/state` is `EBUSY` under autosleep and the tablet was on
   charge, so no suspend occurred during the 26s window the session was held.
