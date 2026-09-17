@@ -12,14 +12,26 @@
 //! at its final link with several hundred Qt symbols. So `paperctl` repeats it
 //! here, under the same feature.
 //!
+//! The RPATH is here for the same reason. `libqsgepaper.so` sits in Qt's
+//! scenegraph *plugin* directory, which is not on the device's loader path;
+//! without it the binary dies at exec and `paperctl open` stops being the one
+//! command §4 asks for.
+//!
 //! This is the whole of `paperctl`'s knowledge of the vendor engine, and it is
-//! deliberately a link flag rather than anything it can call: §8 keeps Qt types,
+//! deliberately link flags rather than anything it can call: §8 keeps Qt types,
 //! device paths and systemd behind `paper-device`, and nothing above that crate
 //! may import them. A build script emitting a flag imports nothing.
+
+/// Kept in step with `platform/device/build.rs`, which owns the explanation.
+#[cfg(feature = "vendor-engine")]
+const VENDOR_PLUGIN_DIR: &str = "/usr/lib/plugins/scenegraph";
 
 fn main() {
     println!("cargo::rerun-if-env-changed=PAPERCLIP_VENDOR_LIB_DIR");
 
     #[cfg(feature = "vendor-engine")]
-    println!("cargo::rustc-link-arg=-Wl,--allow-shlib-undefined");
+    {
+        println!("cargo::rustc-link-arg=-Wl,--allow-shlib-undefined");
+        println!("cargo::rustc-link-arg=-Wl,-rpath,{VENDOR_PLUGIN_DIR}");
+    }
 }

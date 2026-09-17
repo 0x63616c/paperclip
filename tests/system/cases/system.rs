@@ -118,7 +118,7 @@ fn a_hold_presents_the_shelf_once_and_always_clears_the_panel() {
     assert_eq!(slept, plan.hold, "the hold was cut short");
     assert_eq!(
         work.claim(),
-        "not presented: this build has no vendor engine, the frame went to memory",
+        "not presented: the frame went to a memory panel, not to the glass",
         "a memory run must not claim it reached the panel"
     );
 }

@@ -316,10 +316,19 @@ impl DisplayProbe {
     /// EPD rails as the regulator class reports them.
     ///
     /// The vendor engine logs "setting rails to 6.0, 12.0, 24.0, -6.0, -12.0,
-    /// -24.0" (WWW-3), so the rails exist; whether *this* kernel exports them
-    /// under `/sys/class/regulator` is not something a Mac can answer. An empty
-    /// list means the class held nothing matching, and is reported as such
-    /// rather than as rails being down.
+    /// -24.0" (WWW-3), and this is where those live: `VPOS1..3`, `VNEG1..3`,
+    /// `VGH1/2`, `VGL`, `VCOM`, `VPDD`, all consumed by `cumulus-panel`.
+    ///
+    /// Picked by **consumer**, not by name. Each regulator directory holds a
+    /// `consumer:platform:cumulus-panel` symlink, which is the kernel's own
+    /// answer to "is this rail the panel's"; a name-matching guess would both
+    /// miss `VPDD` and, on some other tablet, catch something that is not a
+    /// rail. Observed on image `20260827113527`.
+    ///
+    /// Reported verbatim, including the gaps: most of these rails export an
+    /// empty `state` because the driver implements no `is_enabled`, so the
+    /// value falls back to `status` and then to `?`. An empty field is not a
+    /// rail that is down.
     fn rails(&self) -> Vec<String> {
         let Ok(entries) = fs::read_dir(&self.regulators) else {
             return Vec::new();
@@ -329,17 +338,20 @@ impl DisplayProbe {
             .filter_map(|entry| {
                 let dir = entry.path();
                 let name = trimmed(&dir.join("name"))?;
-                let lower = name.to_lowercase();
-                if ![
-                    "epd", "eink", "e-ink", "vcom", "vgh", "vgl", "vpos", "vneg", "disp",
-                ]
-                .iter()
-                .any(|needle| lower.contains(needle))
-                {
+                if !feeds_the_panel(&dir) {
                     return None;
                 }
-                let state = trimmed(&dir.join("state")).unwrap_or_else(|| "?".to_owned());
-                Some(format!("{name}={state}"))
+                let state = trimmed(&dir.join("state"))
+                    .or_else(|| trimmed(&dir.join("status")))
+                    .unwrap_or_else(|| "?".to_owned());
+                match trimmed(&dir.join("microvolts")).and_then(|text| text.parse::<i64>().ok()) {
+                    Some(microvolts) => Some(format!(
+                        "{name}={state}@{}.{:03}V",
+                        microvolts / 1_000_000,
+                        (microvolts.abs() % 1_000_000) / 1_000
+                    )),
+                    None => Some(format!("{name}={state}")),
+                }
             })
             .collect();
         rails.sort();
@@ -399,6 +411,28 @@ fn find_connector(drm: &Path) -> Option<PathBuf> {
         .cloned()
 }
 
+/// Whether a regulator directory names the e-paper panel among its consumers.
+///
+/// The kernel writes one `consumer:<device>` symlink per user of the rail, so
+/// this is the device's own answer rather than a guess from the rail's name.
+fn feeds_the_panel(regulator: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(regulator) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .map(str::to_lowercase)
+            .is_some_and(|name| {
+                name.starts_with("consumer:")
+                    && ["panel", "cumulus", "epd", "eink"]
+                        .iter()
+                        .any(|needle| name.contains(needle))
+            })
+    })
+}
+
 fn trimmed(path: &Path) -> Option<String> {
     fs::read_to_string(path)
         .ok()
@@ -438,7 +472,7 @@ impl PanelWork {
         if self.real_panel {
             "presented without error, appearance unverified"
         } else {
-            "not presented: this build has no vendor engine, the frame went to memory"
+            "not presented: the frame went to a memory panel, not to the glass"
         }
     }
 }
@@ -864,7 +898,7 @@ mod tests {
         assert!(!work.real_panel);
         assert_eq!(
             work.claim(),
-            "not presented: this build has no vendor engine, the frame went to memory"
+            "not presented: the frame went to a memory panel, not to the glass"
         );
     }
 
@@ -905,6 +939,33 @@ mod tests {
         assert_eq!(sample.status.as_deref(), Some("connected"));
         assert_eq!(sample.dpms.as_deref(), Some("On"));
         assert_eq!(sample.wake_locks.as_deref(), Some("paperclip-takeover"));
+    }
+
+    #[test]
+    fn rails_are_picked_by_consumer_and_reported_with_their_gaps() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let class = root.path().join("sys/class/regulator");
+        // The panel's, with no `state` — which is how most of them really are
+        // on image 20260827113527.
+        let vpos = class.join("regulator.7");
+        std::fs::create_dir_all(&vpos).expect("mkdir");
+        std::fs::write(vpos.join("name"), "VPOS1\n").expect("write");
+        std::fs::write(vpos.join("state"), "\n").expect("write");
+        std::fs::write(vpos.join("status"), "unknown\n").expect("write");
+        std::fs::write(vpos.join("microvolts"), "6000000\n").expect("write");
+        std::fs::write(vpos.join("consumer:platform:cumulus-panel"), "").expect("write");
+        // Not the panel's, and named nothing like a rail-matching guess would
+        // reject — this is why the filter reads consumers instead.
+        let touch = class.join("regulator.9");
+        std::fs::create_dir_all(&touch).expect("mkdir");
+        std::fs::write(touch.join("name"), "VDD_TOUCH_3V3\n").expect("write");
+        std::fs::write(touch.join("state"), "enabled\n").expect("write");
+        std::fs::write(touch.join("consumer:platform:elan-touch"), "").expect("write");
+
+        let rails = DisplayProbe::rooted(root.path())
+            .sample(Duration::ZERO)
+            .rails;
+        assert_eq!(rails, vec!["VPOS1=unknown@6.000V".to_owned()]);
     }
 
     #[test]

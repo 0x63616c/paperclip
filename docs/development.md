@@ -159,6 +159,7 @@ gives the display back and re-reads stock's health.
 ```sh
 # On the Mac: build it for the tablet, with the vendor engine linked.
 tools/cross/build-device.sh --bin paperctl
+ssh remarkable-wifi 'mkdir -p /home/root/paperclip/bin'
 scp target/device-container/release/paperctl remarkable-wifi:/home/root/paperclip/bin/
 
 # On the tablet.
@@ -188,6 +189,13 @@ right — nothing in the process can see the glass, and `open` says
 (§17). The one thing it does check about the pixels is that they are not blank:
 a frame that rasterised to bare background refuses the takeover, because an
 empty panel and a perfect one produce identical logs from this side.
+
+It also refuses when `xochitl.service` is within two restarts of
+`StartLimitBurst=4`, before it takes the wakelock or stops anything — so a
+refused run costs the tablet nothing. `NRestarts` is cumulative and does not
+decay with the rate-limiter window; `systemctl reset-failed xochitl.service` or
+a reboot clears it, and `paperctl` deliberately does neither on its own. See
+`docs/device/www-23-first-light.md`.
 
 ## The failure harness
 

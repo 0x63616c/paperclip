@@ -19,6 +19,13 @@
 //! tablet into a directory outside this repository and pointed at; it is never
 //! committed. See `native/README.md`.
 
+/// Where the vendor scenegraph plugin lives on the tablet.
+///
+/// Repeated in `tools/paperctl/build.rs`, because `cargo::rustc-link-arg` only
+/// reaches the targets of the package that emits it.
+#[cfg(feature = "vendor-engine")]
+const VENDOR_PLUGIN_DIR: &str = "/usr/lib/plugins/scenegraph";
+
 fn main() {
     println!("cargo::rerun-if-changed=native/paperclip_ep.cpp");
     println!("cargo::rerun-if-changed=native/paperclip_ep.h");
@@ -93,6 +100,13 @@ fn build_bridge() {
     // resolves them on the device, and pulling them in explicitly would add
     // DT_NEEDED entries for libraries Paperclip does not use.
     println!("cargo::rustc-link-arg=-Wl,--allow-shlib-undefined");
+    // `libqsgepaper.so` lives in Qt's scenegraph plugin directory, which is not
+    // on the device's loader path: Xochitl finds it as a *plugin*, by asking
+    // Qt, and a plain ELF that merely links it does not. Without an RPATH the
+    // binary dies at exec with "cannot open shared object file" and the caller
+    // has to remember an LD_LIBRARY_PATH — which is not the single command §4
+    // asks for. Confirmed on the device, image 20260827113527.
+    println!("cargo::rustc-link-arg=-Wl,-rpath,{VENDOR_PLUGIN_DIR}");
     println!("cargo::rustc-link-lib=dylib=qsgepaper");
     println!("cargo::rustc-link-lib=dylib=Qt6Core");
     println!("cargo::rustc-link-lib=dylib=Qt6Gui");

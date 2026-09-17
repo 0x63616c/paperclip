@@ -230,17 +230,31 @@ impl StockHealth {
     /// Refuses within two of the limit. The start budget counts *our* starts;
     /// this counts systemd's, and the incident that motivated it consumed two
     /// restarts we never asked for.
+    ///
+    /// **`NRestarts` does not decay.** An earlier version of this message told
+    /// the reader to wait for the window to clear; WWW-23 found the counter
+    /// still reading 2 some eighty minutes after the crashes that set it, with
+    /// the rate limiter's own 600s window long since empty. It is a cumulative
+    /// count since the unit was last reset, so waiting never clears it and the
+    /// advice sent a reader somewhere that does not exist.
+    ///
+    /// What does clear it is `systemctl reset-failed xochitl.service`, or a
+    /// reboot. Neither is done here, and deliberately: this code cannot tell a
+    /// stale counter from a tablet that is genuinely two crashes from an
+    /// emergency shell, and resetting the number it is guarding on would make
+    /// the guard unable to refuse anything. That is a person's call.
     pub fn allows_takeover(&self) -> Result<(), DeviceError> {
         let Some(remaining) = self.restarts_remaining() else {
             return Ok(());
         };
         if remaining <= 2 {
             return Err(DeviceError::unexpected(format!(
-                "xochitl has {} of {START_LIMIT_BURST} restarts left in this window. \
+                "xochitl has {remaining} of {START_LIMIT_BURST} restarts left. \
                  Refusing to take the display: two more failures reach OnFailure and a \
-                 serial-console emergency shell. Wait {}s for the window to clear, or reboot.",
-                remaining,
-                START_LIMIT_WINDOW.as_secs()
+                 serial-console emergency shell. NRestarts is cumulative and does not \
+                 decay — waiting will not clear it. `systemctl reset-failed \
+                 {STOCK_UNIT}` or a reboot does, and whether this counter is stale or \
+                 real is a judgement this code cannot make."
             )));
         }
         Ok(())
