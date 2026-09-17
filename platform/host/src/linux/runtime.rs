@@ -82,7 +82,9 @@ impl RuntimeConfig {
             stock_unit: crate::units::XOCHITL_UNIT.to_owned(),
             start_budget: PathBuf::from("/tmp/paperclip-xochitl-starts"),
             wakelock: WakeLockPaths::default(),
-            wakelock_name: "paperclip".to_owned(),
+            // The tag a takeover actually acquires under (WWW-35) — see
+            // `RecoveryConfig::default`'s comment on the same field.
+            wakelock_name: paper_device::takeover::WAKELOCK_TAG.to_owned(),
             locks: LockPaths::default(),
             budget: Budget::default(),
             policy: FailurePolicy::default(),

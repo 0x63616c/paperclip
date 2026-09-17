@@ -83,9 +83,10 @@ pub(crate) struct OpenArgs {
 pub(crate) enum WaveformArg {
     /// Mono mode 0 — the fast table, for live ink.
     MonoInk,
-    /// Mono mode 3 — the quality table. What a static screen wants.
+    /// Mode 3 — the vendor calls it `Ui`, not a mono-specific table (WWW-35).
+    /// What a static screen wants.
     MonoQuality,
-    /// Colour mode 4.
+    /// Mode 4 — the vendor calls it `Content`.
     Colour,
 }
 
@@ -104,8 +105,8 @@ impl WaveformArg {
     fn waveform(self) -> Waveform {
         match self {
             WaveformArg::MonoInk => Waveform::INK,
-            WaveformArg::MonoQuality => Waveform::MONO_QUALITY,
-            WaveformArg::Colour => Waveform::COLOR,
+            WaveformArg::MonoQuality => Waveform::UI,
+            WaveformArg::Colour => Waveform::CONTENT,
         }
     }
 }

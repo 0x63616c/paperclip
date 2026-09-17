@@ -7,8 +7,8 @@
 //! sources (USB, mDNS, cache) are probed for reachability in order, and the
 //! first one that answers wins.
 
-use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::time::{Duration, Instant};
 
 /// The static address the tablet's USB ethernet gadget answers on.
 pub(crate) const USB_HOST: &str = "10.11.99.1";
@@ -23,10 +23,21 @@ const MDNS_SERVICE: &str = "_paperctl._tcp.local.";
 /// transport that cannot reach the SSH port cannot do anything else either.
 const SSH_PORT: u16 = 22;
 
-/// How long one reachability probe gets. Six probes at this bound is still
-/// comfortably under the 15s "fails fast" budget in the issue's acceptance
-/// criteria.
-pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long one reachability probe may spend in total, retries included —
+/// not a single connection attempt. WWW-35, on hardware: a 2s bound (this
+/// module's original value, chosen for a 15s "fails fast" budget) reported
+/// a merely *sleeping* tablet as gone. The shipped IW612 Wi-Fi driver wakes
+/// on an inbound TCP SYN and never on ICMP, but coming out of deep sleep and
+/// actually accepting the connection takes real time that a single short
+/// `connect_timeout` never gave it. [`SystemProber`] spends this budget as
+/// several short attempts with backoff rather than one long call — a SYN
+/// sent while still asleep gets no answer at all, so only a *later* attempt
+/// has any chance of landing after the wake.
+pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long any single connection attempt inside [`PROBE_TIMEOUT`]'s budget
+/// gets. Short and repeated, not long and singular — see [`PROBE_TIMEOUT`].
+const CONNECT_ATTEMPT: Duration = Duration::from_secs(2);
 
 /// How long the mDNS browse listens before giving up.
 pub(crate) const MDNS_TIMEOUT: Duration = Duration::from_secs(3);
@@ -74,20 +85,53 @@ pub(crate) trait Prober {
 }
 
 /// The real prober: a TCP connect to port 22, and an actual mDNS browse.
+///
+/// Never ICMP. WWW-35 confirmed the shipped IW612 driver's wake filter
+/// answers inbound TCP and ignores ICMP entirely, so a `ping`-based probe
+/// would never wake a sleeping tablet and would always read as unreachable.
 pub(crate) struct SystemProber;
 
 impl Prober for SystemProber {
-    fn reachable(&self, host: &str, timeout: Duration) -> bool {
+    fn reachable(&self, host: &str, budget: Duration) -> bool {
         let Ok(addrs) = (host, SSH_PORT).to_socket_addrs() else {
             return false;
         };
-        addrs
-            .into_iter()
-            .any(|addr| TcpStream::connect_timeout(&addr, timeout).is_ok())
+        probe_with_backoff(&addrs.collect::<Vec<_>>(), budget)
     }
 
     fn mdns_candidates(&self, timeout: Duration) -> Vec<String> {
         mdns_browse(timeout)
+    }
+}
+
+/// Retries a TCP connect to any of `addrs` with backoff across `budget`,
+/// rather than one long `connect_timeout` — see [`PROBE_TIMEOUT`] for why.
+/// Factored out of [`SystemProber::reachable`] so the retry shape is
+/// testable against a local listener without needing port 22.
+fn probe_with_backoff(addrs: &[SocketAddr], budget: Duration) -> bool {
+    if addrs.is_empty() {
+        return false;
+    }
+    let deadline = Instant::now() + budget;
+    let mut backoff = Duration::from_millis(500);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let attempt = CONNECT_ATTEMPT.min(remaining);
+        if addrs
+            .iter()
+            .any(|addr| TcpStream::connect_timeout(addr, attempt).is_ok())
+        {
+            return true;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        std::thread::sleep(backoff.min(remaining));
+        backoff = (backoff * 2).min(Duration::from_secs(5));
     }
 }
 
@@ -496,5 +540,47 @@ mod tests {
             DeviceSource::Pinned,
             "higher precedence wins the label"
         );
+    }
+
+    #[test]
+    fn backoff_probing_finds_a_real_listener_without_waiting_for_a_retry() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds a local port");
+        let addr = listener.local_addr().expect("has an address");
+        std::thread::spawn(move || {
+            // Accept once so `connect_timeout` completes the handshake rather
+            // than landing in a backlog nobody drains.
+            let _ = listener.accept();
+        });
+
+        let started = Instant::now();
+        assert!(
+            probe_with_backoff(&[addr], Duration::from_secs(5)),
+            "a real listener must be found"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "a live listener must not wait for a backoff retry"
+        );
+    }
+
+    #[test]
+    fn backoff_probing_gives_up_at_the_budget_rather_than_hanging_past_it() {
+        // A closed local port refuses every attempt, so the loop must still
+        // return by the deadline rather than retrying forever.
+        let closed: SocketAddr = "127.0.0.1:1".parse().expect("a valid address");
+        let budget = Duration::from_millis(900);
+
+        let started = Instant::now();
+        assert!(!probe_with_backoff(&[closed], budget));
+        assert!(
+            started.elapsed() < budget * 3,
+            "must not overrun its budget by more than a couple of backoff steps: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn backoff_probing_reports_unreachable_with_no_addresses_rather_than_looping() {
+        assert!(!probe_with_backoff(&[], Duration::from_secs(1)));
     }
 }

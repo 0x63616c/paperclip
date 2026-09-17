@@ -58,6 +58,24 @@ pub(crate) struct RunArgs {
     /// Internal: where the presenting half leaves its report.
     #[arg(long, hide = true, value_name = "PATH")]
     report_to: Option<PathBuf>,
+    #[command(flatten)]
+    device: crate::transport::DeviceArgs,
+}
+
+impl RunArgs {
+    /// The argv a remote `paperctl run` on the tablet should be given —
+    /// everything this half was, except `--present-only` and `--report-to`,
+    /// which only mean something to the half that opens the vendor engine.
+    #[cfg(not(target_os = "linux"))]
+    fn remote_argv(&self) -> Vec<String> {
+        vec![
+            "run".to_owned(),
+            "--app".to_owned(),
+            self.app.slug().to_owned(),
+            "--session-budget".to_owned(),
+            self.session_budget.to_string(),
+        ]
+    }
 }
 
 /// Which app `paperctl run` can start on.
@@ -94,11 +112,26 @@ pub(crate) fn run(args: &RunArgs) -> Result<(), CommandError> {
     present(args)
 }
 
+/// On a Mac, this is a forward to the tablet's own `paperctl run` over SSH
+/// (WWW-33), same as `open`, `stock`, `setup`, `install`, `upgrade` and
+/// `remove` already do — WWW-35 found `run` was the one device-touching
+/// subcommand still missing this and its `--device` flag, so a session
+/// could only be started by SSHing onto the tablet by hand.
+///
+/// Run detached and polled, not blocking: WWW-23 found a live SSH session
+/// does not reliably survive a long-lived takeover, and an interactive
+/// session can run for the whole of `--session-budget` (default 30
+/// minutes), far longer than any one SSH channel should be trusted for.
 #[cfg(not(target_os = "linux"))]
-fn present(_args: &RunArgs) -> Result<(), CommandError> {
-    Err(CommandError::NotOnDevice {
-        what: "an interactive session on the panel",
-    })
+fn present(args: &RunArgs) -> Result<(), CommandError> {
+    let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
+    println!("device   {host} ({source})");
+    crate::transport::remote::run_open(
+        &host,
+        &args.remote_argv(),
+        std::time::Duration::from_secs(args.session_budget),
+    )?;
+    Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -312,7 +345,7 @@ mod interactive {
                 panel.as_mut(),
                 &canvas,
                 PixelRect::whole(panel_size),
-                Waveform::MONO_QUALITY,
+                Waveform::UI,
                 refresh,
             )?;
             frames_presented += 1;

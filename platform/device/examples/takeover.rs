@@ -146,8 +146,8 @@ fn drive_panel() -> Result<String, Box<dyn std::error::Error>> {
     // Full-panel presents, one per waveform, timed. These are the numbers §9
     // asks for and nothing in this repository could produce until now.
     for (name, waveform, refresh) in [
-        ("mono-quality full", Waveform::MONO_QUALITY, Refresh::Full),
-        ("colour full", Waveform::COLOR, Refresh::Full),
+        ("mono-quality full", Waveform::UI, Refresh::Full),
+        ("colour full", Waveform::CONTENT, Refresh::Full),
         ("mono-ink partial", Waveform::INK, Refresh::Partial),
     ] {
         let started = Instant::now();

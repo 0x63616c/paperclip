@@ -114,7 +114,7 @@ impl SystemSsh {
             .arg("BatchMode=yes")
             .arg("-o")
             .arg(format!("ConnectTimeout={}", CONNECT_TIMEOUT.as_secs()))
-            .arg(host);
+            .arg(ssh_target(host));
         command
     }
 
@@ -123,6 +123,28 @@ impl SystemSsh {
             command: "ssh",
             source,
         }
+    }
+}
+
+/// The target ssh actually gets, from whatever `resolve_device` returned.
+///
+/// Discovery (USB, mDNS, the cache) returns a bare host or IP with no notion
+/// of who to log in as. With `BatchMode=yes` set, an unqualified target that
+/// matches no `Host` block in `~/.ssh/config` falls back to the *local*
+/// username and default keys — `calum@10.11.99.1: Permission denied
+/// (publickey,password)` — while `paperctl devices` reports the same host
+/// reachable, because the TCP probe behind that report never asks ssh to
+/// authenticate at all (WWW-35).
+///
+/// Every documented way onto this tablet logs in as `root`, so a bare host
+/// gets `root@` prepended. An already-qualified target — `--device`,
+/// `PAPERCLIP_DEVICE`, a pin, or a `~/.ssh/config` alias someone wrote
+/// `user@` into — is left exactly as given.
+fn ssh_target(host: &str) -> String {
+    if host.contains('@') {
+        host.to_owned()
+    } else {
+        format!("root@{host}")
     }
 }
 
@@ -392,5 +414,23 @@ mod tests {
     #[test]
     fn shell_quoting_survives_a_single_quote() {
         assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn a_bare_discovered_host_gets_the_root_user_ssh_actually_needs() {
+        // WWW-35: `10.11.99.1` (USB), an mDNS hostname, and the cache all
+        // come back bare. Without this, `BatchMode=yes` sends the *local*
+        // username and default keys, which authenticates against nothing on
+        // the tablet.
+        assert_eq!(ssh_target("10.11.99.1"), "root@10.11.99.1");
+        assert_eq!(ssh_target("tablet.local"), "root@tablet.local");
+    }
+
+    #[test]
+    fn an_already_qualified_target_is_left_exactly_as_given() {
+        // `--device`, `PAPERCLIP_DEVICE`, a pin, or a `~/.ssh/config` alias
+        // someone already wrote a user into: not this function's business.
+        assert_eq!(ssh_target("calum@tablet.local"), "calum@tablet.local");
+        assert_eq!(ssh_target("root@10.11.99.1"), "root@10.11.99.1");
     }
 }

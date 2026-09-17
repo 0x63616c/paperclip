@@ -353,7 +353,7 @@ mod tests {
             &mut panel,
             &canvas,
             PixelRect::whole(size),
-            Waveform::COLOR,
+            Waveform::CONTENT,
             Refresh::Partial,
         )
         .expect("presents");
@@ -426,7 +426,7 @@ mod tests {
             &mut panel,
             &canvas,
             PixelRect::whole(size),
-            Waveform::MONO_QUALITY,
+            Waveform::UI,
             Refresh::Full,
         )
         .expect("presents");

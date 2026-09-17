@@ -78,8 +78,9 @@ impl Default for HoldPlan {
 impl HoldPlan {
     /// The plan for putting a static screen in front of a person.
     ///
-    /// [`Waveform::MONO_QUALITY`] because the shelf is greyscale line art and
-    /// mode 3 is the quality mono table; [`Refresh::Full`] because this is the
+    /// [`Waveform::UI`] because the shelf is greyscale line art and settled
+    /// UI is exactly what mode 3 is for (WWW-35 corrected the name; it was
+    /// never a mono-specific table); [`Refresh::Full`] because this is the
     /// **first** paint over whatever stock had on the panel, and a partial
     /// update leaves the previous image ghosting under it. Every *subsequent*
     /// present in a session should drop back to [`Refresh::Partial`] — the
@@ -88,7 +89,7 @@ impl HoldPlan {
     pub fn first_light() -> Self {
         Self {
             hold: DEFAULT_HOLD,
-            waveform: Waveform::MONO_QUALITY,
+            waveform: Waveform::UI,
             refresh: Refresh::Full,
             sample_every: DEFAULT_SAMPLE_INTERVAL,
         }
@@ -1266,7 +1267,7 @@ mod tests {
         let swap = panel.swaps()[0];
         assert_eq!(swap.rect, crate::waveform::PixelRect::PANEL);
         assert_eq!(swap.refresh, Refresh::Full);
-        assert_eq!(swap.waveform, crate::waveform::Waveform::MONO_QUALITY);
+        assert_eq!(swap.waveform, crate::waveform::Waveform::UI);
         assert_eq!(panel.clears(), 1);
         // The hold is honoured in full, whatever the sampling schedule is.
         assert_eq!(slept, Duration::from_secs(60));

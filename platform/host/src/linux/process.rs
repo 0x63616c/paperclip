@@ -32,6 +32,11 @@ pub enum TreeSource {
     /// No usable cgroup — walk `/proc` looking for descendants of a pid.
     /// Incomplete by construction, and reported as such.
     Descendants(u32),
+    /// An explicit, already-known set of pids, re-checked for liveness on
+    /// every read. For a holder discovered by [`drm_holders`], which is not
+    /// a process *tree* at all — it may be one bare `paperctl`, unrelated to
+    /// this process by ancestry or cgroup.
+    Explicit(BTreeSet<u32>),
 }
 
 /// A session's process tree.
@@ -61,6 +66,15 @@ impl SessionTree {
         }
     }
 
+    /// An explicit, unrelated set of pids — see [`TreeSource::Explicit`].
+    pub fn of(pids: BTreeSet<u32>) -> Self {
+        Self {
+            source: TreeSource::Explicit(pids),
+            protected: BTreeSet::new(),
+            proc_root: PathBuf::from("/proc"),
+        }
+    }
+
     /// Adds pids that must never be signalled. Stock Xochitl's pid goes here.
     pub fn protecting(mut self, pids: impl IntoIterator<Item = u32>) -> Self {
         self.protected.extend(pids);
@@ -82,6 +96,11 @@ impl SessionTree {
         let mut found = match &self.source {
             TreeSource::Cgroup(path) => cgroup_members(path)?,
             TreeSource::Descendants(pid) => descendants(&self.proc_root, *pid)?,
+            TreeSource::Explicit(pids) => pids
+                .iter()
+                .copied()
+                .filter(|pid| self.proc_root.join(pid.to_string()).exists())
+                .collect(),
         };
         let own = std::process::id();
         found.retain(|pid| *pid > 1 && *pid != own && !self.protected.contains(pid));
@@ -272,4 +291,104 @@ fn parent_of(dir: &Path) -> Option<u32> {
         .trim()
         .parse()
         .ok()
+}
+
+/// Pids with an open file descriptor into `/dev/dri/*`.
+///
+/// DRM master is a file descriptor, not an entry in any registry systemd or
+/// the vendor lock file can see, so the only place it is visible is
+/// `/proc/<pid>/fd`. WWW-35 found `stock` restarting Xochitl into a display
+/// an orphaned `paperctl` still held this way: `systemctl` reported
+/// `active`, the vendor lock file had been handed back, and the panel stayed
+/// white because none of those checks can see a stray file descriptor.
+///
+/// # Errors
+///
+/// Propagates a failure to list `proc_root` itself. A pid or fd directory
+/// that disappears mid-walk is not an error — the usual cause is the process
+/// exiting between the read and the follow-up, which is the outcome wanted.
+pub fn drm_holders(proc_root: &Path) -> std::io::Result<BTreeSet<u32>> {
+    let own = std::process::id();
+    let mut found = BTreeSet::new();
+    for entry in fs::read_dir(proc_root)? {
+        let Ok(entry) = entry else { continue };
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == own {
+            continue;
+        }
+        let Ok(fds) = fs::read_dir(entry.path().join("fd")) else {
+            continue;
+        };
+        let holds_drm = fds.flatten().any(|fd| {
+            fs::read_link(fd.path()).is_ok_and(|target| target.to_string_lossy().contains("/dri/"))
+        });
+        if holds_drm {
+            found.insert(pid);
+        }
+    }
+    Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("paper-process-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("creates a scratch proc root");
+        dir
+    }
+
+    fn fake_pid_with_fds(proc_root: &Path, pid: u32, targets: &[&str]) {
+        let fd_dir = proc_root.join(pid.to_string()).join("fd");
+        fs::create_dir_all(&fd_dir).expect("creates a fake fd dir");
+        for (n, target) in targets.iter().enumerate() {
+            symlink(target, fd_dir.join(n.to_string())).expect("creates a fake fd symlink");
+        }
+    }
+
+    #[test]
+    fn finds_a_pid_with_an_open_dri_fd() {
+        let root = scratch("found");
+        fake_pid_with_fds(&root, 4242, &["/dev/dri/card0", "/dev/null"]);
+        fake_pid_with_fds(&root, 4343, &["/dev/null"]);
+
+        assert_eq!(drm_holders(&root).expect("walks"), BTreeSet::from([4242]));
+    }
+
+    #[test]
+    fn a_pid_with_no_dri_fd_is_not_a_holder() {
+        let root = scratch("clean");
+        fake_pid_with_fds(&root, 5150, &["/dev/null", "/dev/urandom"]);
+
+        assert!(drm_holders(&root).expect("walks").is_empty());
+    }
+
+    #[test]
+    fn a_render_node_counts_the_same_as_the_card() {
+        let root = scratch("render");
+        fake_pid_with_fds(&root, 6161, &["/dev/dri/renderD128"]);
+
+        assert_eq!(drm_holders(&root).expect("walks"), BTreeSet::from([6161]));
+    }
+
+    #[test]
+    fn an_explicit_tree_re_checks_liveness_rather_than_trusting_the_pid_it_was_given() {
+        let root = scratch("explicit");
+        fake_pid_with_fds(&root, 7171, &["/dev/dri/card0"]);
+        // 9999 has no directory in this fake proc root at all — dead, or
+        // never existed — and must not be reported as still present.
+        let tree = SessionTree::of(BTreeSet::from([7171, 9999])).with_proc_root(root);
+
+        assert_eq!(tree.members().expect("reads"), BTreeSet::from([7171]));
+    }
 }

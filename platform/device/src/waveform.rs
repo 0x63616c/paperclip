@@ -5,13 +5,60 @@
 //! of what the vendor engine does that a raw framebuffer cannot, and it is the
 //! single knob with the largest effect on both latency and legibility.
 //!
-//! **Status of the numbers here: proposed, in the spec's sense.** The mode
-//! integers come from WWW-20's reading of the vendor library and from quill's
-//! published interface; nothing in this repository has watched them take
-//! effect on glass. They are named constants in one place precisely so that
-//! the first device session can correct them without touching a call site.
+//! **Status of the mode numbers: measured.** WWW-35's device session
+//! confirmed the vendor's own mode enum against the 3.28 ABI (two
+//! independent reverse-engineering efforts agree) and measured `sync()`
+//! completion for each: `Pen` 372ms, `Mono` 634ms, `Animation` 304ms
+//! (fastest), `Ui` 630ms, `Content` 1086ms (slowest). What WWW-35 corrected
+//! was the *names* this file gave modes 3 and 4 — `MONO_QUALITY` and
+//! `COLOR` — which described what this file used them for rather than what
+//! the vendor calls them, and so read as an implementation detail (a
+//! mono-specific quality table) that the vendor's own naming denies.
+//!
+//! Named constants stay in one place so a future device session can correct
+//! a mode number, or reach for [`EngineMode::Animation`] — measured fastest,
+//! and not yet wired into any [`Waveform`] constant — without touching a
+//! call site.
 
 use paper_sdk::{Rect, SCREEN, Size};
+
+/// The vendor engine's own waveform-mode enum, as `EPScreenMode` — not a
+/// name this repository invented. Established against the 3.28 ABI by two
+/// independent reverse-engineering efforts (WWW-35); see the project's
+/// `remarkable-device-session` skill for the citations.
+///
+/// This is *not* the waveform-file index `swapBuffers_impl` ultimately
+/// selects — `EPScreenMode` is the argument the engine's public API takes,
+/// and the engine picks the underlying waveform-file table internally
+/// (ADR-0007).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i32)]
+pub enum EngineMode {
+    /// Live pen ink. Measured `sync()`: 372ms.
+    Pen = 0,
+    /// Generic monochrome, distinct from [`Self::Ui`]. Measured `sync()`:
+    /// 634ms.
+    Mono = 1,
+    /// The fastest mode measured — 304ms — and not yet used by any
+    /// [`Waveform`] constant.
+    Animation = 2,
+    /// Settled UI. What this file called `MONO_QUALITY` before WWW-35:
+    /// nothing about it is mono-specific, and driving mono content through
+    /// it is this crate's choice, not the vendor's constraint. Measured
+    /// `sync()`: 630ms.
+    Ui = 3,
+    /// Settled colour content. Measured `sync()`: 1086ms, the slowest.
+    Content = 4,
+    /// The engine's sleep/screensaver mode. Not used by this crate.
+    Sleep = 5,
+}
+
+impl EngineMode {
+    /// The `EPScreenMode` integer the C ABI takes.
+    pub const fn mode(self) -> i32 {
+        self as i32
+    }
+}
 
 /// Whether the engine should drive the panel as a monochrome or a colour
 /// surface.
@@ -43,22 +90,34 @@ pub struct Waveform {
 }
 
 impl Waveform {
-    /// Live ink: the fastest monochrome waveform. Mode 0.
+    /// Live ink: the fastest monochrome waveform in current use.
+    /// [`EngineMode::Pen`].
     pub const INK: Self = Self {
         content: ContentType::Mono,
-        mode: 0,
+        mode: EngineMode::Pen.mode(),
     };
 
-    /// Settled monochrome: slower, cleaner, less residue. Mode 3.
-    pub const MONO_QUALITY: Self = Self {
+    /// The vendor's fastest mode of all, measured 304ms — not yet driven by
+    /// any call site. [`EngineMode::Animation`], paired with
+    /// [`ContentType::Mono`] as the closer match until a device session
+    /// exercises it and says otherwise.
+    pub const ANIMATION: Self = Self {
         content: ContentType::Mono,
-        mode: 3,
+        mode: EngineMode::Animation.mode(),
     };
 
-    /// Colour UI. Mode 4 of the 3/4/5 colour set.
-    pub const COLOR: Self = Self {
+    /// Settled UI: slower, cleaner, less residue. [`EngineMode::Ui`] — named
+    /// `MONO_QUALITY` before WWW-35 corrected it; see the module docs.
+    pub const UI: Self = Self {
+        content: ContentType::Mono,
+        mode: EngineMode::Ui.mode(),
+    };
+
+    /// Settled colour content. [`EngineMode::Content`] — named `COLOR`
+    /// before WWW-35 corrected it; see the module docs.
+    pub const CONTENT: Self = Self {
         content: ContentType::Color,
-        mode: 4,
+        mode: EngineMode::Content.mode(),
     };
 
     /// A mode this file does not name, for a device session to try.
@@ -222,7 +281,7 @@ impl PixelRect {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContentType, GhostControl, PixelRect, Refresh, Waveform};
+    use super::{ContentType, EngineMode, GhostControl, PixelRect, Refresh, Waveform};
     use paper_sdk::{Rect, SCREEN, Size};
 
     #[test]
@@ -236,10 +295,21 @@ mod tests {
     fn the_named_waveforms_are_the_ones_the_notes_describe() {
         assert_eq!(Waveform::INK.content(), ContentType::Mono);
         assert_eq!(Waveform::INK.mode(), 0);
-        assert_eq!(Waveform::MONO_QUALITY.mode(), 3);
-        assert_eq!(Waveform::COLOR.content(), ContentType::Color);
-        assert_eq!(Waveform::COLOR.mode(), 4);
+        assert_eq!(Waveform::ANIMATION.mode(), 2);
+        assert_eq!(Waveform::UI.mode(), 3);
+        assert_eq!(Waveform::CONTENT.content(), ContentType::Color);
+        assert_eq!(Waveform::CONTENT.mode(), 4);
         assert_eq!(Waveform::custom(ContentType::Color, 5).mode(), 5);
+    }
+
+    #[test]
+    fn the_engine_mode_integers_match_the_vendor_enum_www_35_confirmed() {
+        assert_eq!(EngineMode::Pen.mode(), 0);
+        assert_eq!(EngineMode::Mono.mode(), 1);
+        assert_eq!(EngineMode::Animation.mode(), 2);
+        assert_eq!(EngineMode::Ui.mode(), 3);
+        assert_eq!(EngineMode::Content.mode(), 4);
+        assert_eq!(EngineMode::Sleep.mode(), 5);
     }
 
     #[test]

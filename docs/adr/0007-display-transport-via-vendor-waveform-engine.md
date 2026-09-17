@@ -137,6 +137,39 @@ reverse-engineer it.
   becomes available again and would remove a proprietary dependency — but it is
   not a v1 undertaking.
 
+## Amendment (WWW-32): `setBuffers` does not do what this ADR assumed
+
+The decision above and its "Verified on our own device" section list
+`EPFramebuffer::setBuffers(std::tuple<QImage, QImage>, QImage*)` as the call
+that hands the engine buffers to render from. It does not. WWW-32 found, on
+hardware, that `setBuffers` is an **engine-internal init call**, made once
+from `EPFramebufferSwtcon`'s own constructor with images the engine allocated
+for itself. Calling it again from outside — which `platform/device/native`
+did, per WWW-29/WWW-30's disassembly of where it *stores* its arguments — is
+not an error and produces no diagnostic; it simply does nothing the engine's
+`swapBuffers` ever reads back. Every present up to WWW-32 painted a real
+frame with a real waveform onto a buffer the engine had already discarded,
+which is why `paperctl open` reported success while the panel stayed white.
+
+The engine renders from its own `Format_RGB32` QImage, found *inside the
+already-constructed engine object* rather than handed to it. On image
+`20260827113527` that surface is at `engine + 0x88`, with a `Format_Grayscale8`
+internal buffer at `+0xa8` — but do not trust either offset: published
+third-party notes had these two reversed, and `platform/device/native`'s own
+implementation does not trust a fixed offset either. It probes a short list
+of candidate offsets (`0x88`, `0xa8`, `0xc8`, overridable via
+`PAPERCLIP_AUX_OFFSET` for a firmware that moves it again) and
+identifies the drawing surface by **format and stride** — a `Format_RGB32`
+image with a stride implying 4 bytes per pixel — not by which offset it
+happened to be at. `Format_Grayscale8` (24) is the engine's own internal
+buffer, not ours to write.
+
+This changes nothing about the Decision or the fallback above: presentation
+still goes through the vendor engine, not raw DRM, and the ABI is still the
+one `libqsgepaper.so` exports. What changes is which memory a present
+actually has to write into — the engine's own surface, located by scanning
+for it, not a buffer this bridge allocates and hands over.
+
 ## Provenance
 
 Prior art consulted 2026-09-17: `exp78/rmweb` (`docs/device-profile.md`) and

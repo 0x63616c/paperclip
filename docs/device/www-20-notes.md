@@ -72,6 +72,13 @@ be the first thing on screen after boot and must not attempt to replace the PIN.
   tablet is sleeping" — that state fully de-enumerates the USB gadget interface
   and Wi-Fi stops answering. WWW-1 recorded Wi-Fi SSH as never established; it
   is available during active operation and autosleep cycles.
+- The shipped IW612 driver documents a wake-on-inbound-TCP path (WWW-35) —
+  worth testing before accepting "press the button" as the only way back from
+  the deeper sleep state. It is why `paperctl`'s device probe connects with
+  `TcpStream`, never `ping`: ICMP does not reach this wake filter, an inbound
+  TCP SYN might, and either way the answer takes longer than an awake host's
+  round trip. Not yet confirmed to actually wake the radio; recorded as a
+  path worth measuring, not a result.
 
 ## Input coordinate spaces are one space, not two
 

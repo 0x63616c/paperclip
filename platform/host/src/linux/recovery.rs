@@ -36,8 +36,17 @@ use std::time::SystemTime;
 use paper_device::session::{DisplayLocks, EPD_LOCK, EPFRAMEBUFFER_LOCK};
 use paper_device::stock::{STOCK_UNIT, StartBudget, Stock};
 
+use crate::linux::process::{self, SessionTree};
 use crate::linux::systemd::Systemd;
 use crate::linux::unit::UnitControl;
+use crate::state::Budget;
+
+/// Substring `journalctl` shows when Xochitl comes up unable to own the
+/// panel. The exact failure `stock` reported success against in WWW-35:
+/// `systemctl` said `active`, the vendor lock file had been handed back, and
+/// the panel stayed white because both of those checks are blind to a stray
+/// file descriptor. Recorded verbatim from the incident's journal.
+const ATOMIC_COMMIT_FAILURE: &str = "Atomic commit failed";
 
 /// Where the advisory display-ownership locks are.
 ///
@@ -125,7 +134,13 @@ impl Default for RecoveryConfig {
             stock_unit: STOCK_UNIT.to_owned(),
             start_budget: PathBuf::from("/tmp/paperclip-xochitl-starts"),
             wakelock: WakeLockPaths::default(),
-            wakelock_name: "paperclip".to_owned(),
+            // Must be the tag a takeover actually acquires under
+            // (`paper_device::takeover::WAKELOCK_TAG`), not a name that
+            // merely sounds right. WWW-35: this used to be `"paperclip"`,
+            // which released nothing — the wakelock a takeover holds is
+            // `"paperclip-takeover"` — so `stock` reported success while
+            // leaving the tablet unable to sleep.
+            wakelock_name: paper_device::takeover::WAKELOCK_TAG.to_owned(),
             locks: LockPaths::default(),
             diagnostics: PathBuf::from("/run/paperclip/diagnostics"),
         }
@@ -161,6 +176,14 @@ pub enum RecoveryError {
     /// `platform/device`'s stock policy refused, or ran out of guarded starts.
     #[error("stock could not be brought back")]
     Stock(#[from] paper_device::error::DeviceError),
+    /// Xochitl is `active`, but its own journal says it never got the panel.
+    /// Reported as a failure precisely because every cheaper check — unit
+    /// state, the vendor lock file — would call this session recovered.
+    #[error(
+        "xochitl.service is active but its journal shows '{ATOMIC_COMMIT_FAILURE}'; it does \
+         not own the display. Something still holds DRM master."
+    )]
+    DisplayNotOwned,
 }
 
 /// The independent recovery path.
@@ -200,8 +223,16 @@ impl StockRecovery {
             return Ok(Restored::AlreadyRunning);
         }
 
-        // Stock is down, so the registry describes a process that is gone.
-        // This is the only moment it is safe to clear it.
+        // Stock being down does not mean the registry describes nobody: an
+        // interrupted `paperctl open --hold` (WWW-35) can outlive the SSH
+        // session that started it and still hold DRM master. Reap whatever
+        // is still holding the device *before* trusting the registry as
+        // stale — clearing it out from under a live holder would just hide
+        // the conflict `stock` is about to run into.
+        self.reap_stray_drm_holders();
+
+        // Now the registry describes a process that is actually gone. This
+        // is the only moment it is safe to clear it.
         self.clear_stale_locks();
 
         // `platform/device` owns what happens next: reset-failed, record the
@@ -210,10 +241,41 @@ impl StockRecovery {
         // here.
         stock.restore(SystemTime::now())?;
 
+        // `systemctl` saying `active` is not the same claim as "owns the
+        // panel" (WWW-35): a start that raced a holder we failed to reap
+        // still comes up active and fails every atomic commit. Read the
+        // journal rather than trust the restart alone.
+        if self
+            .systemd
+            .journal(&self.config.stock_unit, 50)
+            .contains(ATOMIC_COMMIT_FAILURE)
+        {
+            // Wakelock stays held, on purpose, same as any other failure
+            // path here: an awake tablet is a diagnosable one.
+            return Err(RecoveryError::DisplayNotOwned);
+        }
+
         // Only now: a suspend between the start and stock actually owning the
         // panel is the race this ordering exists to avoid.
         self.release_wakelock();
         Ok(Restored::Started)
+    }
+
+    /// Terminates any process still holding a DRM device, bounded and
+    /// best-effort.
+    ///
+    /// A failure to fully empty the set is not raised here: the journal
+    /// check right after `stock.restore` is what actually decides whether
+    /// the recovery worked, and it decides correctly whether or not this
+    /// reaped anything.
+    fn reap_stray_drm_holders(&self) {
+        let Ok(holders) = process::drm_holders(Path::new("/proc")) else {
+            return;
+        };
+        if holders.is_empty() {
+            return;
+        }
+        let _ = SessionTree::of(holders).terminate(Budget::default().escalation());
     }
 
     /// Writes everything worth keeping about a failure, before anything
