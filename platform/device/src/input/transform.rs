@@ -9,7 +9,7 @@
 //! ```
 //!
 //! so one transform answers both. These scales are a hardware constant, not a
-//! per-device calibration (ADR-0008):
+//! per-device calibration (ADR-0010):
 //!
 //! ```text
 //! touch:  x * 1620 / 2064      y * 2160 / 2832
@@ -28,10 +28,11 @@
 //! history claimed the sensing area is taller than the glass and therefore
 //! needs a measured offset; that claim is withdrawn.
 //!
-//! [`PointerTransform::with_offset`] therefore has no known caller and is a
-//! candidate for removal — §7 forbids speculative scaffolding. It is left in
-//! place only so that removing it is WWW-3's call rather than an edit landed
-//! underneath it mid-stage.
+//! `with_offset` **has been removed.** It was left in place for WWW-3 to decide
+//! on, and with the claim that motivated it withdrawn it was a field with no
+//! caller and no open question behind it — which is the speculative
+//! scaffolding §7 forbids. Restoring it is three lines if the device ever
+//! disagrees with the formulas above.
 //!
 //! [`PointerTransform::mirror_y`] stays, off by default, for a real open
 //! question: some firmware reportedly inverts Y on a mainline-kernel input
@@ -49,17 +50,16 @@ pub const PEN_EXTENT: Size = Size::new(11180, 15340);
 pub struct PointerTransform {
     extent: Size,
     panel: Size,
-    offset: Point,
     mirror_y: bool,
 }
 
 impl PointerTransform {
-    /// The touchscreen transform, unmirrored and unoffset.
+    /// The touchscreen transform, unmirrored.
     pub const fn touch() -> Self {
         Self::new(TOUCH_EXTENT, SCREEN)
     }
 
-    /// The pen transform, unmirrored and unoffset.
+    /// The pen transform, unmirrored.
     pub const fn pen() -> Self {
         Self::new(PEN_EXTENT, SCREEN)
     }
@@ -69,19 +69,8 @@ impl PointerTransform {
         Self {
             extent,
             panel,
-            offset: Point::new(0.0, 0.0),
             mirror_y: false,
         }
-    }
-
-    /// The same transform with an offset in panel pixels, applied after
-    /// scaling.
-    ///
-    /// No known caller: ADR-0008 establishes the transform is a pure per-axis
-    /// scale. Retained pending WWW-3's decision to remove it.
-    pub const fn with_offset(mut self, offset: Point) -> Self {
-        self.offset = offset;
-        self
     }
 
     /// The same transform with the vertical axis flipped.
@@ -114,8 +103,8 @@ impl PointerTransform {
         if self.extent.is_empty() {
             return Point::new(0.0, 0.0);
         }
-        let x = raw_x as f32 * self.panel.width as f32 / self.extent.width as f32 + self.offset.x;
-        let y = raw_y as f32 * self.panel.height as f32 / self.extent.height as f32 + self.offset.y;
+        let x = raw_x as f32 * self.panel.width as f32 / self.extent.width as f32;
+        let y = raw_y as f32 * self.panel.height as f32 / self.extent.height as f32;
         let y = if self.mirror_y {
             self.panel.height as f32 - y
         } else {
@@ -207,15 +196,6 @@ mod tests {
         assert!(close(mirrored.map(0, raw_y).y, 2160.0 - 540.0));
         // x is untouched either way.
         assert!(close(mirrored.map(1032, raw_y).x, plain.map(1032, raw_y).x));
-    }
-
-    #[test]
-    fn an_offset_moves_the_result_in_panel_pixels() {
-        let shifted = PointerTransform::touch().with_offset(Point::new(-10.0, 25.0));
-        let plain = PointerTransform::touch().map(1000, 1000);
-        let moved = shifted.map(1000, 1000);
-        assert!(close(moved.x, plain.x - 10.0), "{moved:?}");
-        assert!(close(moved.y, plain.y + 25.0), "{moved:?}");
     }
 
     #[test]

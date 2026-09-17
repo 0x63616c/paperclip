@@ -69,7 +69,7 @@ here should be read as evidence about them:
 - E-ink refresh behaviour, ghosting, or perceived latency.
 - Pen pressure, tilt, palm rejection, or input latency.
 - ~~The touch and pen coordinate transforms.~~ **Closed by prior art, not by
-  measurement (ADR-0008).** They are a hardware constant: touch scales by
+  measurement (ADR-0010).** They are a hardware constant: touch scales by
   1620/2064 and 2160/2832, pen by 1620/11180 and 2160/15340, with no axis swap
   and no inversion. The claim that a measured offset was needed is withdrawn —
   the aspect mismatch is absorbed by the two axes having different scale

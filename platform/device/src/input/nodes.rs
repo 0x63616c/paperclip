@@ -5,14 +5,22 @@
 //! reMarkables and rmweb's device profile is explicit that it must be resolved
 //! by name; binding to a number is a bug waiting for a firmware update.
 //!
-//! What this module resolves by is one step better again: the **advertised
-//! capability bits**. A node that reports `BTN_TOOL_PEN` is the pen whatever
-//! it calls itself, and a node that reports `ABS_MT_POSITION_X` is the
-//! touchscreen. `EVIOCGNAME` is still read — it is what a log, a report or a
-//! `--pen`/`--touch` override needs to be legible — but it decides nothing on
-//! its own, because no name string for this device has been confirmed against
-//! hardware yet. `tools/device-probe/evname.c` prints the mapping, and this is
-//! its Rust counterpart.
+//! Two signals are available and this module uses both.
+//!
+//! The **names** are now confirmed on this image: the pen is
+//! `Elan marker input` and the touchscreen is `Elan touch input`. The
+//! **advertised capability bits** say the same thing independently — a node
+//! reporting `BTN_TOOL_PEN` is the pen whatever it calls itself.
+//!
+//! [`resolve`] requires them to agree. A name is the more specific signal and
+//! wins when both are present, but a node whose name and capabilities
+//! disagree is reported as such rather than silently resolved: on a device
+//! where the whole input path is two files, picking the wrong one is worth an
+//! error, and a firmware update that renames a node should be visible the
+//! first time it happens rather than the first time a tap lands nowhere.
+//!
+//! `tools/device-probe/evname.c` prints the same mapping without needing a
+//! Rust toolchain.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -86,6 +94,20 @@ pub fn classify(keys: &Capabilities, abs: &Capabilities) -> InputRole {
     }
 }
 
+/// The pen's `EVIOCGNAME` on image `20260827113527`.
+pub const PEN_NAME: &str = "Elan marker input";
+/// The touchscreen's `EVIOCGNAME` on image `20260827113527`.
+pub const TOUCH_NAME: &str = "Elan touch input";
+
+/// The confirmed name for a role, if there is one.
+pub const fn expected_name(role: InputRole) -> Option<&'static str> {
+    match role {
+        InputRole::Pen => Some(PEN_NAME),
+        InputRole::Touch => Some(TOUCH_NAME),
+        InputRole::PowerKey | InputRole::Other => None,
+    }
+}
+
 /// One `/dev/input/event*` node and what it turned out to be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputNode {
@@ -106,6 +128,61 @@ pub fn sole(nodes: &[InputNode], role: InputRole) -> Option<&InputNode> {
     let mut matching = nodes.iter().filter(|node| node.role == role);
     let first = matching.next()?;
     matching.next().is_none().then_some(first)
+}
+
+/// How a role was resolved to a node, or why it was not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution<'a> {
+    /// Name and capabilities agree. The ordinary case.
+    Confirmed(&'a InputNode),
+    /// The capabilities are right but the name is not the confirmed one — a
+    /// firmware update, or a different device. Usable, but say so.
+    NameChanged {
+        /// The node the capability bits picked.
+        node: &'a InputNode,
+        /// The name this image was expected to report.
+        expected: &'static str,
+    },
+    /// The confirmed name is present on a node whose capabilities say it is
+    /// something else. Do not use it: one of the two signals is lying.
+    Contradictory {
+        /// The node carrying the expected name.
+        node: &'a InputNode,
+    },
+    /// No node, or more than one, claims the role.
+    Unresolved,
+}
+
+impl Resolution<'_> {
+    /// The node to read from, if there is one that can be trusted.
+    pub fn node(&self) -> Option<&InputNode> {
+        match self {
+            Self::Confirmed(node) | Self::NameChanged { node, .. } => Some(node),
+            Self::Contradictory { .. } | Self::Unresolved => None,
+        }
+    }
+}
+
+/// Resolves `role` against both signals, reporting how it was decided.
+pub fn resolve(nodes: &[InputNode], role: InputRole) -> Resolution<'_> {
+    let expected = expected_name(role);
+
+    // A node wearing the confirmed name but classified as something else is
+    // the one case where proceeding would be worse than stopping.
+    if let Some(expected) = expected
+        && let Some(named) = nodes.iter().find(|node| node.name == expected)
+        && named.role != role
+    {
+        return Resolution::Contradictory { node: named };
+    }
+
+    let Some(node) = sole(nodes, role) else {
+        return Resolution::Unresolved;
+    };
+    match expected {
+        Some(expected) if node.name != expected => Resolution::NameChanged { node, expected },
+        _ => Resolution::Confirmed(node),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -256,7 +333,10 @@ pub fn is_observed_node(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Capabilities, InputNode, InputRole, classify, is_observed_node, sole};
+    use super::{
+        Capabilities, InputNode, InputRole, PEN_NAME, Resolution, TOUCH_NAME, classify,
+        is_observed_node, resolve, sole,
+    };
     use std::path::{Path, PathBuf};
 
     fn bits(codes: &[u16], size: usize) -> Capabilities {
@@ -330,6 +410,74 @@ mod tests {
         ];
         assert!(sole(&ambiguous, InputRole::Pen).is_none());
         assert!(sole(&[], InputRole::Touch).is_none());
+    }
+
+    #[test]
+    fn resolution_confirms_when_the_name_and_the_capabilities_agree() {
+        let nodes = vec![
+            node("/dev/input/event2", PEN_NAME, InputRole::Pen),
+            node("/dev/input/event3", TOUCH_NAME, InputRole::Touch),
+        ];
+        assert_eq!(
+            resolve(&nodes, InputRole::Pen),
+            Resolution::Confirmed(&nodes[0])
+        );
+        assert_eq!(
+            resolve(&nodes, InputRole::Touch),
+            Resolution::Confirmed(&nodes[1])
+        );
+    }
+
+    #[test]
+    fn a_renamed_node_is_usable_but_reported() {
+        // A firmware update renames the pen. Its capabilities still identify
+        // it, so work continues — loudly.
+        let nodes = vec![node("/dev/input/event2", "Elan pen v2", InputRole::Pen)];
+        let resolution = resolve(&nodes, InputRole::Pen);
+        assert_eq!(
+            resolution,
+            Resolution::NameChanged {
+                node: &nodes[0],
+                expected: PEN_NAME
+            }
+        );
+        assert_eq!(resolution.node(), Some(&nodes[0]));
+    }
+
+    #[test]
+    fn the_right_name_on_the_wrong_device_is_refused_rather_than_used() {
+        // Both signals cannot be trusted at once, so neither is.
+        let nodes = vec![
+            node("/dev/input/event2", PEN_NAME, InputRole::Touch),
+            node("/dev/input/event3", TOUCH_NAME, InputRole::Touch),
+        ];
+        let resolution = resolve(&nodes, InputRole::Pen);
+        assert_eq!(resolution, Resolution::Contradictory { node: &nodes[0] });
+        assert_eq!(resolution.node(), None);
+    }
+
+    #[test]
+    fn nothing_and_too_much_both_resolve_to_nothing() {
+        assert_eq!(resolve(&[], InputRole::Pen), Resolution::Unresolved);
+        let two = vec![
+            node("/dev/input/event2", PEN_NAME, InputRole::Pen),
+            node("/dev/input/event9", "another pen", InputRole::Pen),
+        ];
+        assert_eq!(resolve(&two, InputRole::Pen), Resolution::Unresolved);
+        assert_eq!(resolve(&two, InputRole::Pen).node(), None);
+    }
+
+    #[test]
+    fn a_role_with_no_confirmed_name_resolves_on_capability_alone() {
+        let nodes = vec![node(
+            "/dev/input/event0",
+            "snvs-powerkey",
+            InputRole::PowerKey,
+        )];
+        assert_eq!(
+            resolve(&nodes, InputRole::PowerKey),
+            Resolution::Confirmed(&nodes[0])
+        );
     }
 
     #[test]

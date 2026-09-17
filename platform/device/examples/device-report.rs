@@ -102,20 +102,33 @@ fn main() {
 }
 
 fn report_resolution(found: &[nodes::InputNode], role: InputRole, transform: PointerTransform) {
-    match nodes::sole(found, role) {
-        Some(node) => {
-            let observed = if nodes::is_observed_node(&node.path) {
-                "matches what WWW-20 saw"
-            } else {
-                "DIFFERS from what WWW-20 saw — the node order moved"
-            };
-            println!(
-                "  resolved {role} -> {} ({observed}); transform assumes {}x{}",
-                node.path.display(),
-                transform.extent().width,
-                transform.extent().height
-            );
+    let resolution = nodes::resolve(found, role);
+    let verdict = match &resolution {
+        nodes::Resolution::Confirmed(node) => {
+            format!("{} (name and capabilities agree)", node.path.display())
         }
-        None => println!("  resolved {role} -> ambiguous or missing; do not guess"),
+        nodes::Resolution::NameChanged { node, expected } => format!(
+            "{} — RENAMED: expected {expected:?}, found {:?}. Usable, but record it.",
+            node.path.display(),
+            node.name
+        ),
+        nodes::Resolution::Contradictory { node } => format!(
+            "REFUSED: {} carries the expected name but classifies as {}. Do not guess.",
+            node.path.display(),
+            node.role
+        ),
+        nodes::Resolution::Unresolved => "ambiguous or missing; do not guess".to_owned(),
+    };
+    println!("  resolved {role} -> {verdict}");
+
+    if let Some(node) = resolution.node()
+        && !nodes::is_observed_node(&node.path)
+    {
+        println!("    note: node order differs from what WWW-20 saw — resolution handled it");
     }
+    println!(
+        "    transform assumes a {}x{} digitizer",
+        transform.extent().width,
+        transform.extent().height
+    );
 }

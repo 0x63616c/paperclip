@@ -1,6 +1,7 @@
 # ADR-0009 — The device adapter's FFI boundary
 
-**Status:** accepted for the shape, **unproven in execution** (Stage 3, WWW-3).
+**Status:** accepted for the shape; **compiles, links and refuses cleanly off
+the tablet, but has never driven the panel** (Stage 3, WWW-3).
 Implements the decision in [ADR-0007](0007-display-transport-via-vendor-waveform-engine.md);
 this ADR is about *how* the vendor engine is called, not whether it is.
 
@@ -44,6 +45,23 @@ libqsgepaper.so            EPFramebuffer, proprietary, never vendored
 - The **error string** is thread-local storage inside the bridge. Rust copies
   it before returning; it never holds the pointer.
 
+### A Qt application object, owned by the bridge
+
+`EPFramebuffer::instance()` **segfaults with no `QCoreApplication` alive** —
+the first thing a container run established. A plain `QCoreApplication` is
+enough: no `QGuiApplication`, no QPA platform plugin, no window system.
+
+Paperclip's host is a Rust process with no Qt in it, so the bridge constructs
+one itself in `paperclip_ep_open` and destroys it in `paperclip_ep_close`,
+after the engine's `QImage` buffers. If the host already has one — it will not,
+but a test harness might — the bridge uses it and does not take ownership.
+
+This is better news than ADR-0007's "what would make this wrong" section
+feared. The worry was that needing a `QGuiApplication` would make
+`libqsgepaper` no simpler than rmweb's QPA route; a bare `QCoreApplication` is
+a much smaller dependency than a platform plugin, so the primary path stays
+the lighter of the two.
+
 ### Thread affinity
 
 `libepaper` asserts *"EPFramebuffer is being created outside the application's
@@ -75,10 +93,27 @@ panics a match. Every non-zero status becomes `DeviceError::Vendor { code,
 message }`, the message copied out of the bridge's thread-local slot or falling
 back to the code's own description.
 
-### No exception, no panic
+### No exception, no panic — and the one thing this cannot promise
 
 - Every `extern "C"` function in the bridge catches `const std::exception &`
-  and `...`, mapping both to `PAPERCLIP_EP_EXCEPTION`. Nothing propagates.
+  and `...`, mapping both to `PAPERCLIP_EP_EXCEPTION`. No *exception*
+  propagates.
+- **The vendor calls `abort()`.** Observed, not inferred: with no waveform
+  tables present, `EPFramebuffer`'s constructor prints
+  `Failed to initialize SWTCON.` and raises `SIGABRT`. A `catch (...)` cannot
+  intercept that — there is no unwinding to catch. §9 asks that no C++
+  exception cross the boundary and none does, but "the bridge converts every
+  vendor failure into a status code" would have been a false claim, and the
+  earlier draft of this ADR implied it.
+- The only defence is to not reach it. `preflight()` runs before
+  `EPFramebuffer::instance()` and refuses with `PAPERCLIP_EP_NOT_OPEN` when a
+  precondition the engine aborts on is absent. `check-link.sh` asserts this
+  by treating a 134 or 139 exit as a failure, so a regression in the guard is
+  a red test rather than a tablet that dies mid-session.
+- Preconditions guarded today: a live `QCoreApplication`, and the existence
+  and non-emptiness of the four waveform tables. Others certainly exist and
+  will be found the same way — by running it somewhere that is not the
+  tablet.
 - Exceptions stay *enabled* in the build. `-fno-exceptions` would turn a
   vendor throw into `std::terminate` rather than into a status code, which is
   the opposite of the goal.
@@ -147,34 +182,61 @@ This is also the firmware-drift alarm. When an OS update replaces the rootfs,
 re-running the check against the new library says immediately whether the ABI
 moved, rather than leaving it to be discovered by a black screen.
 
+## Does it link? Yes — `check-link.sh`
+
+`check-abi.sh` proves the declarations match the exports. It does not prove the
+bridge builds, and the reMarkable SDK was not available to find out.
+
+`native/check-link.sh` answers it without the SDK, using an aarch64 Debian sid
+container: sid carries Qt **6.10.2** against the device's 6.10.3, and a Mac is
+already aarch64, so the container is the device's architecture running
+natively. It compiles `paperclip_ep.cpp` with `-Wall -Wextra -Werror`, links it
+against the real `libqsgepaper.so`, and runs it.
+
+Result, 2026-09-17: **compiles clean, links clean — every `EPFramebuffer`
+symbol resolved** — and the run stops exactly where it should, in
+`preflight()`, because a container has no waveform tables.
+
+What it does not answer: anything about the glass. No `/dev/dri`, no e-ink, no
+waveform data. It is a build and initialisation check, not a display test, and
+the script says so.
+
 ## What else the library says about itself
 
-Read out of the pulled copy, and none of it good news for the primary path:
+Read out of the pulled copy and out of running it:
 
 - **`EPFramebuffer` is a `QObject`.** It exports `qt_metacall`, `qt_metacast`
   and `staticMetaObject`, and has a `framebufferUpdated(const QRect &)`
   signal. It also has a public constructor and destructor, a
   `forceInstance(EPFramebuffer *)`, and `showForWindow(QWindow *)` /
   `hideForWindow(QWindow *)` — an API that expects windows to exist.
-- **It needs Qt Quick.** `DT_NEEDED` lists `libQt6Core.so.6`,
-  `libQt6Gui.so.6`, **`libQt6Qml.so.6`, `libQt6Quick.so.6`**, `libdrm.so.2`,
-  `libstdc++.so.6`. It is a *scenegraph* plugin, which is what its path says,
-  and it references `QCoreApplication::self`.
-- **Waveform tables are per-panel-lot.** Strings include
-  `"Loading waveforms from: %s"`, `"Using user defined waveform file."` and
-  `wf_search: unable to find correct waveform for lot: %s and tft: %s`. So
-  waveform selection is not a pure mode number; the engine looks up a table
-  keyed by the individual panel.
+- **It links Qt Quick, but does not appear to need it running.**
+  `DT_NEEDED` lists `libQt6Core.so.6`, `libQt6Gui.so.6`, `libQt6Qml.so.6`,
+  `libQt6Quick.so.6`, `libdrm.so.2`, `libstdc++.so.6` — it is a *scenegraph*
+  plugin, which is what its path says. Those are satisfied by the dynamic
+  linker; construction itself needed only a `QCoreApplication`.
+- **It reaches the hardware itself.** Strings name `/dev/dri/card0`,
+  `/sys/devices/platform/cumulus-panel` and the `g2194-regulator` at i2c
+  `1-0048` — so the DRM and power work WWW-20 did by hand is inside the
+  engine, which is the point of using it.
+- **It participates in the advisory locks**, naming `/tmp/epd.lock` and
+  `/tmp/epframebuffer.lock` directly, and carries the string
+  `"Failed to lock epframebuffer. Is there another EPFramebuffer instance?"`.
+- **Waveform tables are files, per panel lot, and mandatory.** Four of them:
+  `/usr/share/remarkable/ct33_{std,best,fast,pen}.bin`. The engine loads them
+  at construction and validates their size — a wrong-sized file produced
+  `unexpected size: 65536`. `ct33` is this panel's lot; strings show a
+  `wf_search` keyed by lot and TFT, so a different panel wants different
+  names. **`preflight()` therefore checks existence and non-emptiness only**;
+  hard-coding a size would trade the engine's abort for our own wrong
+  refusal.
+- The backend in play is `epframebuffer_acep2.cpp`, and success prints
+  `SWTCON initialized \o/`.
 
-Taken together this makes the risk already listed under "what would make this
-wrong" — that `EPFramebuffer` needs a live `QGuiApplication` — **substantially
-more likely than it looked when ADR-0007 chose this path**. It does not refute
-the primary path: a bridge can construct a `QGuiApplication` itself, and that
-is what Quill must be doing. It does mean the "no Qt runtime" simplicity that
-made `libqsgepaper` attractive over the QPA plugin is probably not real, and
-that if a `QGuiApplication` turns out to be required anyway, rmweb's `epaper`
-QPA route becomes the cheaper of two Qt-shaped options rather than the
-fallback. **Decide that with the first compile, not before.**
+Net: the primary path is in better shape than it looked. The compile-and-link
+gate is closed, `QCoreApplication` is a far lighter requirement than the
+`QGuiApplication` this ADR previously feared, and rmweb's QPA route stays the
+fallback rather than becoming the cheaper option.
 
 ## Provenance
 
@@ -212,8 +274,11 @@ pointed at by `PAPERCLIP_VENDOR_LIB_DIR`.
 | Gate | Status | What it blocks |
 |---|---|---|
 | The declared symbols are exported by the real library | **closed 2026-09-17** — all seven present | linking at all |
-| The bridge compiles against Qt 6.10.3 and `libqsgepaper.so` | **not attempted** — the SDK is not installed | everything below |
-| Whether `EPFramebuffer` needs a live `QGuiApplication` | **open, and now likely** — see above | whether the primary path is simpler than the fallback at all |
+| The bridge compiles and links against `libqsgepaper.so` | **closed 2026-09-17** — Qt 6.10.2, aarch64, `-Werror` | everything below |
+| Whether `EPFramebuffer` needs a live `QGuiApplication` | **closed** — a bare `QCoreApplication` suffices; without one it segfaults | whether the primary path is simpler than the fallback |
+| Whether the vendor can kill the process past our error handling | **closed, and it can** — `abort()` on init failure, guarded by `preflight()` | the honesty of the no-exception contract |
+| The four waveform tables exist on the tablet with the sizes the engine wants | **assumed** — stock uses them, but unread | opening the engine at all |
+| Whether the bridge builds against the device's exact Qt 6.10.3 | **not attempted** — checked against 6.10.2 | a patch-level ABI surprise |
 | A Paperclip surface is legible on the glass | **open** | §18 item 2, the stage's whole point |
 | Which tuple element the engine presents from | **guessed** in `paperclip_ep_open` | drawing landing on the wrong page |
 | The `EPScreenMode` / `UpdateFlag` / `GhostControlMode` numeric values | **guessed** | wrong waveform, silently |

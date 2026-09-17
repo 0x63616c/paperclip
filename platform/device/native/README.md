@@ -12,6 +12,7 @@ contract; this file is how to build it.
 | `ep_abi.hpp` | redeclarations of the vendor's `EPFramebuffer`, nothing else |
 | `vendor-abi.txt` | the signatures WWW-20 read off the device |
 | `check-abi.sh` | proves `ep_abi.hpp` generates exactly those signatures |
+| `check-link.sh` | compiles, links and runs the bridge against the real library |
 
 ## Check the ABI — needs nothing installed
 
@@ -24,7 +25,21 @@ The first form runs on a Mac with no Qt, no SDK and no vendor library, and is
 the cheapest way to find out that a firmware update moved the ABI. Run it after
 every OS update on the tablet.
 
-## Build it — needs two things this repository does not contain
+## Check that it builds — needs docker, not the SDK
+
+```sh
+./check-link.sh ~/paperclip-vendor
+```
+
+An aarch64 Debian sid container: sid has Qt 6.10.2 against the device's
+6.10.3, and a Mac is already aarch64, so this is the device's architecture
+running natively. Compiles with `-Werror`, links against the real
+`libqsgepaper.so`, and runs far enough to hit `preflight()`.
+
+A `134` or `139` exit is a **failure**: it means the vendor's `abort()` path
+was reached, which on the tablet is a dead session rather than an error.
+
+## Build it for the tablet — needs two things this repository does not contain
 
 ### 1. `libqsgepaper.so`, copied off the tablet
 
@@ -68,17 +83,19 @@ linker error, and refuses outright on a non-aarch64 target.
 
 ## Status
 
-**This has never been compiled.** WWW-3 obtained `libqsgepaper.so` but not the
-SDK, so nothing here has been through a compiler that could link it.
+**Compiles and links against the real library. Has never run on the tablet.**
 
-What *is* verified: `check-abi.sh` passes all four steps against the real
-library, sha256 `3f76b7db…`, image `20260827113527`. All seven symbols are
-present — after the check caught that `UpdateFlag` is nested in
-`EPFramebuffer` rather than global, which is a link failure the recorded
-signatures would otherwise have produced.
+Verified: `check-abi.sh` passes all four steps against `libqsgepaper.so`
+sha256 `3f76b7db…`, image `20260827113527` — after it caught that `UpdateFlag`
+is nested in `EPFramebuffer` rather than global. `check-link.sh` then builds
+the bridge with `-Werror` against Qt 6.10.2 on aarch64, links it, and runs it
+to a clean refusal.
 
-Everything else in `paperclip_ep.cpp` is unvalidated, and the guesses are
-marked `UNVERIFIED` in the source. Note in particular that the library needs
-`libQt6Qml.so.6` and `libQt6Quick.so.6` and that `EPFramebuffer` is a
-`QObject`, so it may well require a running `QGuiApplication` — ADR-0009 has
-the detail and every other open gate.
+Two things running it established that reading the exports never would: the
+engine **segfaults without a live `QCoreApplication`** (so the bridge owns
+one), and it **`abort()`s** rather than failing when it cannot initialise (so
+`preflight()` checks its preconditions first — `catch (...)` cannot help).
+
+Still unvalidated: the waveform mode numbers, which tuple element the engine
+presents from, the aux byte order, and everything about the panel. Guesses are
+marked `UNVERIFIED` in the source; ADR-0009 lists every open gate.

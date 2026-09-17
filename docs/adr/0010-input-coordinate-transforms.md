@@ -1,4 +1,7 @@
-# ADR-0008 — Input coordinate transforms are a hardware constant, not a calibration
+# ADR-0010 — Input coordinate transforms are a hardware constant, not a calibration
+
+*(Renumbered from 0008, which was already taken by the runtime-only-units
+decision. Two runs landed an ADR-0008 within minutes of each other.)*
 
 **Status:** accepted (Stage 2, WWW-20)
 

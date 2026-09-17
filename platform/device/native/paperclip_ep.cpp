@@ -3,13 +3,21 @@
  *
  * ## Status
  *
- * **This file has never been compiled.** It needs Qt 6.10.3 headers from the
- * reMarkable SDK and `libqsgepaper.so` copied off the tablet, and WWW-3's
- * first pass had neither — the device was unreachable. What *is* verified is
- * the part that decides whether it links: `check-abi.sh` proves the
- * declarations in `ep_abi.hpp` generate exactly the symbols WWW-20 read off
- * the library. Treat everything below as unvalidated until a build says
- * otherwise, and see ADR-0009 for what remains open.
+ * Compiles and links against the real `libqsgepaper.so` on an aarch64 Linux
+ * host with Qt 6.10 — `check-link.sh` does that in a container and is the
+ * repeatable form of the claim. It has **never run on the tablet**, and the
+ * waveform mode numbers below are still guesses. See ADR-0009.
+ *
+ * Two things that run established, and that no amount of reading the exports
+ * would have:
+ *
+ *   - `EPFramebuffer::instance()` **segfaults without a live
+ *     `QCoreApplication`**, and a plain `QCoreApplication` is enough — no
+ *     `QGuiApplication`, no QPA platform plugin. So this bridge owns one.
+ *   - The engine **`abort()`s** when it cannot initialise, rather than
+ *     throwing or returning. `catch (...)` cannot intercept that, so the only
+ *     defence is to check its preconditions before calling it — see
+ *     `preflight()`.
  *
  * ## Why this is C++ at all
  *
@@ -24,14 +32,16 @@
 
 #include "paperclip_ep.h"
 
-#include <QtGui/QImage>
+#include <QtCore/QCoreApplication>
 #include <QtCore/QRect>
+#include <QtGui/QImage>
 
 #include <cstring>
 #include <exception>
 #include <new>
 #include <pthread.h>
 #include <string>
+#include <sys/stat.h>
 #include <tuple>
 
 #include "ep_abi.hpp"
@@ -42,6 +52,26 @@ namespace {
  * (WWW-1) and corroborated by rmweb's device profile (ADR-0007). */
 constexpr int kPanelWidth = 1620;
 constexpr int kPanelHeight = 2160;
+
+/* The engine's SWTCON backend loads these at construction and calls abort() if
+ * any is missing or the wrong size — observed, not inferred: a container run
+ * with none of them present printed
+ *
+ *     /usr/share/remarkable/ct33_std.bin: file does not exist.
+ *     Failed to initialize SWTCON.
+ *
+ * and raised SIGABRT. With a wrong-sized file it printed "unexpected size".
+ * `ct33` is the panel lot; the library also searches by lot and TFT, so a
+ * different panel may want different names. Hence: check for *existence and
+ * non-emptiness*, name the file that is wrong, and let the engine do the real
+ * validation. Guessing the correct size here would trade one abort for a
+ * wrong refusal. */
+const char *const kWaveformFiles[] = {
+    "/usr/share/remarkable/ct33_std.bin",
+    "/usr/share/remarkable/ct33_best.bin",
+    "/usr/share/remarkable/ct33_fast.bin",
+    "/usr/share/remarkable/ct33_pen.bin",
+};
 
 /* Per-thread error text. Thread-local so a message cannot be overwritten by
  * another thread between a failing call and the caller reading it — even
@@ -60,10 +90,40 @@ int32_t fail(int32_t status, const char *message) noexcept
     return status;
 }
 
+/* Everything that must be true before EPFramebuffer::instance() is called,
+ * because after that point a failure is a process abort rather than an error
+ * this bridge can report. Returns PAPERCLIP_EP_OK or a status. */
+int32_t preflight() noexcept
+{
+    if (QCoreApplication::instance() == nullptr) {
+        return fail(PAPERCLIP_EP_NOT_OPEN,
+                    "no QCoreApplication: EPFramebuffer::instance() segfaults without one");
+    }
+    for (const char *path : kWaveformFiles) {
+        struct stat info = {};
+        if (stat(path, &info) != 0) {
+            try {
+                const std::string message = std::string("waveform table missing: ") + path
+                                            + " (the engine aborts rather than failing)";
+                return fail(PAPERCLIP_EP_NOT_OPEN, message.c_str());
+            } catch (...) {
+                return fail(PAPERCLIP_EP_NOT_OPEN, "a waveform table is missing");
+            }
+        }
+        if (info.st_size == 0) {
+            return fail(PAPERCLIP_EP_NOT_OPEN, "a waveform table is empty");
+        }
+    }
+    return PAPERCLIP_EP_OK;
+}
+
 } // namespace
 
 struct paperclip_ep {
     EPFramebuffer *engine = nullptr;
+    /* Owned only when this bridge created it. A host that already runs Qt
+     * keeps its own, and this stays null and is not destroyed. */
+    QCoreApplication *owned_app = nullptr;
     /* The bridge owns these for as long as the handle lives. EPFramebuffer is
      * handed the two page buffers and the auxiliary one by setBuffers; Rust
      * borrows the bits of `front` and never frees anything. */
@@ -92,21 +152,48 @@ int32_t paperclip_ep_open(paperclip_ep **out)
     }
     *out = nullptr;
 
+    paperclip_ep *handle = nullptr;
     try {
+        handle = new (std::nothrow) paperclip_ep();
+        if (handle == nullptr) {
+            return fail(PAPERCLIP_EP_OUT_OF_MEMORY, "allocating the bridge handle failed");
+        }
+
+        /* A QCoreApplication must exist and must outlive the engine. Creating
+         * it here rather than asking the caller to is the whole point of this
+         * bridge: Paperclip's host is a Rust process with no Qt in it. */
+        if (QCoreApplication::instance() == nullptr) {
+            /* QCoreApplication keeps a reference to argc and argv for its
+             * entire lifetime, so these must outlive it. Static storage is the
+             * only way to guarantee that without making destruction order
+             * load-bearing. */
+            static char program_name[] = "paperclip";
+            static char *argv[] = {program_name, nullptr};
+            static int argc = 1;
+            handle->owned_app = new (std::nothrow) QCoreApplication(argc, argv);
+            if (handle->owned_app == nullptr) {
+                delete handle;
+                return fail(PAPERCLIP_EP_OUT_OF_MEMORY, "allocating QCoreApplication failed");
+            }
+        }
+
+        const int32_t ready = preflight();
+        if (ready != PAPERCLIP_EP_OK) {
+            delete handle;
+            return ready;
+        }
+
         EPFramebuffer *engine = EPFramebuffer::instance();
         if (engine == nullptr) {
+            delete handle;
             return fail(PAPERCLIP_EP_NOT_OPEN, "EPFramebuffer::instance() returned null");
         }
         /* The vendor's own side of the advisory registry Xochitl participates
          * in. Holding DRM master is not display ownership on this device. */
         if (!engine->checkLockFile()) {
+            delete handle;
             return fail(PAPERCLIP_EP_LOCKED,
                         "EPFramebuffer::checkLockFile() reports another instance");
-        }
-
-        paperclip_ep *handle = new (std::nothrow) paperclip_ep();
-        if (handle == nullptr) {
-            return fail(PAPERCLIP_EP_OUT_OF_MEMORY, "allocating the bridge handle failed");
         }
 
         handle->engine = engine;
@@ -132,8 +219,10 @@ int32_t paperclip_ep_open(paperclip_ep **out)
         g_last_error.clear();
         return PAPERCLIP_EP_OK;
     } catch (const std::exception &error) {
+        delete handle;
         return fail(PAPERCLIP_EP_EXCEPTION, error.what());
     } catch (...) {
+        delete handle;
         return fail(PAPERCLIP_EP_EXCEPTION, "paperclip_ep_open: unknown C++ exception");
     }
 }
@@ -144,7 +233,12 @@ void paperclip_ep_close(paperclip_ep *ep)
         return;
     }
     try {
+        /* Order matters: the engine's buffers are QImages, so they go before
+         * the QCoreApplication that Qt's own teardown depends on. */
+        QCoreApplication *app = ep->owned_app;
+        ep->owned_app = nullptr;
         delete ep;
+        delete app;
     } catch (...) {
         /* Nothing useful can be done and nothing may propagate: this runs on
          * the shutdown path, including the one after a failure. */

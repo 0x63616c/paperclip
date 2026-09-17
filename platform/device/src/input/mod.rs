@@ -15,5 +15,7 @@ pub mod nodes;
 pub mod transform;
 
 pub use evdev::{ContactEvent, MAX_TOUCH_SLOTS, PenDecoder, RawEvent, Tool, TouchDecoder};
-pub use nodes::{Capabilities, InputNode, InputRole, classify, enumerate, sole};
+pub use nodes::{
+    Capabilities, InputNode, InputRole, Resolution, classify, enumerate, resolve, sole,
+};
 pub use transform::{PEN_EXTENT, PointerTransform, TOUCH_EXTENT};
