@@ -1274,6 +1274,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "paper-conformance-tests"
+version = "0.1.0"
+dependencies = [
+ "paper-packages",
+ "paper-protocol",
+ "paper-sdk",
+ "semver",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "paper-device"
 version = "0.1.0"
 dependencies = [

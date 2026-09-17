@@ -7,11 +7,11 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
-use paper_packages::{MANIFEST_FILE_NAME, Manifest, ObjectKind, PackageCheck};
 use paper_packages::archive::{self, ARCHIVE_EXTENSION, ArchiveLimits};
 use paper_packages::publish::Publisher;
 use paper_packages::signing::{PublicKey, SecretKey, TrustedKeys};
 use paper_packages::store;
+use paper_packages::{MANIFEST_FILE_NAME, Manifest, ObjectKind, PackageCheck};
 
 use crate::error::CommandError;
 use crate::install::read_text;
@@ -289,7 +289,9 @@ fn check_source(root: &Path) -> Result<(), CommandError> {
     );
     println!("assets     {}", manifest.assets().len());
     println!("size       {} bytes", check.total_bytes());
-    println!("signature  none \u{2014} a source tree is not a published thing; `paperctl publish` signs the archive");
+    println!(
+        "signature  none \u{2014} a source tree is not a published thing; `paperctl publish` signs the archive"
+    );
     Ok(())
 }
 

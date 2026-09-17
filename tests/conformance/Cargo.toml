@@ -1,0 +1,57 @@
+# The app contract's conformance suite (§8).
+#
+# A package rather than a bare `tests/` directory for the same reason
+# `tests/system` is one: a virtual workspace root has no package for Cargo to
+# attach an integration test to, so the files would never be compiled and the
+# suite would pass by not existing.
+[package]
+name = "paper-conformance-tests"
+description = "Conformance tests for the four layers of the Paperclip app contract."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+autotests = false
+autobins = false
+autoexamples = false
+autobenches = false
+
+[lib]
+name = "paper_conformance_tests"
+path = "harness.rs"
+
+[[test]]
+name = "compile_time"
+path = "cases/compile_time.rs"
+harness = true
+
+[[test]]
+name = "package_time"
+path = "cases/package_time.rs"
+harness = true
+
+[[test]]
+name = "launch_time"
+path = "cases/launch_time.rs"
+harness = true
+
+[[test]]
+name = "runtime"
+path = "cases/runtime.rs"
+harness = true
+
+# In `[dependencies]` rather than `[dev-dependencies]` because the harness
+# itself is a library the four test targets link, and a dev-dependency is not
+# available to it.
+[dependencies]
+paper-packages = { workspace = true }
+paper-protocol = { workspace = true }
+paper-sdk = { workspace = true }
+semver = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
