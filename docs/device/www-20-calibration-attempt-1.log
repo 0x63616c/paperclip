@@ -1,0 +1,31 @@
+[02:21:09] resolved pen=/dev/input/event2 touch=/dev/input/event3 (by EVIOCGNAME-equivalent sysfs name)
+[02:21:09] calibration capture starting, 180s
+[02:21:09] pre: xochitl=active uptime=34600s
+[02:21:09] guardian armed (270s)
+[02:21:09] stopping xochitl so stray taps cannot touch notebooks
+[02:21:10] recording both nodes for 180s
+[02:21:20] t+10s pen=0B touch=0B
+[02:21:30] t+20s pen=0B touch=0B
+[02:21:40] t+30s pen=0B touch=0B
+[02:21:50] t+40s pen=0B touch=0B
+[02:22:00] t+50s pen=0B touch=0B
+[02:22:10] t+60s pen=0B touch=0B
+[02:22:21] t+70s pen=0B touch=0B
+[02:22:31] t+80s pen=0B touch=0B
+[02:22:41] t+90s pen=0B touch=0B
+[02:22:51] t+100s pen=0B touch=0B
+[02:23:01] t+110s pen=0B touch=0B
+[02:23:11] t+120s pen=0B touch=0B
+[02:23:21] t+130s pen=0B touch=0B
+[02:23:31] t+140s pen=0B touch=0B
+[02:23:41] t+150s pen=0B touch=0B
+[02:23:51] t+160s pen=0B touch=0B
+[02:24:01] t+170s pen=0B touch=0B
+[02:24:11] t+180s pen=0B touch=0B
+[02:24:11] === restore begins ===
+[02:24:11] post: xochitl=active pid=33142
+[02:24:11] post: system=running failed=[]
+[02:24:11] post: /home=mounted notebooks=53
+[02:24:11] post: pen=0B touch=0B
+[02:24:11] DONE
+[02:24:11] === restore complete ===
