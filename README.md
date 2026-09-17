@@ -42,6 +42,7 @@ tools/vm-harness/run-harness.sh ~/paperclip-vm
 | `platform/sdk` | Canvas, palette, text, display mapping, input, desktop backend |
 | `platform/host` | The supervisor: state machine, deadlines, units, recovery |
 | `apps/home` | The home screen |
+| `apps/app-store` | The App Store: installed, offered, and installing it |
 | `apps/chess` | The Chess screen |
 | `tools/paperctl` | The command line, including `paperctl stock` |
 | `tools/fault-app` | A session that misbehaves to order |

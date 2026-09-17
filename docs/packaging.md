@@ -112,17 +112,50 @@ the new fallback, so it can be undone without going back to the catalog.
 `recover` finishes or undoes whatever an interrupted install left behind. It is
 safe when nothing is wrong, and the host will run the same code at start.
 
-## What the App Store will show
+## The App Store
 
-The App Store *app* is not built yet — it needs the app lifecycle and rendering
-contract from WWW-5, which does not exist. What it will show does exist, as
-`paper_packages::inventory`:
+`apps/app-store`, in three pieces, split so the interesting one needs no
+device:
+
+- `screen` is the state, and it is **pure**. A press returns a `Request`; the
+  app hands that to `Context::spawn` and folds the answer back in as an
+  `Outcome`. So which button appears, what it does, and what happens when a
+  download fails are all testable with no catalog, no store and no panel.
+- `render` draws that state and returns the rectangles it used, so a press is
+  hit-tested against what is actually on the glass.
+- `source` is the seam to the platform. The App Store holds a `StoreSource`;
+  the only way to build the real one is `PackagesSource::for_app`, which takes
+  an `InstalledApp` and goes through `PackageManager::on_behalf_of`. An App
+  Store that host policy did not grant `packages` gets an error at startup, not
+  a degraded installer. That is §5's "client of platform facilities, not the
+  owner of them" as a property of the code rather than a claim about it.
+
+The app is built **without** the `publishing` feature. An app must not contain
+a code path that can sign a release (§12), and `cargo build -p paper-app-store`
+is what proves it does not — only the tests turn the feature on, to build a
+catalog to install from.
+
+Every `SourceError` carries `advice()`, because §6 asks for *actionable*
+errors and "the catalog could not be read" is a fact rather than an action:
+
+| What happened | What it tells you to do |
+|---|---|
+| Not signed by a trusted key | Do not install it. |
+| Catalog unreachable | Check the home network; installed apps keep working. |
+| App is running | Close it first, then install the update. |
+| Digest or size mismatch | Try again; nothing was changed. |
+| Offered version is older | Use roll back instead. |
+| No room left | Free some space and try again. |
+
+`paperctl screenshot --screen app-store` renders it.
+
+### What it shows
 
 `Inventory::survey` merges three sources — what is installed, what a catalog
 offers, and what has actually managed to start — into one row per app: name,
 installed version, available version, fallback, every release on disk, launch
-health, and a one-word state. `paperctl list` renders exactly that model, so
-the CLI and the App Store cannot drift apart about what an update is.
+health, and a one-word state. Both `paperctl list` and the App Store render exactly
+that model, so they cannot drift apart about what an update is.
 
 The states, and why each exists:
 
