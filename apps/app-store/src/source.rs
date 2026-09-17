@@ -26,7 +26,7 @@ use std::path::PathBuf;
 
 use paper_packages::catalog::{Catalog, CatalogError, FileTransport};
 use paper_packages::install::{
-    InstallError, InstallOptions, NothingIsRunning, PackageManager, Progress,
+    ActivationGuard, InstallError, InstallOptions, PackageManager, Progress,
 };
 use paper_packages::inventory::Inventory;
 use paper_packages::launch::Ledger;
@@ -71,6 +71,7 @@ pub struct PackagesSource {
     layout: Layout,
     catalog: PathBuf,
     keys: TrustedKeys,
+    running: Box<dyn ActivationGuard>,
 }
 
 impl PackagesSource {
@@ -84,6 +85,7 @@ impl PackagesSource {
         catalog: impl Into<PathBuf>,
         keys: TrustedKeys,
         caller: &InstalledApp,
+        running: Box<dyn ActivationGuard>,
     ) -> Result<Self, SourceError> {
         if !caller.capabilities().holds(Capability::Packages) {
             return Err(SourceError::NotPermitted {
@@ -96,6 +98,7 @@ impl PackagesSource {
             layout,
             catalog: catalog.into(),
             keys,
+            running,
         })
     }
 
@@ -142,23 +145,24 @@ impl StoreSource for PackagesSource {
         let release = catalog.release(entry)?;
         let archive = catalog.open_archive(entry, &release)?;
 
-        // `NothingIsRunning` only because nothing in this process can know.
-        // The host supplies the real guard once package operations cross the
-        // protocol; until then the refusal that matters — an update never
-        // replacing a running app — is the host's to make, and this is the
-        // line to change when it can.
+        // The guard is supplied, never assumed. "An update never replaces the
+        // running version of an active app" (§6) is a fact only the host knows,
+        // and an App Store that answered it for itself would be answering it
+        // wrong — so the answer is a constructor argument. Today the host has
+        // no way to say; when package operations cross the protocol it will,
+        // and nothing in this file changes.
         let installed = self.manager.install(
             &release,
             archive,
             &InstallOptions::default(),
-            &NothingIsRunning,
+            self.running.as_ref(),
             progress,
         )?;
         Ok(installed.version)
     }
 
     fn rollback(&self, app: &AppId) -> Result<Version, SourceError> {
-        Ok(self.manager.rollback(app, &NothingIsRunning)?.version)
+        Ok(self.manager.rollback(app, self.running.as_ref())?.version)
     }
 }
 

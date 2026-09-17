@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use paper_app_store::{AppStoreScreen, Request, SourceError, StoreSource};
 use paper_packages::archive;
-use paper_packages::install::{Progress, Step, Unwatched};
+use paper_packages::install::{NothingIsRunning, PackageManager, Progress, Step, Unwatched};
 use paper_packages::inventory::AppState;
 use paper_packages::publish::Publisher;
 use paper_packages::signing::{SecretKey, TrustedKeys};
@@ -81,13 +81,28 @@ impl World {
     }
 
     fn source(&self, granted: bool) -> Result<paper_app_store::PackagesSource, SourceError> {
+        self.source_with(granted, Box::new(NothingIsRunning))
+    }
+
+    fn source_with(
+        &self,
+        granted: bool,
+        running: Box<dyn paper_packages::install::ActivationGuard>,
+    ) -> Result<paper_app_store::PackagesSource, SourceError> {
         paper_app_store::PackagesSource::for_app(
             self.layout.clone(),
             InstallPolicy::deny_all(),
             &self.catalog,
             self.keys(),
             &self.caller(granted),
+            running,
         )
+    }
+
+    /// The host's own package manager — the owner of the transaction, as
+    /// distinct from the App Store that is a client of it.
+    fn host(&self) -> PackageManager {
+        PackageManager::host(self.layout.clone(), InstallPolicy::deny_all())
     }
 
     fn publish(&self, version: &str, notes: &str) {
@@ -307,4 +322,180 @@ fn a_failing_release_offers_a_roll_back_rather_than_an_update() {
         screen.primary_action(&chess()),
         Some(Request::Rollback { app: chess() })
     );
+}
+
+/// A reader that dies partway through, the way a killed process does.
+struct DiesPartway {
+    bytes: Vec<u8>,
+    die_after: usize,
+    read: usize,
+}
+
+impl std::io::Read for DiesPartway {
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "the panic is the point: this simulates the process being \
+                  killed mid-transaction. Returning `Err` would exercise the \
+                  ordinary download-failed path, which is already covered and \
+                  is a different thing entirely."
+    )]
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.read >= self.die_after {
+            panic!("the App Store process died");
+        }
+        let take = buf
+            .len()
+            .min(self.die_after - self.read)
+            .min(self.bytes.len() - self.read);
+        buf[..take].copy_from_slice(&self.bytes[self.read..self.read + take]);
+        self.read += take;
+        Ok(take)
+    }
+}
+
+/// An app the guard reports as running.
+#[derive(Debug)]
+struct Running;
+
+impl paper_packages::install::ActivationGuard for Running {
+    fn is_running(&self, _app: &AppId) -> bool {
+        true
+    }
+}
+
+#[test]
+fn the_app_store_dying_mid_install_does_not_invalidate_the_transaction() {
+    let world = World::new();
+    world.publish("0.1.0", "First cut.");
+    world.publish("0.2.0", "Second.");
+    let source = world.source(true).expect("a source");
+    source
+        .install(&chess(), &version("0.1.0"), &Unwatched)
+        .expect("the first install");
+
+    let archive = fs::read(
+        world
+            .catalog
+            .join("apps/dev.calum.chess/0.2.0/chess-0.2.0.paperpkg"),
+    )
+    .expect("the archive");
+
+    // The App Store is killed halfway through the download. The transaction is
+    // the *host's*; the App Store is only the thing that asked for it.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = world.host().install(
+            &fetch_release(&world, "0.2.0"),
+            DiesPartway {
+                die_after: archive.len() / 2,
+                bytes: archive,
+                read: 0,
+            },
+            &paper_packages::install::InstallOptions::default(),
+            &NothingIsRunning,
+            &Unwatched,
+        );
+    }));
+    std::panic::set_hook(previous);
+    assert!(died.is_err(), "the simulated death must actually unwind");
+
+    // Nothing is invalidated: 0.1.0 is still selected and still all there.
+    assert_eq!(
+        world.layout.current(&chess()).expect("a selection"),
+        Some(version("0.1.0"))
+    );
+    assert!(
+        !world
+            .layout
+            .release_dir(&chess(), &version("0.2.0"))
+            .exists(),
+        "a half-installed release must not appear"
+    );
+
+    // The host tidies up, and says what it found.
+    let report = world.host().recover().expect("recovery");
+    assert!(!report.is_clean(), "there was debris to clear: {report:?}");
+
+    // And the same install, asked for again, simply works.
+    let source = world.source(true).expect("a source");
+    source
+        .install(&chess(), &version("0.2.0"), &Unwatched)
+        .expect("the retry after a crash");
+    assert_eq!(
+        world.layout.current(&chess()).expect("a selection"),
+        Some(version("0.2.0"))
+    );
+}
+
+#[test]
+fn a_lock_left_by_a_killed_app_store_does_not_wedge_installs_forever() {
+    let world = World::new();
+    world.publish("0.1.0", "First cut.");
+
+    // What a `SIGKILL` leaves: `Drop` never ran, so the lock directory is
+    // still there with no process behind it.
+    let stale = world.layout.locks_dir().join("dev.calum.chess.lock");
+    fs::create_dir_all(&stale).expect("a stale lock");
+    fs::write(stale.join("owner"), "pid 999999 since 0\n").expect("an owner file");
+
+    let source = world.source(true).expect("a source");
+    assert!(
+        source
+            .install(&chess(), &version("0.1.0"), &Unwatched)
+            .is_err(),
+        "a held lock must refuse while it is believed"
+    );
+
+    // Recovery runs at host start, when nothing can be holding one.
+    let report = world.host().recover().expect("recovery");
+    assert_eq!(report.locks_broken, 1);
+    assert!(!stale.exists());
+
+    source
+        .install(&chess(), &version("0.1.0"), &Unwatched)
+        .expect("the install after the stale lock was cleared");
+}
+
+#[test]
+fn an_update_is_refused_while_the_host_says_the_app_is_running() {
+    let world = World::new();
+    world.publish("0.1.0", "First cut.");
+    world.publish("0.2.0", "Second.");
+
+    let quiet = world.source(true).expect("a source");
+    quiet
+        .install(&chess(), &version("0.1.0"), &Unwatched)
+        .expect("the first install");
+
+    // The same App Store, told by the host that Chess is running.
+    let busy = world
+        .source_with(true, Box::new(Running))
+        .expect("a source");
+    let error = busy
+        .install(&chess(), &version("0.2.0"), &Unwatched)
+        .expect_err("an update must not replace a running app");
+    assert!(
+        error.advice().contains("Close the app first"),
+        "advice was: {}",
+        error.advice()
+    );
+    assert_eq!(
+        world.layout.current(&chess()).expect("a selection"),
+        Some(version("0.1.0")),
+        "the running version must still be the selected one"
+    );
+}
+
+/// Fetches and verifies one release, the way the App Store does.
+fn fetch_release(world: &World, version_text: &str) -> paper_packages::release::VerifiedRelease {
+    use paper_packages::catalog::{Catalog, FileTransport};
+
+    let catalog = Catalog::new(FileTransport::new(&world.catalog), world.keys());
+    let view = catalog.view().expect("a catalog view");
+    let entry = view
+        .index
+        .exact(&chess(), &version(version_text))
+        .expect("an offered version");
+    catalog.release(entry).expect("a verified release")
 }

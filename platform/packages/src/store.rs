@@ -431,6 +431,46 @@ pub struct AppLock {
 }
 
 impl AppLock {
+    /// Removes every lock, and says how many there were.
+    ///
+    /// # When this is safe, and only then
+    ///
+    /// **Call this only from recovery, at host start, before anything has been
+    /// launched.** A lock existing at that moment cannot be held by a live
+    /// operation, because nothing has had the chance to start one.
+    ///
+    /// It exists because [`Drop`] is not a guarantee. A cleanly-exiting process
+    /// releases its lock; one that is killed — `SIGKILL`, an OOM, a battery
+    /// that ran out mid-install — does not, and the directory it left behind
+    /// would otherwise refuse every future install of that app forever. §12
+    /// requires that an App Store closing or crashing does not invalidate a
+    /// host-owned transaction, and a lock nobody can ever clear is exactly
+    /// that kind of invalidation.
+    ///
+    /// Checking whether the recorded pid is still alive would be the precise
+    /// answer, and is deliberately not done: it needs `kill(2)` or `/proc`, and
+    /// §7 bans `unsafe` outside `platform/device/native` while `/proc` does not
+    /// exist on the Mac this also has to run on. "Nothing is running yet" is a
+    /// weaker precondition that the caller can actually guarantee.
+    pub fn break_all(layout: &Layout) -> Result<usize, StoreError> {
+        let dir = layout.locks_dir();
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(source) => return Err(StoreError::io(&dir, source)),
+        };
+        let mut broken = 0;
+        for entry in entries {
+            let entry = entry.map_err(|source| StoreError::io(&dir, source))?;
+            if entry.path().is_dir() {
+                fs::remove_dir_all(entry.path())
+                    .map_err(|source| StoreError::io(&entry.path(), source))?;
+                broken += 1;
+            }
+        }
+        Ok(broken)
+    }
+
     /// Claims `app`, or reports who holds it.
     pub fn acquire(layout: &Layout, app: &AppId) -> Result<Self, StoreError> {
         create_dir_if_missing(&layout.locks_dir())?;
@@ -701,6 +741,28 @@ mod tests {
         ));
         drop(held);
         assert!(AppLock::acquire(&layout, &app()).is_ok());
+    }
+
+    #[test]
+    fn breaking_locks_clears_what_a_killed_process_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path());
+        layout.ensure().unwrap();
+
+        // A lock with no process behind it: `Drop` never ran.
+        let stale = layout.locks_dir().join("dev.calum.chess.lock");
+        fs::create_dir_all(&stale).unwrap();
+        assert!(matches!(
+            AppLock::acquire(&layout, &app()),
+            Err(StoreError::Locked { .. })
+        ));
+
+        assert_eq!(AppLock::break_all(&layout).unwrap(), 1);
+        assert!(!stale.exists());
+        assert!(AppLock::acquire(&layout, &app()).is_ok());
+
+        // Idempotent, and fine on a store that has never been locked.
+        assert_eq!(AppLock::break_all(&layout).unwrap(), 0);
     }
 
     #[test]

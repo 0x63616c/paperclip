@@ -316,6 +316,12 @@ pub(crate) fn recover(args: &RecoverArgs) -> Result<(), CommandError> {
     if report.staging_removed > 0 {
         println!("cleaned    {} staging directories", report.staging_removed);
     }
+    if report.locks_broken > 0 {
+        println!(
+            "cleared    {} lock(s) left by a killed process",
+            report.locks_broken
+        );
+    }
     for (app, version) in &report.incomplete_removed {
         println!("removed    incomplete {app} {version}");
     }

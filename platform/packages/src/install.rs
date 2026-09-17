@@ -240,6 +240,8 @@ pub struct Recovered {
     pub reverted: Vec<(AppId, Option<Version>)>,
     /// Staging directories deleted.
     pub staging_removed: usize,
+    /// Locks left behind by killed processes, cleared.
+    pub locks_broken: usize,
     /// Incomplete release directories deleted.
     pub incomplete_removed: Vec<(AppId, String)>,
 }
@@ -250,6 +252,7 @@ impl Recovered {
         self.completed.is_empty()
             && self.reverted.is_empty()
             && self.staging_removed == 0
+            && self.locks_broken == 0
             && self.incomplete_removed.is_empty()
     }
 }
@@ -488,7 +491,17 @@ impl PackageManager {
     /// reads it back.
     pub fn recover(&self) -> Result<Recovered, InstallError> {
         self.layout.ensure()?;
-        let mut report = Recovered::default();
+        // First, and before anything tries to take one: a lock still on disk
+        // was left by a process that was killed rather than one that is
+        // working, because recovery runs before anything has been launched.
+        // Leaving it would refuse every future install of that app, which is
+        // precisely the "a crash invalidated a host-owned transaction" §12
+        // rules out — and it would deadlock the loop below, which locks each
+        // app it repairs.
+        let mut report = Recovered {
+            locks_broken: AppLock::break_all(&self.layout)?,
+            ..Recovered::default()
+        };
 
         for entry in JournalEntry::all(&self.layout)? {
             let journal = entry.read()?;

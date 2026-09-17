@@ -112,6 +112,15 @@ the new fallback, so it can be undone without going back to the catalog.
 `recover` finishes or undoes whatever an interrupted install left behind. It is
 safe when nothing is wrong, and the host will run the same code at start.
 
+It also clears install locks. `Drop` releases a lock on every ordinary exit
+including an unwind, but not on a `SIGKILL`, an OOM or a flat battery — and a
+lock nobody can clear would refuse every future install of that app forever,
+which is one way an App Store crash *would* invalidate a host-owned
+transaction. A lock still on disk when recovery runs cannot be held by a live
+operation, because recovery runs before anything has been launched. That
+precondition is the whole licence for breaking them, and it is why nothing
+else does.
+
 ## The App Store
 
 `apps/app-store`, in three pieces, split so the interesting one needs no
@@ -123,6 +132,11 @@ device:
   download fails are all testable with no catalog, no store and no panel.
 - `render` draws that state and returns the rectangles it used, so a press is
   hit-tested against what is actually on the glass.
+- `source` is the seam to the platform. The activation guard — the answer to
+  "is this app running right now?" — is a constructor argument, never assumed.
+  §6 requires that an update never replaces the running version of an active
+  app; that is a fact only the host knows, and an App Store answering it for
+  itself would answer it wrong. Today nothing can say yes, so nothing does.
 - `source` is the seam to the platform. The App Store holds a `StoreSource`;
   the only way to build the real one is `PackagesSource::for_app`, which takes
   an `InstalledApp` and goes through `PackageManager::on_behalf_of`. An App
