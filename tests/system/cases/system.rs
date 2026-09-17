@@ -12,7 +12,8 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use paper_chess::{BoardLayout, ChessScreen, Square};
+use paper_chess::{ChessLayout, ChessScreen, Square};
+use paper_chess_rules::Game;
 use paper_device::{DisplayProbe, FrameDigest, HoldPlan, MemoryPanel, PixelRect};
 use paper_home::{HomeScreen, ShelfEntry, ShelfGlyph, SystemFact};
 use paper_packages::{
@@ -126,7 +127,7 @@ fn a_hold_presents_the_shelf_once_and_always_clears_the_panel() {
 #[test]
 fn both_screens_render_at_the_target_panel_geometry() {
     let mut chess = screen_canvas();
-    paper_chess::render(&mut chess, &ChessScreen::new());
+    paper_chess::render(&mut chess, &ChessScreen::new(), &Game::new());
     let mut home = screen_canvas();
     paper_home::render(&mut home, &home_screen());
 
@@ -159,24 +160,24 @@ fn the_settings_screen_renders_at_the_target_panel_geometry() {
 #[test]
 fn the_two_screens_are_not_the_same_picture() {
     let mut chess = screen_canvas();
-    paper_chess::render(&mut chess, &ChessScreen::new());
+    paper_chess::render(&mut chess, &ChessScreen::new(), &Game::new());
     let mut home = screen_canvas();
     paper_home::render(&mut home, &home_screen());
     assert_ne!(chess.to_png().unwrap(), home.to_png().unwrap());
 }
 
 /// A press at a physical window pixel, all the way to a chess square.
-fn press_square(window: Size, physical: Point, layout: BoardLayout) -> Option<Square> {
+fn press_square(window: Size, physical: Point, layout: ChessLayout) -> Option<Square> {
     let mapping = DisplayMapping::fit(SCREEN, window);
     let at = mapping.to_canvas(physical)?;
     let event = PointerEvent::new(at, PointerPhase::Up, Pointer::Mouse, ContactId::FIRST);
-    layout.square_at(event.at)
+    layout.board.square_at(event.at)
 }
 
 #[test]
 fn a_press_in_a_letterboxed_window_reaches_the_square_under_the_cursor() {
     let mut canvas = screen_canvas();
-    let layout = paper_chess::render(&mut canvas, &ChessScreen::new());
+    let layout = paper_chess::render(&mut canvas, &ChessScreen::new(), &Game::new());
 
     // A wide laptop window: the canvas is pillarboxed, so the mapping has to
     // subtract the bars before anything is in canvas space.
@@ -185,7 +186,7 @@ fn a_press_in_a_letterboxed_window_reaches_the_square_under_the_cursor() {
     assert!(mapping.viewport().x > 0.0, "this window should pillarbox");
 
     for square in Square::all() {
-        let physical = mapping.to_physical(layout.square_rect(square).center());
+        let physical = mapping.to_physical(layout.board.square_rect(square).center());
         assert_eq!(
             press_square(window, physical, layout),
             Some(square),
@@ -198,7 +199,7 @@ fn a_press_in_a_letterboxed_window_reaches_the_square_under_the_cursor() {
 #[test]
 fn a_press_on_a_letterbox_bar_reaches_nothing() {
     let mut canvas = screen_canvas();
-    let layout = paper_chess::render(&mut canvas, &ChessScreen::new());
+    let layout = paper_chess::render(&mut canvas, &ChessScreen::new(), &Game::new());
     let window = Size::new(1600, 1000);
     assert_eq!(press_square(window, Point::new(4.0, 500.0), layout), None);
     assert_eq!(
@@ -210,20 +211,20 @@ fn a_press_on_a_letterbox_bar_reaches_nothing() {
 #[test]
 fn the_same_press_lands_on_the_same_square_at_one_x_and_two_x() {
     let mut canvas = screen_canvas();
-    let layout = paper_chess::render(&mut canvas, &ChessScreen::new());
+    let layout = paper_chess::render(&mut canvas, &ChessScreen::new(), &Game::new());
 
     let logical = (760.0, 1010.0);
     let one_x = DisplayMapping::fit_logical(SCREEN, logical, 1.0);
     let two_x = DisplayMapping::fit_logical(SCREEN, logical, 2.0);
 
     for square in Square::all() {
-        let canvas_point = layout.square_rect(square).center();
+        let canvas_point = layout.board.square_rect(square).center();
         let at_one_x = one_x
             .to_canvas(one_x.to_physical(canvas_point))
-            .and_then(|at| layout.square_at(at));
+            .and_then(|at| layout.board.square_at(at));
         let at_two_x = two_x
             .to_canvas(two_x.to_physical(canvas_point))
-            .and_then(|at| layout.square_at(at));
+            .and_then(|at| layout.board.square_at(at));
         assert_eq!(at_one_x, Some(square));
         assert_eq!(
             at_two_x,
@@ -252,11 +253,11 @@ fn a_press_on_the_home_shelf_reaches_the_tile_under_the_cursor() {
 #[test]
 fn everything_tappable_on_either_screen_is_big_enough_to_tap() {
     let mut chess = screen_canvas();
-    let board = paper_chess::render(&mut chess, &ChessScreen::new());
+    let board = paper_chess::render(&mut chess, &ChessScreen::new(), &Game::new());
     assert!(
-        board.square_size() >= MIN_TOUCH_TARGET,
+        board.board.square_size() >= MIN_TOUCH_TARGET,
         "chess squares are {} px",
-        board.square_size()
+        board.board.square_size()
     );
 
     let mut home = screen_canvas();

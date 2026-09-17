@@ -1,7 +1,7 @@
 //! Composing the home screen.
 
 use paper_sdk::chrome::{self, MARGIN};
-use paper_sdk::{Canvas, Point, TextStyle, palette};
+use paper_sdk::{Action, Canvas, Point, PointerEvent, PointerPhase, TextStyle, palette};
 
 use crate::shelf::{self, ShelfEntry, ShelfLayout};
 
@@ -39,6 +39,45 @@ pub struct HomeScreen {
     pub pressed: Option<usize>,
     /// Text shown at the top right of the status bar.
     pub status: String,
+}
+
+impl HomeScreen {
+    /// Handles a pointer event against the shelf `layout` a draw already
+    /// produced, and says what the app should ask the platform for.
+    ///
+    /// The only entry with nothing to launch, in v1's shelf, is the handoff
+    /// back to stock reMarkable — so a tap that landed on a tile but found no
+    /// [`ShelfEntry::launch`] target is read as that (ADR-0018).
+    pub fn press(&mut self, layout: &ShelfLayout, pointer: &PointerEvent) -> Action {
+        let hit = layout.hit_test(pointer.at);
+        match pointer.phase {
+            // A hovering pen has not pressed anything; highlighting a tile
+            // under it would have the shelf respond to proximity, not a tap.
+            PointerPhase::Hover => Action::None,
+            PointerPhase::Down | PointerPhase::Moved => {
+                if self.pressed == hit {
+                    Action::None
+                } else {
+                    self.pressed = hit;
+                    Action::Redraw
+                }
+            }
+            PointerPhase::Cancelled => {
+                self.pressed = None;
+                Action::Redraw
+            }
+            PointerPhase::Up => {
+                self.pressed = None;
+                match hit.and_then(|index| self.entries.get(index)) {
+                    Some(entry) => match entry.launch() {
+                        Some(id) => Action::Launch(id.clone()),
+                        None => Action::ReturnToStock,
+                    },
+                    None => Action::Redraw,
+                }
+            }
+        }
+    }
 }
 
 /// Draws the home screen and returns the shelf layout used, so the caller can
@@ -232,5 +271,98 @@ mod tests {
         );
         assert!(layout.tiles().is_empty());
         assert!(canvas.ink_coverage() > 0.0, "the chrome still draws");
+    }
+
+    fn press_screen() -> HomeScreen {
+        let manifest = paper_packages::Manifest::parse(
+            "[app]\nid = \"dev.calum.chess\"\nname = \"Chess\"\nversion = \"0.1.0\"\n\
+             protocol = \"1.0\"\nentrypoint = \"bin/chess\"\n",
+        )
+        .expect("a valid manifest");
+        HomeScreen {
+            entries: vec![
+                ShelfEntry::from_manifest(&manifest, ShelfGlyph::Board),
+                ShelfEntry::action("Return to stock", "reMarkable", ShelfGlyph::Stock),
+            ],
+            facts: Vec::new(),
+            pressed: None,
+            status: String::new(),
+        }
+    }
+
+    fn tap(at: Point) -> paper_sdk::PointerEvent {
+        paper_sdk::PointerEvent::new(
+            at,
+            paper_sdk::PointerPhase::Up,
+            paper_sdk::Pointer::Touch,
+            paper_sdk::ContactId::FIRST,
+        )
+    }
+
+    #[test]
+    fn tapping_an_app_tile_asks_to_launch_it() {
+        let mut canvas = canvas();
+        let mut screen = press_screen();
+        let layout = render(&mut canvas, &screen);
+        let tile = layout.tiles()[0].center();
+        assert_eq!(
+            screen.press(&layout, &tap(tile)),
+            paper_sdk::Action::Launch("dev.calum.chess".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn tapping_the_stock_tile_asks_to_return_to_stock() {
+        let mut canvas = canvas();
+        let mut screen = press_screen();
+        let layout = render(&mut canvas, &screen);
+        let tile = layout.tiles()[1].center();
+        assert_eq!(
+            screen.press(&layout, &tap(tile)),
+            paper_sdk::Action::ReturnToStock
+        );
+    }
+
+    #[test]
+    fn tapping_off_every_tile_just_redraws() {
+        let mut canvas = canvas();
+        let mut screen = press_screen();
+        let layout = render(&mut canvas, &screen);
+        assert_eq!(
+            screen.press(&layout, &tap(Point::new(0.0, 0.0))),
+            paper_sdk::Action::Redraw
+        );
+    }
+
+    #[test]
+    fn a_press_highlights_the_tile_it_landed_on_until_release() {
+        let mut canvas = canvas();
+        let mut screen = press_screen();
+        let layout = render(&mut canvas, &screen);
+        let tile = layout.tiles()[0].center();
+        let down = paper_sdk::PointerEvent::new(
+            tile,
+            paper_sdk::PointerPhase::Down,
+            paper_sdk::Pointer::Touch,
+            paper_sdk::ContactId::FIRST,
+        );
+        assert_eq!(screen.press(&layout, &down), paper_sdk::Action::Redraw);
+        assert_eq!(screen.pressed, Some(0));
+    }
+
+    #[test]
+    fn a_cancelled_contact_clears_the_highlight_without_launching_anything() {
+        let mut canvas = canvas();
+        let mut screen = press_screen();
+        let layout = render(&mut canvas, &screen);
+        screen.pressed = Some(0);
+        let cancelled = paper_sdk::PointerEvent::new(
+            layout.tiles()[0].center(),
+            paper_sdk::PointerPhase::Cancelled,
+            paper_sdk::Pointer::Touch,
+            paper_sdk::ContactId::FIRST,
+        );
+        assert_eq!(screen.press(&layout, &cancelled), paper_sdk::Action::Redraw);
+        assert_eq!(screen.pressed, None);
     }
 }

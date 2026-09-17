@@ -15,7 +15,7 @@ use std::str::FromStr;
 /// bump means old apps do not launch at all.
 ///
 /// [`PointerPhase`]: crate::PointerPhase
-pub const CURRENT: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const CURRENT: ProtocolVersion = ProtocolVersion::new(1, 1);
 
 /// A `major.minor` version of the platform/app protocol.
 ///

@@ -214,13 +214,30 @@ pub struct Game {
 impl Game {
     /// The starting position, White to move.
     pub fn new() -> Self {
-        let board = Board::default();
+        Self::from_board(Board::default(), 0)
+    }
+
+    /// Builds a position from FEN, for setting up a specific board — a
+    /// puzzle, a fixture for testing an app built on this crate — rather than
+    /// playing to it one legal move at a time.
+    ///
+    /// `None` for anything [`chess::Board`]'s own FEN parser and sanity check
+    /// refuse, including a position with no king or with the side not to move
+    /// already in check. The fifty-move clock and repetition history are not
+    /// part of FEN and start fresh, exactly as [`Self::new`]'s do.
+    pub fn from_fen(fen: &str) -> Option<Self> {
+        use std::str::FromStr as _;
+        let board = Board::from_str(fen).ok()?;
+        Some(Self::from_board(board, 0))
+    }
+
+    fn from_board(board: Board, halfmove_clock: u32) -> Self {
         let mut position_counts = HashMap::new();
         position_counts.insert(repetition_key(&board), 1);
         Self {
             board,
             outcome: None,
-            halfmove_clock: 0,
+            halfmove_clock,
             position_counts,
             events: Vec::new(),
         }
@@ -229,6 +246,16 @@ impl Game {
     /// Who moves next.
     pub fn side_to_move(&self) -> Color {
         to_color(self.board.side_to_move())
+    }
+
+    /// How many moves and claims have been recorded so far.
+    ///
+    /// Cheap, and useful for exactly one thing: telling a caller whether a
+    /// tap actually changed the game, as distinct from changing only what a
+    /// screen is showing (a selection, a highlight) — a save worth writing
+    /// again versus one that would not.
+    pub fn ply(&self) -> usize {
+        self.events.len()
     }
 
     /// The piece on `square`, if any.
@@ -476,15 +503,7 @@ impl Game {
         use std::str::FromStr as _;
         let board = Board::from_str(fen)
             .unwrap_or_else(|error| panic!("{fen:?} is not valid FEN: {error}"));
-        let mut position_counts = HashMap::new();
-        position_counts.insert(repetition_key(&board), 1);
-        Self {
-            board,
-            outcome: None,
-            halfmove_clock,
-            position_counts,
-            events: Vec::new(),
-        }
+        Self::from_board(board, halfmove_clock)
     }
 }
 
@@ -837,6 +856,16 @@ mod tests {
         let mut game = Game::from_position("7k/6pp/8/8/8/8/8/K3Q3 w - - 0 1", 0);
         game.apply(mv("e1", "e8")).unwrap();
         assert_eq!(game.apply(mv("a1", "a2")), Err(MoveError::GameOver));
+    }
+
+    #[test]
+    fn ply_counts_accepted_moves_and_claims_but_not_refused_ones() {
+        let mut game = Game::new();
+        assert_eq!(game.ply(), 0);
+        game.apply(mv("e2", "e4")).unwrap();
+        assert_eq!(game.ply(), 1);
+        assert_eq!(game.apply(mv("e2", "e4")), Err(MoveError::EmptySquare));
+        assert_eq!(game.ply(), 1, "a refused move does not count");
     }
 
     #[test]

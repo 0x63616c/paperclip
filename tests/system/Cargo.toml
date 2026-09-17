@@ -33,6 +33,7 @@ harness = true
 
 [dev-dependencies]
 paper-chess = { workspace = true }
+paper-chess-rules = { workspace = true }
 paper-device = { workspace = true }
 paper-home = { workspace = true }
 paper-packages = { workspace = true }

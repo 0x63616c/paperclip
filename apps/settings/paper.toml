@@ -6,6 +6,6 @@
 id = "dev.calum.settings"
 name = "Settings"
 version = "0.1.0"
-protocol = "1.0"
+protocol = "1.1"
 entrypoint = "bin/settings"
 assets = []

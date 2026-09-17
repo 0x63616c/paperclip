@@ -3,6 +3,8 @@
 use std::fmt;
 use std::time::Duration;
 
+use crate::id::AppId;
+
 /// Why an app process exists.
 ///
 /// Carried in [`Hello`](crate::Hello) so an app knows, at its first
@@ -125,11 +127,16 @@ impl LifecycleEvent {
 
 /// Something an app asks the platform to do.
 ///
-/// The three things an app may ask for, and nothing else. There is no
-/// "launch that app", no "install this" and no "put me full screen": an app
-/// influences the platform only through these, and everything else is the
-/// host's decision or the user's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+/// Four things an app may ask for, and nothing else. There is no "install
+/// this" and no "put me full screen": an app influences the platform only
+/// through these, and everything else is the host's decision or the user's.
+///
+/// [`Self::Launch`] is the one addition since §8's original sketch (ADR-0016)
+/// — Home cannot do its one job, launching the app a tile names, without it.
+/// It is still not "an app may run anything": the host decides whether the
+/// named app is installed and runnable, exactly as it already decides for
+/// [`Self::Home`] and [`Self::ReturnToStock`]. See ADR-0018.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Request {
@@ -140,18 +147,20 @@ pub enum Request {
     Home,
     /// Leave Paperclip and hand the tablet back to stock reMarkable (§4).
     ReturnToStock,
+    /// Launch a specific installed app. Home's request, and — for now —
+    /// only Home's: nothing else on the shelf has another app to name.
+    Launch(AppId),
 }
 
 /// What an app's event handler decided.
 ///
-/// The `None`/`Redraw`/`Home`/`ReturnToStock` shape §8 asks for. `None` has no
-/// wire representation — it is the *absence* of a request — so the message set
-/// carries [`Request`], which has no way to spell "nothing". An app returning
-/// [`Action::None`] sends nothing at all, which is what an app does for the
-/// overwhelming majority of events it sees.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
-)]
+/// The `None`/`Redraw`/`Home`/`ReturnToStock`/`Launch` shape [`Request`]
+/// carries on the wire. `None` has no wire representation — it is the
+/// *absence* of a request — so the message set carries [`Request`], which has
+/// no way to spell "nothing". An app returning [`Action::None`] sends nothing
+/// at all, which is what an app does for the overwhelming majority of events
+/// it sees.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Action {
@@ -164,16 +173,19 @@ pub enum Action {
     Home,
     /// [`Request::ReturnToStock`].
     ReturnToStock,
+    /// [`Request::Launch`].
+    Launch(AppId),
 }
 
 impl Action {
     /// The request this action sends, if it sends one.
-    pub const fn request(self) -> Option<Request> {
+    pub fn request(self) -> Option<Request> {
         match self {
             Self::None => None,
             Self::Redraw => Some(Request::Redraw),
             Self::Home => Some(Request::Home),
             Self::ReturnToStock => Some(Request::ReturnToStock),
+            Self::Launch(id) => Some(Request::Launch(id)),
         }
     }
 }
@@ -184,6 +196,7 @@ impl From<Request> for Action {
             Request::Redraw => Self::Redraw,
             Request::Home => Self::Home,
             Request::ReturnToStock => Self::ReturnToStock,
+            Request::Launch(id) => Self::Launch(id),
         }
     }
 }
@@ -191,15 +204,25 @@ impl From<Request> for Action {
 #[cfg(test)]
 mod tests {
     use super::{Action, ExitReason, LifecycleEvent, Request};
+    use crate::id::AppId;
     use std::time::Duration;
+
+    fn chess_id() -> AppId {
+        "dev.calum.chess".parse().expect("a valid app id")
+    }
 
     /// `Action::None` must not be spellable on the wire, or a host would have
     /// to decide what an app meant by asking for nothing.
     #[test]
     fn doing_nothing_is_not_a_message() {
         assert_eq!(Action::None.request(), None);
-        for action in [Action::Redraw, Action::Home, Action::ReturnToStock] {
-            let request = action.request().expect("sends something");
+        for action in [
+            Action::Redraw,
+            Action::Home,
+            Action::ReturnToStock,
+            Action::Launch(chess_id()),
+        ] {
+            let request = action.clone().request().expect("sends something");
             assert_eq!(Action::from(request), action);
         }
     }
@@ -228,7 +251,12 @@ mod tests {
 
     #[test]
     fn requests_round_trip_through_their_wire_form() {
-        for request in [Request::Redraw, Request::Home, Request::ReturnToStock] {
+        for request in [
+            Request::Redraw,
+            Request::Home,
+            Request::ReturnToStock,
+            Request::Launch(chess_id()),
+        ] {
             let json = serde_json::to_string(&request).unwrap();
             assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), request);
         }
@@ -236,5 +264,11 @@ mod tests {
             serde_json::to_string(&Request::ReturnToStock).unwrap(),
             "\"return-to-stock\""
         );
+    }
+
+    #[test]
+    fn a_launch_request_names_the_app_on_the_wire() {
+        let json = serde_json::to_string(&Request::Launch(chess_id())).unwrap();
+        assert_eq!(json, "{\"launch\":\"dev.calum.chess\"}");
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "paper-chess"
-description = "The Chess screen: board geometry, piece drawing and the starting position."
+description = "The Chess app: board geometry, piece drawing and the interactive game."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,12 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+paper-chess-rules = { workspace = true }
 paper-sdk = { workspace = true }
+
+[dev-dependencies]
+paper-protocol = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

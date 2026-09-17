@@ -1366,7 +1366,10 @@ dependencies = [
 name = "paper-chess"
 version = "0.1.0"
 dependencies = [
+ "paper-chess-rules",
+ "paper-protocol",
  "paper-sdk",
+ "tempfile",
 ]
 
 [[package]]
@@ -1495,6 +1498,7 @@ name = "paper-system-tests"
 version = "0.1.0"
 dependencies = [
  "paper-chess",
+ "paper-chess-rules",
  "paper-device",
  "paper-home",
  "paper-packages",
@@ -1511,6 +1515,7 @@ dependencies = [
  "clap",
  "paper-app-store",
  "paper-chess",
+ "paper-chess-rules",
  "paper-device",
  "paper-home",
  "paper-host",

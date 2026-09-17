@@ -24,3 +24,4 @@ device survey and several of these are bets.
 | [0015](0015-settings-default-app-and-host-boundary.md) | Settings is a default app, and its Host boundary |
 | [0016](0016-app-protocol-and-the-sdk-boundary.md) | The app protocol, and what the SDK is not |
 | [0017](0017-chess-rules-library.md) | Chess rules library, and where it lives |
+| [0018](0018-launch-request.md) | A fourth request: `Launch` |

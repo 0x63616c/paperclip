@@ -1,13 +1,14 @@
 //! The screens the preview can show, and the state behind them.
 
 use paper_app_store::{AppStoreScreen, StoreLayout};
-use paper_chess::{BoardLayout, ChessScreen};
+use paper_chess::{ChessLayout, ChessScreen};
+use paper_chess_rules::Game;
 use paper_home::{HomeScreen, ShelfEntry, ShelfGlyph, ShelfLayout, SystemFact};
 use paper_packages::Manifest;
 use paper_packages::inventory::{AppEntry, CatalogStatus, Inventory};
-use paper_sdk::{Canvas, SCREEN};
 #[cfg(feature = "desktop")]
-use paper_sdk::{PointerEvent, PointerPhase};
+use paper_sdk::{Action, PointerEvent, PointerPhase};
+use paper_sdk::{Canvas, SCREEN};
 use paper_settings::{PageLayout, PlaceholderHost, SettingsLayout, SettingsScreen};
 
 use crate::error::CommandError;
@@ -106,6 +107,7 @@ pub(crate) struct Screens {
     current: Screen,
     home: HomeScreen,
     chess: ChessScreen,
+    chess_game: Game,
     settings: SettingsScreen,
     // Only the preview window drives Settings interactively; the device build
     // renders and presents, so it carries neither the host nor the handlers.
@@ -113,7 +115,7 @@ pub(crate) struct Screens {
     settings_host: PlaceholderHost,
     app_store: AppStoreScreen,
     shelf: Option<ShelfLayout>,
-    board: Option<BoardLayout>,
+    board: Option<ChessLayout>,
     settings_layout: Option<SettingsLayout>,
     app_store_layout: Option<StoreLayout>,
 }
@@ -152,6 +154,7 @@ impl Screens {
             current: Screen::Home,
             home,
             chess: ChessScreen::new(),
+            chess_game: Game::new(),
             settings,
             #[cfg(feature = "desktop")]
             settings_host,
@@ -173,7 +176,9 @@ impl Screens {
     pub(crate) fn render(&mut self, canvas: &mut Canvas) {
         match self.current {
             Screen::Home => self.shelf = Some(paper_home::render(canvas, &self.home)),
-            Screen::Chess => self.board = Some(paper_chess::render(canvas, &self.chess)),
+            Screen::Chess => {
+                self.board = Some(paper_chess::render(canvas, &self.chess, &self.chess_game))
+            }
             Screen::Settings => {
                 self.settings_layout = Some(paper_settings::render(canvas, &self.settings))
             }
@@ -240,31 +245,26 @@ impl Screens {
     pub(crate) fn pointer(&mut self, event: PointerEvent) {
         match self.current {
             Screen::Home => {
-                let Some(shelf) = self.shelf.as_ref() else {
+                let Some(shelf) = self.shelf.clone() else {
                     return;
                 };
-                let hit = shelf.hit_test(event.at);
-                match event.phase {
-                    // A hovering pen has not pressed anything. Highlighting a
-                    // tile under it would have the shelf respond to the pen
-                    // being near the glass, which is not what a tap is.
-                    PointerPhase::Hover => {}
-                    PointerPhase::Down | PointerPhase::Moved => self.home.pressed = hit,
-                    PointerPhase::Cancelled => self.home.pressed = None,
-                    PointerPhase::Up => {
-                        self.home.pressed = None;
-                        // Only the Chess tile leads anywhere in Stage 1. The
-                        // other two are drawn because the shelf is the
-                        // deliverable, not because they work.
-                        if hit == Some(0) {
-                            self.current = Screen::Chess;
-                        }
-                    }
+                // `HomeScreen::press` is the real interaction logic (ADR-0018);
+                // the preview just has to act on what it asks for, the same
+                // way a real host would.
+                if let Action::Launch(id) = self.home.press(&shelf, &event)
+                    && id.as_str() == "dev.calum.chess"
+                {
+                    self.current = Screen::Chess;
                 }
             }
             Screen::Chess => {
-                if let (Some(board), PointerPhase::Up) = (self.board, event.phase) {
-                    self.chess.press(board, event.at);
+                if let Some(board) = self.board
+                    && matches!(
+                        self.chess.press(&mut self.chess_game, &board, &event),
+                        Action::Home
+                    )
+                {
+                    self.current = Screen::Home;
                 }
             }
             Screen::Settings => {

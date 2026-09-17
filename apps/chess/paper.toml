@@ -8,7 +8,7 @@
 [app]
 id = "dev.calum.chess"
 name = "Chess"
-version = "0.1.0"
-protocol = "1.0"
+version = "0.2.0"
+protocol = "1.1"
 entrypoint = "bin/chess"
 assets = []

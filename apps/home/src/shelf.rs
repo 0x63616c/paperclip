@@ -1,6 +1,6 @@
 //! Shelf entries and where their tiles land.
 
-use paper_packages::Manifest;
+use paper_packages::{AppId, Manifest};
 use paper_sdk::chrome::MARGIN;
 use paper_sdk::{Canvas, Point, Rect, TextStyle, palette};
 
@@ -26,25 +26,33 @@ pub struct ShelfEntry {
     label: String,
     detail: String,
     glyph: ShelfGlyph,
+    launch: Option<AppId>,
 }
 
 impl ShelfEntry {
     /// Builds an entry from an installed app's manifest.
+    ///
+    /// Tapping it returns [`Action::Launch`](paper_sdk::Action::Launch) with
+    /// the manifest's own id (ADR-0018) — this is the one constructor that
+    /// makes a tile do something on its own rather than only carrying the
+    /// text drawn on it.
     pub fn from_manifest(manifest: &Manifest, glyph: ShelfGlyph) -> Self {
         Self {
             label: manifest.name().to_string(),
             detail: format!("V{}", manifest.version()),
             glyph,
+            launch: Some(manifest.id().clone()),
         }
     }
 
     /// Builds an entry for something that is not an app — the handoff back to
-    /// stock reMarkable, which has no manifest and never will.
+    /// stock reMarkable, which has no manifest, no id, and nothing to launch.
     pub fn action(label: impl Into<String>, detail: impl Into<String>, glyph: ShelfGlyph) -> Self {
         Self {
             label: label.into(),
             detail: detail.into(),
             glyph,
+            launch: None,
         }
     }
 
@@ -61,6 +69,11 @@ impl ShelfEntry {
     /// Which mark to draw.
     pub fn glyph(&self) -> ShelfGlyph {
         self.glyph
+    }
+
+    /// The app a tap on this tile should launch, if it is one.
+    pub fn launch(&self) -> Option<&AppId> {
+        self.launch.as_ref()
     }
 }
 
@@ -275,6 +288,7 @@ mod tests {
         assert_eq!(entry.label(), "Chess");
         assert_eq!(entry.detail(), "V0.3.1");
         assert_eq!(entry.glyph(), ShelfGlyph::Board);
+        assert_eq!(entry.launch(), Some(manifest.id()));
     }
 
     #[test]
@@ -282,6 +296,7 @@ mod tests {
         let entry = ShelfEntry::action("Return to stock", "reMarkable", ShelfGlyph::Stock);
         assert_eq!(entry.label(), "Return to stock");
         assert_eq!(entry.detail(), "reMarkable");
+        assert_eq!(entry.launch(), None, "there is nothing to launch it into");
     }
 
     #[test]
