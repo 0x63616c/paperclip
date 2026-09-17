@@ -79,6 +79,15 @@ docker run --rm --platform linux/arm64 \
                 --target-dir /src/target/device-container
         fi
     '
+status=$?
+if [ "$status" -ne 0 ]; then
+    # The output file from a PREVIOUS run survives a failed build, so its mere
+    # existence proves nothing. Reporting "built:" over a compile error sends a
+    # stale binary to the tablet and every conclusion drawn from it is wrong.
+    echo "build failed (docker exited $status) - the binary on disk, if any, is stale" >&2
+    exit "$status"
+fi
+
 if [ "$kind" = bin ]; then
     out=release/$target
 else

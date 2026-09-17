@@ -32,6 +32,10 @@
 
 #include "paperclip_ep.h"
 
+#include <cstdint>
+#include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QRect>
 #include <QtGui/QImage>
@@ -152,6 +156,9 @@ struct paperclip_ep {
     QImage front;
     QImage back;
     QImage aux;
+    /* Borrowed, never owned: the engine's own aux QImage, the surface it
+     * actually renders from. Lives inside the EPFramebuffer object. */
+    QImage *engine_aux = nullptr;
     /* `front`'s pixel address, cached in `open` *before* setBuffers runs — at
      * which point the refcount is still 1, so taking it cannot copy anything
      * and the address is stable for the handle's life.
@@ -169,6 +176,120 @@ struct paperclip_ep {
     size_t pixel_count = 0;
     pthread_t owner = {};
 };
+
+namespace {
+/* DIAGNOSTIC (white-panel investigation). PAPERCLIP_EP_DEBUG=1 dumps what the
+ * engine object actually contains, so the buffer question is answered by
+ * observation instead of by a hardcoded offset nobody can check from here. */
+static bool ep_debug() { return ::getenv("PAPERCLIP_EP_DEBUG") != nullptr; }
+
+static std::FILE *ep_log()
+{
+    static std::FILE *f = std::fopen("/tmp/paperclip-ep-debug.log", "a");
+    return f != nullptr ? f : stderr;
+}
+
+/* Find the engine's 32-bit drawing surface by looking for it, rather than
+ * trusting an offset read off someone else's firmware. The panel-sized image
+ * whose bytesPerLine implies 4 bytes per pixel is the one swapBuffers scans
+ * out; the Grayscale8 image of the same dimensions is engine-internal. */
+static QImage *find_draw_surface(void *engine, int want_w, int want_h)
+{
+    QImage *best = nullptr;
+    /* Only the offsets the disassembly actually names. A blind sweep segfaults:
+     * a plausible-looking pointer is not necessarily a QImageData. An explicit
+     * PAPERCLIP_AUX_OFFSET overrides, so a new build can be probed without a
+     * rebuild. */
+    std::ptrdiff_t candidates[] = {0x88, 0xa8, 0xc8};
+    if (const char *forced = ::getenv("PAPERCLIP_AUX_OFFSET")) {
+        candidates[0] = static_cast<std::ptrdiff_t>(::strtol(forced, nullptr, 0));
+        candidates[1] = candidates[0];
+        candidates[2] = candidates[0];
+    }
+    for (std::ptrdiff_t off : candidates) {
+        char *base = reinterpret_cast<char *>(engine) + off;
+        void *dptr = nullptr;
+        ::memcpy(&dptr, base, sizeof(dptr));
+        if (dptr == nullptr || reinterpret_cast<uintptr_t>(dptr) < 0x1000
+            || (reinterpret_cast<uintptr_t>(dptr) & 0x7) != 0) {
+            continue;
+        }
+        QImage *img = reinterpret_cast<QImage *>(base);
+        const int w = img->width();
+        const int h = img->height();
+        if (w != want_w || h != want_h) {
+            continue;
+        }
+        const long long bpl = static_cast<long long>(img->bytesPerLine());
+        if (ep_debug()) {
+            std::fprintf(ep_log(), "[ep] candidate +0x%02lx %dx%d fmt=%d bpl=%lld bits=%p\n",
+                         static_cast<unsigned long>(off), w, h,
+                         static_cast<int>(img->format()), bpl,
+                         static_cast<const void *>(img->constBits()));
+            std::fflush(ep_log());
+        }
+        /* Dimensions alone do not identify the surface: the engine holds a
+         * Grayscale8 image of exactly the same 1620x2160, and binding to it
+         * reports a plausible-looking panel while nothing reaches the glass.
+         * The format is what separates them. RGB32/ARGB32/ARGB32_Premultiplied
+         * are the 32bpp scanout formats; Grayscale8 (24) is engine-internal. */
+        const int fmt = static_cast<int>(img->format());
+        const bool is_32bpp = (fmt == 4 || fmt == 5 || fmt == 6);
+        const bool stride_agrees = bpl >= static_cast<long long>(want_w) * 4;
+        if (is_32bpp && stride_agrees) {
+            best = img;
+        }
+    }
+    return best;
+}
+
+static void dump_candidate(const char *label, void *engine, std::ptrdiff_t off)
+{
+    char *base = reinterpret_cast<char *>(engine) + off;
+    /* A QImage is one d-pointer. Refuse to touch anything that cannot be one,
+     * so a bad offset prints "implausible" rather than killing the process. */
+    void *dptr = nullptr;
+    ::memcpy(&dptr, base, sizeof(dptr));
+    if (dptr == nullptr || reinterpret_cast<uintptr_t>(dptr) < 0x1000
+        || (reinterpret_cast<uintptr_t>(dptr) & 0x7) != 0) {
+        std::fprintf(ep_log(), "  +0x%02lx %-12s d=%p implausible, not probed\n",
+                     static_cast<unsigned long>(off), label, dptr);
+        return;
+    }
+    const QImage *img = reinterpret_cast<const QImage *>(base);
+    const int w = img->width();
+    const int h = img->height();
+    const int fmt = static_cast<int>(img->format());
+    const qsizetype bpl = img->bytesPerLine();
+    const uchar *bits = img->constBits();
+    std::fprintf(ep_log(),
+                 "  +0x%02lx %-12s d=%p  %dx%d fmt=%d bpl=%lld bits=%p\n",
+                 static_cast<unsigned long>(off), label, dptr, w, h, fmt,
+                 static_cast<long long>(bpl), static_cast<const void *>(bits));
+}
+
+static void dump_engine(void *engine)
+{
+    std::fprintf(ep_log(), "[ep] engine=%p  candidate QImages:\n", engine);
+    dump_candidate("main?", engine, 0x88);
+    dump_candidate("aux?", engine, 0xa8);
+    dump_candidate("alt?", engine, 0xc8);
+    std::fprintf(ep_log(), "[ep] first 0x110 bytes of the engine object:\n");
+    const unsigned char *raw = reinterpret_cast<const unsigned char *>(engine);
+    for (int row = 0; row < 0x110; row += 16) {
+        std::fprintf(ep_log(), "  %04x:", row);
+        for (int i = 0; i < 16; ++i) {
+            std::fprintf(ep_log(), " %02x", raw[row + i]);
+        }
+        std::fprintf(ep_log(), "\n");
+    }
+    std::fflush(ep_log());
+}
+
+/* Offset of the aux QImage inside EPFramebufferAcep2 on this image.
+ * swapBuffers_impl derives the panel rect from the QImage at this+0xa8. */
+static constexpr std::ptrdiff_t kAuxBufferOffset = 0xa8;
+} // namespace
 
 extern "C" {
 
@@ -250,13 +371,33 @@ int32_t paperclip_ep_open(paperclip_ep **out)
          * moment `front` is unshared, so `bits()` cannot copy and the address
          * it returns is the one the engine is about to start sharing. Taking
          * it any later is the WWW-29 bug. */
-        handle->pixels = reinterpret_cast<uint32_t *>(handle->front.bits());
+        /* The engine renders from ITS OWN aux QImage, allocated during
+         * EPFramebuffer::instance(). setBuffers is an engine-internal init call
+         * — handing it our images does nothing, which is why every present so
+         * far painted the engine's blank buffer white. */
+        handle->engine_aux = find_draw_surface(engine, kPanelWidth, kPanelHeight);
+        if (handle->engine_aux == nullptr) {
+            delete handle;
+            return fail(PAPERCLIP_EP_NOT_OPEN,
+                        "no panel-sized 32bpp QImage found inside the engine object");
+        }
+        if (ep_debug()) {
+            dump_engine(engine);
+        }
+        /* constBits(), NEVER bits(): the engine's own QImage is shared
+         * internally, so the non-const accessor would detach it onto fresh
+         * memory — we would draw into a private copy while the engine kept
+         * presenting the white original. Same failure as WWW-29, on the far
+         * side of the boundary. Writing through the const pointer is
+         * deliberate: this memory is the engine's scanout surface. */
+        handle->pixels = const_cast<uint32_t *>(
+            reinterpret_cast<const uint32_t *>(handle->engine_aux->constBits()));
         if (handle->pixels == nullptr) {
             delete handle;
-            return fail(PAPERCLIP_EP_OUT_OF_MEMORY, "the front buffer has no pixels");
+            return fail(PAPERCLIP_EP_OUT_OF_MEMORY, "the engine's aux buffer has no pixels");
         }
-        handle->pixel_count = static_cast<size_t>(handle->front.bytesPerLine() / 4)
-            * static_cast<size_t>(handle->front.height());
+        handle->pixel_count = static_cast<size_t>(handle->engine_aux->bytesPerLine() / 4)
+            * static_cast<size_t>(handle->engine_aux->height());
 
         /* The engine presents from `front`, the first element of the tuple,
          * which is also what `paperclip_ep_buffer` hands out.
@@ -274,7 +415,8 @@ int32_t paperclip_ep_open(paperclip_ep **out)
          * what was sent" was this side's buffer agreeing with itself and would
          * have read the same however the engine behaved. The conclusion
          * survived; the evidence for it did not. ADR-0009 records both. */
-        engine->setBuffers(std::make_tuple(handle->front, handle->back), &handle->aux);
+        /* Deliberately NOT calling setBuffers: it is the engine's own init
+         * call and our images are not what it renders from. */
 
         *out = handle;
         g_last_error.clear();
@@ -336,7 +478,8 @@ int32_t attached(paperclip_ep *ep) noexcept
          * absence of a buffer, not a detached one. */
         return fail(PAPERCLIP_EP_NOT_OPEN, "the front buffer was never cached");
     }
-    if (ep->front.constBits() != reinterpret_cast<const uchar *>(ep->pixels)) {
+    if (ep->engine_aux == nullptr
+        || ep->engine_aux->constBits() != reinterpret_cast<const uchar *>(ep->pixels)) {
         return fail(PAPERCLIP_EP_DETACHED,
                     "the front buffer detached from the engine's: the frame that was drawn "
                     "is not the frame the engine holds");
@@ -359,6 +502,7 @@ int32_t attached(paperclip_ep *ep) noexcept
  * it is real information the Rust side carries, and because the vendor has a
  * separate notion of content type that a later revision may need to pass
  * somewhere else; it simply does not belong here. */
+
 int32_t present(paperclip_ep *ep, QRect rect, int32_t content, int32_t mode,
                 int32_t full) noexcept
 {
@@ -370,6 +514,30 @@ int32_t present(paperclip_ep *ep, QRect rect, int32_t content, int32_t mode,
     try {
         const int screen_mode = mode;
         const int flags = full != 0 ? 1 : 0;
+        /* DIAGNOSTIC PROBE (WWW-?? white-panel investigation). With
+         * PAPERCLIP_PROBE_FILL=<hex ARGB> set, overwrite the whole buffer with
+         * one colour immediately before the swap. A solid fill is the only
+         * stimulus that distinguishes "the engine never reads our memory" from
+         * "the engine reads it and misinterprets the content" — the Home
+         * screen is near-white and cannot tell those apart. Remove once the
+         * panel renders. */
+        if (const char *probe = ::getenv("PAPERCLIP_PROBE_FILL")) {
+            const uint32_t value =
+                static_cast<uint32_t>(::strtoul(probe, nullptr, 16));
+            for (size_t i = 0; i < ep->pixel_count; ++i) {
+                ep->pixels[i] = value;
+            }
+        }
+        if (ep_debug()) {
+            std::fprintf(ep_log(),
+                         "[ep] writing to %p (%zu px); engine_aux->bits()=%p "
+                         "bpl=%lld  first px=%08x mid px=%08x\n",
+                         static_cast<void *>(ep->pixels), ep->pixel_count,
+                         static_cast<void *>(const_cast<uchar *>(ep->engine_aux->constBits())),
+                         static_cast<long long>(ep->engine_aux->bytesPerLine()),
+                         ep->pixels[0], ep->pixels[ep->pixel_count / 2]);
+            std::fflush(ep_log());
+        }
         ep->engine->swapBuffers(
             rect, static_cast<EPScreenMode>(screen_mode),
             QFlags<EPFramebuffer::UpdateFlag>(
@@ -397,9 +565,9 @@ int32_t paperclip_ep_geometry(paperclip_ep *ep, int32_t *width, int32_t *height,
         return fail(PAPERCLIP_EP_INVALID_ARGUMENT, "paperclip_ep_geometry: null out parameter");
     }
     try {
-        *width = ep->front.width();
-        *height = ep->front.height();
-        *stride_pixels = static_cast<int32_t>(ep->front.bytesPerLine() / 4);
+        *width = ep->engine_aux->width();
+        *height = ep->engine_aux->height();
+        *stride_pixels = static_cast<int32_t>(ep->engine_aux->bytesPerLine() / 4);
         return PAPERCLIP_EP_OK;
     } catch (...) {
         return fail(PAPERCLIP_EP_EXCEPTION, "paperclip_ep_geometry: unknown C++ exception");
@@ -444,7 +612,7 @@ int32_t paperclip_ep_readback(paperclip_ep *ep, int32_t plane, uint32_t *out, in
             if (shared != PAPERCLIP_EP_OK) {
                 return shared;
             }
-            image = &ep->front;
+            image = ep->engine_aux;
             break;
         }
         case PAPERCLIP_EP_PLANE_BACK:
