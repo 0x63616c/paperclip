@@ -13,6 +13,13 @@
 //! key and are behind the `publishing` feature, so the device build does not
 //! contain them. `install`, `list`, `rollback` and `recover` hold only public
 //! keys, and do to a store exactly what the tablet does to its own (§12).
+//!
+//! Stage 9 adds `upgrade` and `remove`. `upgrade` lives here rather than in a
+//! binary of its own because §13 asks for an updater independent of the host
+//! being replaced, and `paperctl` already is one: it sits outside `releases/`,
+//! because it is what the restore unit runs when the supervisor has died. The
+//! word "updater" is internal and appears in no command, screen or
+//! user-facing document.
 
 #[cfg(feature = "desktop")]
 mod dev;
@@ -28,6 +35,8 @@ mod packaging;
 mod preview;
 #[cfg(feature = "apps")]
 mod screens;
+mod setup;
+mod upgrade;
 
 use std::process::ExitCode;
 
@@ -94,6 +103,15 @@ enum Command {
     Rollback(install::RollbackArgs),
     /// Finish or undo whatever an interrupted install left behind.
     Recover(install::RecoverArgs),
+    /// Establish Paperclip on a tablet, in stages (§14).
+    Setup(setup::SetupArgs),
+    /// Replace Paperclip itself (§13).
+    Upgrade {
+        #[command(subcommand)]
+        command: upgrade::UpgradeCommand,
+    },
+    /// Take Paperclip off the device, keeping notebooks and app data (§14).
+    Remove(upgrade::RemoveArgs),
 }
 
 /// Which screen to draw.
@@ -178,6 +196,9 @@ fn run(cli: Cli) -> Result<(), CommandError> {
         Command::List(args) => install::list(&args),
         Command::Rollback(args) => install::rollback(&args),
         Command::Recover(args) => install::recover(&args),
+        Command::Setup(args) => setup::run(&args),
+        Command::Upgrade { command } => upgrade::run(command),
+        Command::Remove(args) => upgrade::remove(&args),
     }
 }
 

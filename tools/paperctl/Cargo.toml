@@ -30,7 +30,7 @@ desktop = ["apps", "paper-sdk/desktop"]
 # signing key. Off in the device build for the same reason `paper-packages`
 # gates its own publishing half — the tablet installs and verifies, and must
 # not contain a code path that can sign a release (§12).
-publishing = ["paper-packages/publishing"]
+publishing = ["paper-packages/publishing", "paper-updater/publishing"]
 # Link the vendor waveform engine, so `paperctl open` can reach the glass.
 # aarch64 Linux only, and it needs the vendor library off the device; see
 # `platform/device/native/README.md`. Without it `open` refuses rather than
@@ -49,6 +49,7 @@ paper-packages = { workspace = true }
 paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
 paper-settings = { workspace = true, optional = true }
+paper-updater = { workspace = true }
 semver = { workspace = true }
 thiserror = { workspace = true }
 

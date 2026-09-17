@@ -228,4 +228,27 @@ pub(crate) enum CommandError {
         #[source]
         source: io::Error,
     },
+
+    /// `paperctl setup` found a prerequisite missing.
+    ///
+    /// No detail here on purpose: the stage table above it already named every
+    /// one, and repeating the first in an error line is how the others get
+    /// missed.
+    #[error("setup did not complete; a prerequisite above is missing")]
+    SetupIncomplete,
+
+    /// A platform upgrade or removal failed.
+    #[error("the platform operation did not complete")]
+    Platform(#[from] paper_updater::UpdateError),
+
+    /// A protocol version on the command line did not parse.
+    #[cfg(feature = "publishing")]
+    #[error("`{value}` is not a protocol version")]
+    Protocol {
+        /// What was typed.
+        value: String,
+        /// Why it is not one.
+        #[source]
+        source: paper_protocol::ParseError,
+    },
 }
