@@ -45,6 +45,7 @@
 pub mod facilities;
 pub mod probe;
 pub mod progress;
+pub mod readiness;
 pub mod report;
 pub mod state;
 pub mod units;
@@ -54,6 +55,7 @@ pub mod linux;
 
 pub use facilities::{CgroupLayout, Controller, Facilities, TreeTermination};
 pub use progress::{MainLoopProgress, Progress, ProgressWatch};
+pub use readiness::{Ladder, Rung};
 pub use report::{IsolationReport, Mechanism, Verdict};
 pub use state::{
     Action, Budget, Diagnosis, Event, ExitKind, FailurePolicy, Foreground, Machine, SessionState,

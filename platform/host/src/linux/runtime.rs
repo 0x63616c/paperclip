@@ -28,7 +28,24 @@ use crate::state::{
     Action, Budget, Diagnosis, Escalation, Event, ExitKind, FailurePolicy, Foreground, Machine,
     SessionState, StopReason,
 };
+use crate::readiness::{self, Ladder, Rung};
 use crate::units::{SESSION_TARGET, SessionPaths};
+
+/// The ELF machine this build targets, for the `home` rung.
+///
+/// `paper_packages::require_device_entrypoint` asks for aarch64 unconditionally,
+/// which is right for a package being installed *for the tablet* and wrong
+/// here: the VM harness runs on whatever the VM is, and a rung that failed
+/// there would make every harness run report an unhealthy platform.
+const fn machine_here() -> u16 {
+    if cfg!(target_arch = "aarch64") {
+        paper_packages::MACHINE_AARCH64
+    } else if cfg!(target_arch = "x86_64") {
+        0x3E
+    } else {
+        0
+    }
+}
 
 /// Everything the supervisor needs to know about where it is running.
 ///
@@ -217,6 +234,15 @@ pub struct Supervisor {
     /// outgoing owner would be reporting it against the wrong session, and the
     /// machine would correctly ignore it forever.
     incoming: Option<Foreground>,
+    /// How far this supervisor got on the §13 readiness ladder.
+    ///
+    /// Published in the status file, climbed once at startup, and never
+    /// lowered. The updater reads it from outside the process; nothing in here
+    /// reads it back to make a decision, because a process grading its own
+    /// health is the liveness check the ladder exists to replace.
+    ladder: Ladder,
+    /// Why the climb stopped where it did, when it stopped short.
+    ladder_note: String,
 }
 
 impl Supervisor {
@@ -232,6 +258,8 @@ impl Supervisor {
             session_unit: None,
             queued: Vec::new(),
             incoming: None,
+            ladder: Ladder::new(),
+            ladder_note: String::new(),
             config,
         }
     }
@@ -250,6 +278,13 @@ impl Supervisor {
     pub fn run(&mut self) -> std::io::Result<Outcome> {
         fs::create_dir_all(&self.config.paths.state)?;
         self.write_status();
+        self.climb();
+        // Sent whatever the ladder reached. A supervisor that withheld
+        // `READY=1` because a rung failed would be killed by the unit's start
+        // timeout, and the one process able to say *which* rung failed would
+        // be the one that got taken away. `active` means "it is up and can be
+        // asked"; `ready=` in the status file means "it is healthy", and §13
+        // is explicit that those are not the same claim.
         systemd::notify_ready();
 
         loop {
@@ -623,15 +658,96 @@ impl Supervisor {
         self.config.paths.state.join("stop").exists()
     }
 
+    /// Climbs the §13 readiness ladder once, at startup, rewriting the status
+    /// file at each rung.
+    ///
+    /// Strict: a rung that cannot be claimed stops the climb, so `ready=ready`
+    /// is never written over a supervisor whose Home binary is missing. The
+    /// process keeps running either way — being able to report the failure is
+    /// the whole reason it must not exit.
+    fn climb(&mut self) {
+        self.ladder.reached(Rung::Process);
+
+        // `control`: both files of the control pair exist, so another process
+        // can address this one. The command file is created empty rather than
+        // waited for; a status file with no command file beside it is a
+        // supervisor nobody can talk to.
+        if let Err(error) = fs::write(self.config.command_file(), "") {
+            self.stall(Rung::Control, &format!("command file: {error}"));
+            return;
+        }
+        self.ladder.reached(Rung::Control);
+        self.write_status();
+
+        // `protocol`: the version this build speaks, recorded where an updater
+        // can compare it against what the staged release declared.
+        self.ladder.reached(Rung::Protocol);
+        self.write_status();
+
+        // `device-adapter`: the facilities probe describes THIS machine. The
+        // stock adapter itself exists by construction — `Supervisor::new`
+        // builds it — so the probe is the part that can fail and the part
+        // worth claiming.
+        if let Err(error) = crate::probe::probe() {
+            self.stall(Rung::DeviceAdapter, &format!("facilities probe: {error}"));
+            return;
+        }
+        self.ladder.reached(Rung::DeviceAdapter);
+        self.write_status();
+
+        // `home`: the selected release's Home binary is an executable this
+        // machine can run, established by reading its ELF header rather than
+        // by running it. Running it would be starting a session, which is not
+        // what a health check may do.
+        let home = self.config.paths.current().join("bin/home");
+        match paper_packages::inspect_entrypoint(&home) {
+            Ok(target) if target.machine == machine_here() => {
+                self.ladder.reached(Rung::Home);
+            }
+            Ok(target) => {
+                self.stall(
+                    Rung::Home,
+                    &format!(
+                        "{} is built for machine {:#x}, this is {:#x}",
+                        home.display(),
+                        target.machine,
+                        machine_here()
+                    ),
+                );
+                return;
+            }
+            Err(error) => {
+                self.stall(Rung::Home, &format!("{}: {error}", home.display()));
+                return;
+            }
+        }
+        self.write_status();
+
+        self.ladder.reached(Rung::Ready);
+        self.write_status();
+    }
+
+    /// Records why the climb stopped below `rung`.
+    fn stall(&mut self, rung: Rung, why: &str) {
+        self.ladder_note = format!("{rung}: {why}");
+        eprintln!("paperclip-host: not ready — {}", self.ladder_note);
+        self.write_status();
+    }
+
     fn write_status(&self) {
         let status = format!(
-            "state={}\nforeground={}\nmay_relaunch={}\ndiagnosis={}\n",
+            "state={}\nforeground={}\nmay_relaunch={}\ndiagnosis={}\n\
+             {field}={}\nready_note={}\nprotocol={}\n",
             self.machine.state(),
             self.machine.foreground(),
             self.machine.may_relaunch(),
             self.machine
                 .diagnosis()
                 .map_or_else(String::new, Diagnosis::summary),
+            self.ladder.highest(),
+            self.ladder_note,
+            paper_protocol::CURRENT,
+            field = readiness::STATUS_FIELD,
         );
         let _ = fs::write(self.config.status_file(), status);
     }

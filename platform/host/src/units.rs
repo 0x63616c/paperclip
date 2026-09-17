@@ -99,13 +99,60 @@ impl SessionPaths {
     }
 
     /// The `paperctl` binary, which is also the recovery entry point.
+    ///
+    /// **`bin/`, not `current/bin/`, and that is the whole point of it.**
+    /// `paperctl` is both the recovery bootstrap and the platform updater —
+    /// one binary, because both jobs have the same requirement and it is the
+    /// requirement that decides the placement: the thing that performs the
+    /// swap must not be one of the files being swapped. A second binary beside
+    /// it would satisfy nothing this does not, and would be a second thing to
+    /// keep in step.
+    ///
+    /// It is what
+    /// [`RESTORE_UNIT`](crate::units::RESTORE_UNIT) runs when the supervisor
+    /// has died, and what a person runs over SSH when the screen is wrong. A
+    /// platform update replaces everything under `releases/`, and a recovery
+    /// path that lived there would be a recovery path an update could break
+    /// halfway through replacing it. Updating this binary is a separate
+    /// operation with its own plan (§13).
     pub fn paperctl(&self) -> PathBuf {
         self.root.join("bin/paperctl")
     }
 
-    /// The supervisor binary.
+    /// The supervisor binary, resolved through the selected release.
+    ///
+    /// `current` is a symlink into `releases/<version>/`, so activating a
+    /// staged platform release is a symlink swap and a restart rather than a
+    /// file copy over a binary that something may still be executing (§13).
     pub fn host(&self) -> PathBuf {
-        self.root.join("bin/paperclip-host")
+        self.current().join("bin/paperclip-host")
+    }
+
+    /// Where platform releases are unpacked. `releases/<version>/`.
+    pub fn releases(&self) -> PathBuf {
+        self.root.join("releases")
+    }
+
+    /// The selected platform release. A symlink into [`Self::releases`].
+    pub fn current(&self) -> PathBuf {
+        self.root.join("current")
+    }
+
+    /// The release to fall back to. A symlink into [`Self::releases`].
+    ///
+    /// Named on disk rather than derived, so rollback is a symlink swap and
+    /// the state is legible to someone with a serial cable and `ls -l`.
+    pub fn previous(&self) -> PathBuf {
+        self.root.join("previous")
+    }
+
+    /// The platform's own persistent state, and the update journal with it.
+    ///
+    /// Under [`Self::root`], not under [`Self::state`]: `state` is in `/run`
+    /// and a reboot clears it, which is right for a session and wrong for a
+    /// record of an update that a reboot interrupted.
+    pub fn platform_state(&self) -> PathBuf {
+        self.root.join("state")
     }
 
     /// Where a session records its main-loop progress for the supervisor.

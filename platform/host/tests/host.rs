@@ -919,3 +919,43 @@ fn nothing_in_this_suite_can_be_mistaken_for_enforcement() {
         assert!(error.to_string().contains("only be probed on Linux"));
     }
 }
+
+// --- §13: the unit is what makes activation a symlink swap -------------------
+
+#[test]
+fn the_supervisor_unit_starts_the_selected_release_not_a_fixed_binary() {
+    // Load-bearing for WWW-8. Activating a staged platform release is a
+    // symlink swap and a restart *because* systemd resolves `current` when it
+    // execs. An `ExecStart=` naming `bin/paperclip-host` directly would make
+    // activation a copy over a file something may still be executing, and the
+    // updater's whole transaction would be built on a step that cannot be
+    // made atomic.
+    let units = units_for(&Facilities::paper_pro(), &[]);
+    let host = units.get(HOST_UNIT).expect("a supervisor unit");
+    assert!(
+        host.contents
+            .contains("ExecStart=/home/root/paperclip/current/bin/paperclip-host"),
+        "the supervisor unit must start the selected release:\n{}",
+        host.contents
+    );
+}
+
+#[test]
+fn the_recovery_unit_does_not_resolve_through_the_selected_release() {
+    // The other half of the same decision. `paperctl` is the recovery
+    // bootstrap and the thing that performs an upgrade; a recovery path that
+    // lived inside `releases/` would be a recovery path an upgrade could break
+    // half way through replacing it.
+    let units = units_for(&Facilities::paper_pro(), &[]);
+    let restore = units.get(RESTORE_UNIT).expect("a restore unit");
+    assert!(
+        restore.contents.contains("/home/root/paperclip/bin/paperctl"),
+        "the restore unit must run the bootstrap from outside releases/:\n{}",
+        restore.contents
+    );
+    assert!(
+        !restore.contents.contains("current/bin/paperctl"),
+        "the restore path must not resolve through the selected release:\n{}",
+        restore.contents
+    );
+}
