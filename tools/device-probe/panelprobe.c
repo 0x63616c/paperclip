@@ -418,6 +418,7 @@ int main(int argc, char **argv)
     enum packing hold_pack = PACK_ROWPAIR;   /* --pack */
     int hold_fid = 0;                        /* --hold-fiducials */
     int hold_zones = 0;                      /* --hold-zones */
+    int hold_flat = 0;                       /* --hold-flat */
     int hold_clear = 1;                      /* --no-clear disables */
 
     for (int i = 1; i < argc; i++) {
@@ -433,6 +434,8 @@ int main(int argc, char **argv)
             hold_fid = 1;
         else if (!strcmp(argv[i], "--hold-zones"))
             hold_zones = 1;
+        else if (!strcmp(argv[i], "--hold-flat"))
+            hold_flat = 1;
         else if (!strcmp(argv[i], "--no-clear"))
             hold_clear = 0;
         else if (!strcmp(argv[i], "--pack") && i + 1 < argc) {
@@ -443,7 +446,7 @@ int main(int argc, char **argv)
             else { fprintf(stderr, "unknown --pack %s\n", v); return 64; }
         }
         else {
-            fprintf(stderr, "usage: %s [--watchdog S] [--scene-seconds S] [--fiducials] [--hold S] [--pack rowpair|halves|interleaved] [--hold-fiducials] [--hold-zones] [--no-clear]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--watchdog S] [--scene-seconds S] [--fiducials] [--hold S] [--pack rowpair|halves|interleaved] [--hold-fiducials] [--hold-zones] [--hold-flat] [--no-clear]\n", argv[0]);
             return 64;
         }
     }
@@ -527,7 +530,36 @@ int main(int argc, char **argv)
          * the wrapper's sysfs sampler says whether the panel stayed powered. */
         cur_pack = hold_pack;
         if (hold_clear)
-            clear_panel(6, 0.4);
+            clear_panel(10, 0.6);
+
+        if (hold_flat) {
+            /* No geometry, no packing assumption: hold each full-field state
+             * static for a minute. Every pattern so far has come back as faint
+             * artifacts over a still-legible stock image, which is what you
+             * would expect if scanning out a static buffer disturbs the panel
+             * without ever driving pixels to a target state. If a static
+             * full-field black does not turn the whole panel black, then
+             * static scanout cannot render here and the packing question is
+             * moot until the host drives a real waveform. */
+            const char *label[] = { "BLACK", "WHITE", "BLACK" };
+            const unsigned value[] = { BLACK, WHITE, BLACK };
+            double per_state = t_hold / 3.0;
+            for (int phase = 0; phase < 3; phase++) {
+                logf_("FLAT phase %d/3: full-field %s, static, %.0fs",
+                      phase + 1, label[phase], per_state);
+                fill_panel(value[phase]);
+                for (int t = 0; (double)t < per_state; t++) {
+                    logf_("FLAT %s tick %d", label[phase], t);
+                    hold(1.0);
+                }
+            }
+            logf_("FLAT complete");
+            if (hold_clear)
+                clear_panel(10, 0.6);
+            restore_display();
+            return 0;
+        }
+
         if (hold_fid)
             scene_fiducials();
         else if (hold_zones)
@@ -547,7 +579,7 @@ int main(int argc, char **argv)
         }
         logf_("HOLD complete");
         if (hold_clear)
-            clear_panel(6, 0.4);
+            clear_panel(10, 0.6);
         restore_display();
         return 0;
     }

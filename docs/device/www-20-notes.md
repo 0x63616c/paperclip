@@ -93,3 +93,38 @@ offset, not just a scale.
 - What happens to a custom display session across an actual suspend. Could not
   be forced: `/sys/power/state` is `EBUSY` under autosleep and the tablet was on
   charge, so no suspend occurred during the 26s window the session was held.
+
+## Ghosting, and whether a static scanout can render at all
+
+Three photographs of the tablet, taken across three held patterns, all show the
+same thing: a **crisp, legible stock Xochitl UI** with faint artifacts laid over
+it — heavy grey bands and wedges after the first pass, fine vertical hairlines
+after the later ones. None of them shows the figure that was drawn.
+
+Two conclusions, in increasing order of importance.
+
+**Releasing the display leaves residue.** Xochitl's own repaint does not clear
+it. `clear_panel()` — full-field inversions slow enough for a waveform to
+complete — removes most of it; six cycles at 400ms left hairlines, so it is now
+ten at 600ms. Whether that is sufficient is unverified. Treat a flush before
+releasing DRM master as a §9 requirement, and note that the flush only runs on
+the normal exit path: a crashed adapter still leaves ghosts.
+
+**The panel may not be renderable from a static framebuffer at all.** If the
+scanout were driving the panel, the stock UI would be *gone* during a hold, not
+sitting there legibly underneath. E-paper pixels are driven to a state by a
+sequence of voltage frames, not by a value latched from a framebuffer, and the
+vendor's implementation is named `EPFramebufferSwtcon` — a *software* timing
+controller, i.e. the host generates that sequence. Scanning out a static buffer
+would then disturb the panel's charge, producing exactly these bands and
+hairlines, without ever switching a pixel to a target state. Consistent with
+this: the only scene that produced a clearly visible effect was FLASH, the one
+scene that was *changing*.
+
+`--hold-flat` tests this directly and without any packing assumption: full-field
+black, white, then black again, a minute each. If the screen does not go solid,
+static scanout cannot render here, no packing is correct because packing was
+never what was wrong, and §9's Qt/`libepaper` bridge is the only way to put a
+controlled image on this panel rather than merely a preference.
+
+Result pending Calum's observation.

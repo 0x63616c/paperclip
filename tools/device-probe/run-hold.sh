@@ -1,7 +1,7 @@
 #!/bin/sh
 # WWW-20 interactive hold: put ONE pattern on the panel for a fixed window while
 # Calum looks at it, then restore stock. Usage:
-#   run-hold.sh <seconds> <rowpair|halves|interleaved> [zones|fiducials|geometry]
+#   run-hold.sh <seconds> <rowpair|halves|interleaved> [zones|flat|fiducials|geometry]
 # No `set -e`, no `set -u`, no `date +%s%N`.
 
 SECS="${1:-180}"
@@ -15,6 +15,7 @@ SCENEFLAG=""
 case "$MODE" in
     fiducials) SCENEFLAG="--hold-fiducials" ;;
     zones)     SCENEFLAG="--hold-zones" ;;
+    flat)      SCENEFLAG="--hold-flat" ;;
 esac
 
 ts() { date '+%H:%M:%S'; }
