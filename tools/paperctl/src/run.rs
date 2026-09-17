@@ -1,4 +1,4 @@
-//! `paperctl run` — an interactive Home/Chess session on the tablet's panel
+//! `paperctl run` — an interactive Home/Chess/Settings session on the panel
 //! (§4, WWW-6).
 //!
 //! `paperctl open` puts one static screen on the glass and gives it back.
@@ -67,6 +67,8 @@ pub(crate) enum RunAppArg {
     Home,
     /// The chess app, on the real rules core.
     Chess,
+    /// Settings, over the real store this device has.
+    Settings,
 }
 
 impl RunAppArg {
@@ -74,6 +76,7 @@ impl RunAppArg {
         match self {
             RunAppArg::Home => "home",
             RunAppArg::Chess => "chess",
+            RunAppArg::Settings => "settings",
         }
     }
 }

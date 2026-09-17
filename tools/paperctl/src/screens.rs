@@ -268,31 +268,20 @@ impl Screens {
                 }
             }
             Screen::Settings => {
-                let (Some(layout), PointerPhase::Up) = (&self.settings_layout, event.phase) else {
+                let Some(layout) = self.settings_layout.clone() else {
                     return;
                 };
-                if let Some(confirm) = &layout.confirm {
-                    if confirm.cancel.contains(event.at) {
-                        self.settings.cancel();
-                    } else if confirm.confirm.contains(event.at) {
-                        // Fixture data only: nothing here reaches WWW-7. A
-                        // failed placeholder transaction has nothing useful to
-                        // report to a preview window, so it is dropped rather
-                        // than surfaced.
-                        let _ = self.settings.confirm(&mut self.settings_host);
-                    }
-                    return;
-                }
-                self.settings.press_tab(&layout.nav, event.at);
-                match &layout.page {
-                    PageLayout::Apps(apps) => self.settings.press_apps(apps, event.at),
-                    PageLayout::Grants(grants) => self.settings.press_grants(grants, event.at),
-                    PageLayout::ReadOnly => {}
-                }
-                if layout
-                    .return_to_stock
-                    .is_some_and(|rect| rect.contains(event.at))
-                {
+                // `SettingsScreen::press` is the real interaction logic, the
+                // same call `SettingsApp` makes: the preview only acts on what
+                // it asks for. Its error is dropped because this is fixture
+                // data — a failed placeholder transaction has nothing useful
+                // to tell a preview window.
+                let press = self
+                    .settings
+                    .press(&layout, &event, &mut self.settings_host);
+                if press.action == Action::ReturnToStock {
+                    // There is no stock reMarkable behind a preview window, so
+                    // the nearest honest answer is the shelf.
                     self.current = Screen::Home;
                 }
             }
@@ -370,9 +359,12 @@ fn parse_built_in(app: &'static str, text: &str) -> Result<Manifest, CommandErro
 #[cfg(test)]
 mod golden {
     use paper_device::FrameDigest;
+    use paper_protocol::ExitReason;
     use paper_sdk::SCREEN;
+    use paper_settings::{PlaceholderHost, SettingsApp};
 
     use super::{Screen, Screens};
+    use crate::session::{DevApp, open_session_with};
 
     /// Screen, its frozen digest, and its ink coverage in per mille.
     ///
@@ -471,5 +463,50 @@ mod golden {
             }
             seen.push((screen, digest));
         }
+    }
+
+    /// The frame `SettingsApp` draws at launch, taken from a real session:
+    /// `paper_sdk::run`, a real socket, the app's own `draw`.
+    ///
+    /// The table above freezes what `paper_settings::render` draws when the
+    /// preview calls it directly. That says nothing about what the *app*
+    /// shows when the platform starts it, which is what a Settings tile on
+    /// the shelf actually reaches — and until WWW-37 there was no app to
+    /// start. Asserting the two are the same frame is what keeps the reviewed
+    /// picture and the launched one from drifting apart; it is deliberately
+    /// not a second digest constant, because two constants drift and one
+    /// cannot.
+    ///
+    /// The Host is the fixture, not the store this machine happens to have:
+    /// a digest that changed with whatever is installed locally would assert
+    /// nothing. What a real session uses is `LiveHost` — see
+    /// `session::open_session`.
+    #[test]
+    fn the_settings_app_launches_into_the_frame_the_settings_screen_is_frozen_at() {
+        let (_, frozen, ink) = GOLDEN
+            .into_iter()
+            .find(|(screen, _, _)| *screen == Screen::Settings)
+            .expect("the table freezes the Settings screen");
+
+        let root = std::env::temp_dir().join(format!(
+            "paperctl-settings-app-golden-{}",
+            std::process::id()
+        ));
+        let session = open_session_with(
+            DevApp::Settings(Box::new(SettingsApp::new(PlaceholderHost::new()))),
+            &root,
+        )
+        .expect("a Settings session opens");
+        let digest = FrameDigest::of(&session.frame()).expect("digests");
+        session
+            .shutdown(ExitReason::ReturnToStock)
+            .expect("a Settings session shuts down cleanly");
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(
+            (digest.to_hex().as_str(), digest.ink_per_mille()),
+            (frozen, ink),
+            "the launched Settings app drew {digest}, not the frozen screen"
+        );
     }
 }

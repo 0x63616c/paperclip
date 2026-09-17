@@ -1,9 +1,9 @@
-//! The live half of a Home/Chess session: the loopback connection to the app
-//! thread, and where its published frames land.
+//! The live half of a Home/Chess/Settings session: the loopback connection to
+//! the app thread, and where its published frames land.
 //!
 //! Shared between `paperctl dev` (a window on the Mac) and `paperctl run` (the
 //! real panel on the device, WWW-6): both hand a real, unmodified
-//! [`HomeApp`]/[`ChessApp`] to [`paper_sdk::run`] over a loopback
+//! [`HomeApp`]/[`ChessApp`]/[`SettingsApp`] to [`paper_sdk::run`] over a loopback
 //! [`UnixStream`] and read the frames it publishes back out of a shared
 //! canvas — the same bridge [`dev`](crate::dev) used before this module
 //! existed, gated only on `apps` rather than `desktop` so a device build,
@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use paper_chess::ChessApp;
 use paper_home::{HomeApp, HomeScreen, ShelfEntry, ShelfGlyph, SystemFact};
+use paper_packages::store::Layout;
 use paper_packages::{Manifest, ManifestError};
 use paper_protocol::{
     AppId, AppMessage, AppPaths, Capability, Damage, DrawReason, DrawRequest, ExitReason, FrameId,
@@ -28,9 +29,11 @@ use paper_protocol::{
 use paper_sdk::{
     App, Canvas, Context, Event, SCREEN, SaveError, Surface, SurfaceError, SurfaceProvider,
 };
+use paper_settings::{LiveHost, SettingsApp};
 
 const HOME_MANIFEST: &str = include_str!("../../../apps/home/paper.toml");
 const CHESS_MANIFEST: &str = include_str!("../../../apps/chess/paper.toml");
+const SETTINGS_MANIFEST: &str = include_str!("../../../apps/settings/paper.toml");
 
 /// How long a read on the loopback socket may block waiting for the app
 /// thread before this side gives up on it. See [`open_session`].
@@ -40,7 +43,9 @@ const READ_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SessionError {
     /// `app` is not one this loop knows how to run.
-    #[error("`{app}` is not something this session can run \u{2014} try `home` or `chess`")]
+    #[error(
+        "`{app}` is not something this session can run \u{2014} try `home`, `chess` or `settings`"
+    )]
     UnknownApp {
         /// What was asked for.
         app: String,
@@ -70,23 +75,25 @@ pub(crate) enum SessionError {
 }
 
 /// Which app id a `Launch` request names, resolved to the slug this loop's
-/// callers use — `"home"` or `"chess"`.
+/// callers use — `"home"`, `"chess"` or `"settings"`.
 ///
-/// Both dev and device sessions only ever run the two apps that ship a
+/// Both dev and device sessions only ever run the apps that ship a
 /// dev-runnable entry point (see [`open_session`]'s `UnknownApp`), so this is
 /// a closed match rather than a catalog lookup.
 pub(crate) fn launch_target(id: &AppId) -> Option<&'static str> {
     match id.as_str() {
         "dev.calum.chess" => Some("chess"),
         "dev.calum.home" => Some("home"),
+        "dev.calum.settings" => Some("settings"),
         _ => None,
     }
 }
 
-fn home_screen(chess: &Manifest, status: &str, mode_fact: &str) -> HomeScreen {
+fn home_screen(chess: &Manifest, settings: &Manifest, status: &str, mode_fact: &str) -> HomeScreen {
     HomeScreen {
         entries: vec![
             ShelfEntry::from_manifest(chess, ShelfGlyph::Board),
+            ShelfEntry::from_manifest(settings, ShelfGlyph::Gear),
             ShelfEntry::action("Return to stock", "REMARKABLE", ShelfGlyph::Stock),
         ],
         facts: vec![SystemFact::new("Mode", mode_fact)],
@@ -230,9 +237,35 @@ impl Session {
 /// concrete type instead of a trait object — `App` has no forwarding impl for
 /// `Box<dyn App>`, and adding one is a bigger change to a shared crate than
 /// this local enum is.
-enum DevApp {
+pub(crate) enum DevApp {
+    /// The shelf.
     Home(HomeApp),
+    /// Chess, on the real rules core.
     Chess(Box<ChessApp>),
+    /// Settings, over whichever [`paper_settings::SettingsHost`] the caller
+    /// built — the real store for a session, a fixture for a test.
+    Settings(Box<SettingsApp>),
+}
+
+impl DevApp {
+    /// The slug this app is addressed by on the command line and in a
+    /// `Launch` request.
+    fn slug(&self) -> &'static str {
+        match self {
+            DevApp::Home(_) => "home",
+            DevApp::Chess(_) => "chess",
+            DevApp::Settings(_) => "settings",
+        }
+    }
+
+    /// The manifest compiled in for it — the same file the app ships.
+    fn manifest_text(&self) -> &'static str {
+        match self {
+            DevApp::Home(_) => HOME_MANIFEST,
+            DevApp::Chess(_) => CHESS_MANIFEST,
+            DevApp::Settings(_) => SETTINGS_MANIFEST,
+        }
+    }
 }
 
 impl App for DevApp {
@@ -246,6 +279,7 @@ impl App for DevApp {
         match self {
             DevApp::Home(app) => app.event(event, context),
             DevApp::Chess(app) => app.event(event, context),
+            DevApp::Settings(app) => app.event(event, context),
         }
     }
 
@@ -253,6 +287,7 @@ impl App for DevApp {
         match self {
             DevApp::Home(app) => app.draw(canvas, context),
             DevApp::Chess(app) => app.draw(canvas, context),
+            DevApp::Settings(app) => app.draw(canvas, context),
         }
     }
 
@@ -260,6 +295,7 @@ impl App for DevApp {
         match self {
             DevApp::Home(app) => app.save(context),
             DevApp::Chess(app) => app.save(context),
+            DevApp::Settings(app) => app.save(context),
         }
     }
 
@@ -267,6 +303,7 @@ impl App for DevApp {
         match self {
             DevApp::Home(app) => app.damage(),
             DevApp::Chess(app) => app.damage(),
+            DevApp::Settings(app) => app.damage(),
         }
     }
 }
@@ -285,23 +322,41 @@ pub(crate) fn open_session(
     mode_fact: &str,
 ) -> Result<Session, SessionError> {
     let chess_manifest = Manifest::parse(CHESS_MANIFEST)?;
-    let (manifest_text, app) = match app_slug {
-        "chess" => (CHESS_MANIFEST, DevApp::Chess(Box::new(ChessApp::new()))),
-        "home" => (
-            HOME_MANIFEST,
-            DevApp::Home(HomeApp::new(home_screen(
-                &chess_manifest,
-                status,
-                mode_fact,
-            ))),
-        ),
+    let settings_manifest = Manifest::parse(SETTINGS_MANIFEST)?;
+    let app = match app_slug {
+        "chess" => DevApp::Chess(Box::new(ChessApp::new())),
+        "home" => DevApp::Home(HomeApp::new(home_screen(
+            &chess_manifest,
+            &settings_manifest,
+            status,
+            mode_fact,
+        ))),
+        // The real store, not the fixture the desktop preview draws: a
+        // Settings page that invented its numbers would be worse than one
+        // that reports an empty store, which is what a Mac with no
+        // `PAPERCLIP_ROOT` honestly has. See `paper_settings::LiveHost`.
+        "settings" => DevApp::Settings(Box::new(SettingsApp::new(LiveHost::new(
+            Layout::from_environment(),
+        )))),
         other => {
             return Err(SessionError::UnknownApp {
                 app: other.to_owned(),
             });
         }
     };
-    let manifest = Manifest::parse(manifest_text)?;
+    open_session_with(app, storage_root)
+}
+
+/// Opens a session on an app the caller already built, under `storage_root`,
+/// and waits for its first frame.
+///
+/// [`open_session`] is this with the app chosen by slug. Taking a [`DevApp`]
+/// directly is what lets a test run the same session loop over an app it
+/// constructed itself — a Settings over a fixture Host, say — rather than
+/// whatever the environment happens to hold.
+pub(crate) fn open_session_with(app: DevApp, storage_root: &Path) -> Result<Session, SessionError> {
+    let app_slug = app.slug();
+    let manifest = Manifest::parse(app.manifest_text())?;
 
     let app_storage = storage_root.join(app_slug);
     let private = app_storage.join("private");

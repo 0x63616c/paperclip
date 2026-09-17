@@ -7,12 +7,14 @@
 //! manipulate the storage layout or an install policy directly (§6, §11):
 //! every read and every write goes through that trait.
 
+mod app;
 mod confirm;
 mod host;
 mod nav;
 mod pages;
 mod screen;
 
+pub use app::SettingsApp;
 pub use confirm::{ConfirmDialog, ConfirmLayout};
 pub use host::{
     CatalogStatus, DiagnosticEntry, GrantSummary, HostOpError, InstalledAppSummary, LiveHost,
@@ -20,4 +22,4 @@ pub use host::{
 };
 pub use nav::{NAV_HEIGHT, NavLayout, SettingsPage};
 pub use pages::{AppRowLayout, AppsLayout, GrantsLayout};
-pub use screen::{PageLayout, SettingsLayout, SettingsScreen, render};
+pub use screen::{PageLayout, Press, SettingsLayout, SettingsScreen, render};

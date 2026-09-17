@@ -7,7 +7,7 @@ use paper_sdk::{Canvas, Point, Rect, TextStyle, palette};
 /// The mark drawn on a tile.
 ///
 /// A closed set rather than an image path: Stage 1 has no asset pipeline, and
-/// three drawn marks are honest about that where three missing PNGs would not
+/// four drawn marks are honest about that where four missing PNGs would not
 /// be. Real app icons arrive with the package format's asset handling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -18,6 +18,8 @@ pub enum ShelfGlyph {
     Store,
     /// A return arrow, for handing the screen back to stock reMarkable.
     Stock,
+    /// A gear, for Settings.
+    Gear,
 }
 
 /// One tile on the shelf.
@@ -140,6 +142,7 @@ pub(crate) fn draw_tile(canvas: &mut Canvas, rect: Rect, entry: &ShelfEntry, pre
         ShelfGlyph::Board => draw_board_mark(canvas, mark),
         ShelfGlyph::Store => draw_store_mark(canvas, mark),
         ShelfGlyph::Stock => draw_stock_mark(canvas, mark),
+        ShelfGlyph::Gear => draw_gear_mark(canvas, mark),
     }
 
     let center_x = rect.center().x;
@@ -242,6 +245,36 @@ fn draw_stock_mark(canvas: &mut Canvas, rect: Rect) {
     );
 }
 
+fn draw_gear_mark(canvas: &mut Canvas, rect: Rect) {
+    let center = rect.center();
+    let radius = rect.width * 0.32;
+
+    // Eight teeth around the rim, drawn as filled wedges rather than rotated
+    // rectangles: the canvas fills axis-aligned rectangles only, and a tooth
+    // drawn as one would point the right way at four of the eight angles.
+    // They are laid down first and the body is filled over their roots, so
+    // only the part outside the rim shows.
+    for step in 0..8 {
+        let angle = step as f32 / 8.0 * std::f32::consts::TAU;
+        let tooth: Vec<Point> = [(-0.22, 0.90), (-0.13, 1.34), (0.13, 1.34), (0.22, 0.90)]
+            .into_iter()
+            .map(|(offset, scale)| {
+                let at = angle + offset;
+                Point::new(
+                    center.x + at.cos() * radius * scale,
+                    center.y + at.sin() * radius * scale,
+                )
+            })
+            .collect();
+        canvas.fill_polygon(&tooth, palette::INK);
+    }
+
+    canvas.fill_circle(center, radius, palette::PAPER);
+    canvas.stroke_polyline(&circle(center, radius), palette::INK, 5.0);
+    // The hub, so the mark reads as a gear rather than a cog-shaped blob.
+    canvas.stroke_polyline(&circle(center, radius * 0.38), palette::INK, 5.0);
+}
+
 fn circle(center: Point, radius: f32) -> Vec<Point> {
     (0..=48)
         .map(|step| {
@@ -261,10 +294,10 @@ pub(crate) fn shelf_area(canvas_width: f32, top: f32, height: f32) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShelfEntry, ShelfGlyph, ShelfLayout};
+    use super::{ShelfEntry, ShelfGlyph, ShelfLayout, draw_tile};
     use paper_packages::Manifest;
     use paper_sdk::chrome::MIN_TOUCH_TARGET;
-    use paper_sdk::{Point, Rect};
+    use paper_sdk::{Canvas, Point, Rect, Size};
 
     fn area() -> Rect {
         Rect::new(56.0, 300.0, 1508.0, 1200.0)
@@ -343,6 +376,41 @@ mod tests {
         }
         assert_eq!(layout.hit_test(Point::new(0.0, 0.0)), None);
         assert_eq!(layout.hit_test(Point::new(810.0, 5000.0)), None);
+    }
+
+    /// Two glyphs that draw the same picture would put the same mark on two
+    /// tiles and send a tap to the wrong app; a glyph that draws nothing
+    /// leaves a blank tile. Neither is visible to a layout assertion, and
+    /// both are what a missing match arm looks like.
+    #[test]
+    fn each_glyph_draws_a_mark_of_its_own() {
+        let glyphs = [
+            ShelfGlyph::Board,
+            ShelfGlyph::Store,
+            ShelfGlyph::Stock,
+            ShelfGlyph::Gear,
+        ];
+        let mut seen: Vec<(ShelfGlyph, f32)> = Vec::new();
+        for glyph in glyphs {
+            let mut canvas =
+                Canvas::new(Size::new(700, 700)).expect("a tile-sized canvas allocates");
+            let blank = canvas.ink_coverage();
+            draw_tile(
+                &mut canvas,
+                Rect::new(20.0, 20.0, 660.0, 660.0),
+                &ShelfEntry::action("App", "V1", glyph),
+                false,
+            );
+            let coverage = canvas.ink_coverage();
+            assert!(coverage > blank, "{glyph:?} drew nothing");
+            if let Some((other, _)) = seen
+                .iter()
+                .find(|(_, other)| (other - coverage).abs() < 1e-4)
+            {
+                panic!("{glyph:?} and {other:?} draw the same mark");
+            }
+            seen.push((glyph, coverage));
+        }
     }
 
     #[test]

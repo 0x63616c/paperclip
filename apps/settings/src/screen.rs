@@ -9,7 +9,7 @@
 
 use paper_packages::{AppId, Capability};
 use paper_sdk::chrome;
-use paper_sdk::{Canvas, Point, Rect};
+use paper_sdk::{Action, Canvas, Point, PointerEvent, Rect};
 
 use crate::confirm::{self, ConfirmDialog, ConfirmLayout};
 use crate::host::{
@@ -46,6 +46,40 @@ pub struct SettingsScreen {
     platform: PlatformInfo,
     diagnostics: Vec<DiagnosticEntry>,
     pending: Option<PendingAction>,
+}
+
+/// What one press asked the host to do, and whether the Host transaction it
+/// went through with failed.
+///
+/// The error is carried rather than logged here: this crate has no
+/// [`Context`](paper_sdk::Context) and no logger, and a caller that has one
+/// (the app) reports it, while a caller that does not (the desktop preview)
+/// drops it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Press {
+    /// What the platform should do next.
+    pub action: Action,
+    /// Why the Host refused, when this press confirmed a destructive action
+    /// and the Host did not carry it out.
+    pub error: Option<HostOpError>,
+}
+
+impl Press {
+    /// A press that changed nothing.
+    fn ignored() -> Self {
+        Self {
+            action: Action::None,
+            error: None,
+        }
+    }
+
+    /// A press that changed what is on screen and nothing else.
+    fn redraw() -> Self {
+        Self {
+            action: Action::Redraw,
+            error: None,
+        }
+    }
 }
 
 impl SettingsScreen {
@@ -196,7 +230,78 @@ impl SettingsScreen {
         result
     }
 
-    fn refresh(&mut self, host: &dyn SettingsHost) {
+    /// Handles one pointer event against the layout that was drawn for it.
+    ///
+    /// The single entry point every caller uses — the app and the desktop
+    /// preview both route presses through this, so "what a tap does" has one
+    /// implementation rather than one per host (ADR-0018). The per-region
+    /// handlers above stay public because they are what this dispatch is
+    /// tested against, but nothing outside this crate needs to call them in
+    /// order.
+    ///
+    /// Order matters and is the modal rule: while a confirmation is open it
+    /// absorbs every press, including one that lands on the page underneath
+    /// its scrim.
+    pub fn press(
+        &mut self,
+        layout: &SettingsLayout,
+        pointer: &PointerEvent,
+        host: &mut dyn SettingsHost,
+    ) -> Press {
+        if !pointer.is_tap() {
+            return Press::ignored();
+        }
+        let at = pointer.at;
+
+        if let Some(confirm) = &layout.confirm {
+            if confirm.cancel.contains(at) {
+                self.cancel();
+                return Press::redraw();
+            }
+            if confirm.confirm.contains(at) {
+                return Press {
+                    action: Action::Redraw,
+                    error: self.confirm(host).err(),
+                };
+            }
+            // The scrim. A press here resolves nothing, and must not reach
+            // the page it is covering.
+            return Press::ignored();
+        }
+
+        if let Some(rect) = layout.return_to_stock
+            && rect.contains(at)
+        {
+            return Press {
+                action: Action::ReturnToStock,
+                error: None,
+            };
+        }
+
+        let page = self.page;
+        self.press_tab(&layout.nav, at);
+        if self.page != page {
+            return Press::redraw();
+        }
+
+        match &layout.page {
+            PageLayout::Apps(apps) => self.press_apps(apps, at),
+            PageLayout::Grants(grants) => self.press_grants(grants, at),
+            PageLayout::ReadOnly => {}
+        }
+        if self.is_confirming() {
+            Press::redraw()
+        } else {
+            Press::ignored()
+        }
+    }
+
+    /// Re-reads everything from `host`.
+    ///
+    /// The snapshot this screen draws is taken once, so anything that
+    /// changed the store behind its back — an install, an uninstall from
+    /// another app — is invisible until someone asks for a fresh one.
+    pub fn refresh(&mut self, host: &dyn SettingsHost) {
         self.apps = host.installed_apps();
         self.storage = host.storage_usage();
         self.grants = host.grants();
