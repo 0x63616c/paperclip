@@ -20,12 +20,15 @@ pub const MARGIN: f32 = 56.0;
 
 /// Smallest side any tappable thing may have, in canvas pixels.
 ///
-/// The Paper Pro's 1620 px width across roughly 179 mm of glass works out
-/// near 230 px/inch, which puts 120 px at about 13 mm — comfortably past the
-/// ~9 mm that finger targets want, with room to lose some to a bezel-adjacent
-/// press. The DPI figure is from published panel dimensions, not measured, so
-/// treat the millimetre conversion as provisional (`docs/assumptions.md`); the
-/// pixel floor itself is what the code enforces.
+/// The panel is 228 px/inch — measured by WWW-1 from `display-dpi` in the
+/// device tree, not taken from published dimensions — which puts 120 px at
+/// about 13.4 mm, comfortably past the ~9 mm that finger targets want, with
+/// room to lose some to a bezel-adjacent press.
+///
+/// Whether a 13.4 mm target is *actually* comfortable on this glass is a
+/// different question, and one no test here can answer: the touch digitizer's
+/// active area is taller than the panel and its transform is still an open
+/// gate (WWW-20). The pixel floor is what the code enforces.
 pub const MIN_TOUCH_TARGET: f32 = 120.0;
 
 /// Draws the top bar and returns the content rectangle below it.

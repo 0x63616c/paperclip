@@ -146,7 +146,11 @@ impl Canvas {
         );
     }
 
-    /// Strokes a horizontal hairline across `width`, one canvas pixel thick.
+    /// Draws a horizontal rule across `length`, two canvas pixels thick.
+    ///
+    /// Two rather than one: at 228 dpi a single-pixel rule is close to
+    /// invisible, and the preview scales down far enough that box filtering
+    /// would grey it away entirely.
     pub fn hairline(&mut self, from: Point, length: f32, color: Color) {
         self.fill_rect(Rect::new(from.x, from.y, length, 2.0), color);
     }

@@ -5,7 +5,8 @@ use std::fs;
 use paper_packages::{
     Capability, InstallPolicy, InstalledApp, ManifestError, PathError, PayloadError,
 };
-use paper_packages::{MANIFEST_FILE_NAME, Manifest};
+use paper_packages::{MANIFEST_FILE_NAME, MAX_ASSETS, MAX_MANIFEST_BYTES, Manifest};
+use std::os::unix::fs::symlink;
 
 const VALID: &str = r#"
 [app]
@@ -247,10 +248,15 @@ fn rejects_broken_toml() {
 
 #[test]
 fn rejects_an_unreadable_protocol_version() {
-    assert!(matches!(
-        Manifest::parse(&VALID.replace("protocol = \"1.0\"", "protocol = \"1.0.0\"")),
-        Err(ManifestError::Schema(_))
-    ));
+    // A typed protocol error, not a faked schema error: the caller can tell
+    // "that is not a protocol version" from "your TOML is the wrong shape".
+    match Manifest::parse(&VALID.replace("protocol = \"1.0\"", "protocol = \"1.0.0\"")) {
+        Err(ManifestError::Protocol { value, source }) => {
+            assert_eq!(value, "1.0.0");
+            assert!(matches!(source, paper_protocol::ParseError::Shape(_)));
+        }
+        other => panic!("expected a protocol error, got {other:?}"),
+    }
 }
 
 #[test]
@@ -337,4 +343,97 @@ fn reading_a_package_without_a_manifest_says_so() {
         Manifest::read_package(package.path()),
         Err(ManifestError::Read { .. })
     ));
+}
+
+#[test]
+fn a_symlinked_entrypoint_does_not_pass_as_the_package_s_own_executable() {
+    // The attack `RelativePath` cannot see: `bin/chess` is a perfectly safe
+    // string, and on disk it points at the host's shell.
+    let package = tempfile::tempdir().expect("tempdir");
+    let root = package.path();
+    fs::write(root.join(MANIFEST_FILE_NAME), VALID).expect("write manifest");
+    fs::create_dir_all(root.join("bin")).expect("bin");
+    fs::create_dir_all(root.join("assets")).expect("assets");
+    fs::write(root.join("assets/board.toml"), b"").expect("asset");
+    fs::write(root.join("icon.png"), b"").expect("asset");
+    symlink("/bin/sh", root.join("bin/chess")).expect("symlink");
+
+    let manifest = Manifest::read_package(root).expect("manifest");
+    match manifest.validate_payload(root) {
+        Err(PayloadError::SymlinkedPath { path, component }) => {
+            assert_eq!(path, "bin/chess");
+            assert_eq!(component, "chess");
+        }
+        other => panic!("a symlinked entrypoint must be refused, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_symlinked_directory_on_the_way_to_an_asset_is_refused_too() {
+    // Checking only the leaf would wave this through: `assets` itself is the
+    // link, and `assets/board.toml` resolves outside the package.
+    let package = tempfile::tempdir().expect("tempdir");
+    let root = package.path();
+    let outside = tempfile::tempdir().expect("outside");
+    fs::write(outside.path().join("board.toml"), b"").expect("outside asset");
+
+    fs::write(root.join(MANIFEST_FILE_NAME), VALID).expect("write manifest");
+    fs::create_dir_all(root.join("bin")).expect("bin");
+    fs::write(root.join("bin/chess"), b"").expect("entrypoint");
+    fs::write(root.join("icon.png"), b"").expect("asset");
+    symlink(outside.path(), root.join("assets")).expect("symlink");
+
+    let manifest = Manifest::read_package(root).expect("manifest");
+    match manifest.validate_payload(root) {
+        Err(PayloadError::SymlinkedPath { path, component }) => {
+            assert_eq!(path, "assets/board.toml");
+            assert_eq!(component, "assets");
+        }
+        other => panic!("a symlinked directory must be refused, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_oversized_manifest_is_refused_before_it_is_parsed() {
+    let padded = format!("{VALID}\n# {}\n", "p".repeat(MAX_MANIFEST_BYTES as usize));
+    match Manifest::parse(&padded) {
+        Err(ManifestError::TooLarge { len, max, .. }) => {
+            assert!(len > max);
+            assert_eq!(max, MAX_MANIFEST_BYTES);
+        }
+        other => panic!("an oversized manifest must be refused, got {other:?}"),
+    }
+
+    let package = tempfile::tempdir().expect("tempdir");
+    fs::write(package.path().join(MANIFEST_FILE_NAME), &padded).expect("write manifest");
+    assert!(matches!(
+        Manifest::read_package(package.path()),
+        Err(ManifestError::TooLarge { .. })
+    ));
+}
+
+#[test]
+fn an_unbounded_asset_list_is_refused() {
+    let assets: Vec<String> = (0..=MAX_ASSETS).map(|i| format!("\"a{i}.bin\"")).collect();
+    let text = VALID.replace(
+        "assets = [\"assets/board.toml\", \"icon.png\"]",
+        &format!("assets = [{}]", assets.join(", ")),
+    );
+    match Manifest::parse(&text) {
+        Err(ManifestError::TooManyAssets { declared, max }) => {
+            assert_eq!(declared, MAX_ASSETS + 1);
+            assert_eq!(max, MAX_ASSETS);
+        }
+        other => panic!("an unbounded asset list must be refused, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_top_level_grants_table_is_refused_by_name() {
+    // `capabilities` and `permissions` already were; `grants` fell through to
+    // a generic unknown-key error, which says the wrong thing about why.
+    match Manifest::parse(&format!("{VALID}\n[grants]\nnetwork = true\n")) {
+        Err(ManifestError::SelfGrantedCapabilities { key }) => assert_eq!(key, "grants"),
+        other => panic!("a top-level `grants` table must be named, got {other:?}"),
+    }
 }

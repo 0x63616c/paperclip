@@ -33,6 +33,11 @@ Anything else in the file is an error. There is no "ignored for forward
 compatibility" tier, because a key silently ignored is a key the author
 believes is working.
 
+The file itself is bounded: at most 64 KiB (`MAX_MANIFEST_BYTES`) and at most
+512 declared assets (`MAX_ASSETS`). The manifest is the first thing the
+platform reads from a package nothing has vouched for yet, so its cost is
+capped before it is parsed rather than after.
+
 ### Validation happens in two steps
 
 `Manifest::parse` decides everything readable from the text. It deliberately
@@ -41,9 +46,18 @@ to display an app this device cannot run.
 
 - `Manifest::ensure_runnable()` — asks whether this platform build can run it.
 - `Manifest::validate_payload(root)` — asks whether the entrypoint and every
-  declared asset is actually present.
+  declared asset is actually present, and that none of them is reached through
+  a symlink.
 
 Both are called by `paperctl manifest validate --payload`.
+
+The path rules in the table above are *lexical*: they constrain the text in
+`paper.toml` and nothing else. `bin/run` is a safe string whether or not it is
+a symlink to `/bin/sh` on disk. So `validate_payload` walks every declared path
+component by component and refuses any link along the way, including a link at
+a directory component — `assets -> /etc` escapes just as completely as
+`assets/board.toml -> /etc/passwd` does, and a check that only looked at the
+last component would miss it.
 
 ## Capabilities are not part of the manifest
 

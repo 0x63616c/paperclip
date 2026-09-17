@@ -4,10 +4,17 @@ use crate::geometry::{Point, Rect, Size};
 
 /// The screen every Paperclip app draws for: 1620 × 2160, portrait.
 ///
-/// Provisional. It is the reMarkable Paper Pro panel geometry as documented,
-/// not as measured — WWW-1 confirms it against the device. Nothing else in the
-/// codebase hard-codes these numbers; changing this constant changes the
-/// target everywhere, which is the point of it being a constant.
+/// **Confirmed** by the WWW-1 device survey, read from the device tree the
+/// vendor's own display stack reads: `display-width` = 1620,
+/// `display-height` = 2160, `display-dpi` = 228. Nothing else in the codebase
+/// hard-codes these numbers; changing this constant changes the target
+/// everywhere, which is the point of it being a constant.
+///
+/// What is *not* settled is how these pixels reach the panel. The DRM dumb
+/// buffer WWW-20 obtained is 1620 bytes × 1084 rows for 1620 × 2160 pixels —
+/// four bits per pixel, two panel rows per buffer row — so the device adapter
+/// (WWW-3) owes a packing and quantisation step between this canvas and the
+/// framebuffer. The exact packing is still an open hardware gate.
 pub const SCREEN: Size = Size::new(1620, 2160);
 
 /// How canvas space sits inside a physical surface.

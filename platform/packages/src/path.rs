@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use crate::error::PathError;
 
-/// A path inside a package directory, checked to stay there.
+/// A package-relative path whose *text* cannot point outside the package.
 ///
 /// The check happens once, at parse time, so every later consumer — the
 /// installer, the updater, the host that spawns the entrypoint — can join it
@@ -14,6 +14,11 @@ use crate::error::PathError;
 /// absolute paths, backslashes, `~` and NUL are all rejected rather than
 /// normalised away: silently rewriting a path an author wrote means shipping
 /// something they did not ask for.
+///
+/// The guarantee is lexical and stops at the filesystem. `bin/run` is a safe
+/// string; `bin/run` as a symlink to `/bin/sh` is not, and no amount of string
+/// checking can tell the difference. Every consumer that resolves one against
+/// a real directory has to refuse links itself (§12).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelativePath(String);
 
@@ -28,14 +33,22 @@ impl RelativePath {
 
     /// This path resolved against a package root.
     ///
-    /// Safe by construction: the value cannot contain `..` or a root, so the
-    /// result is always inside `root`.
+    /// Safe *lexically*: the value cannot contain `..` or a root, so the
+    /// result is always inside `root` as a string. It says nothing about what
+    /// is on disk — a symlink at any component still escapes. Anything that
+    /// then touches the filesystem must walk [`Self::components`] and refuse
+    /// links; see [`Manifest::validate_payload`](crate::Manifest::validate_payload).
     pub fn resolve_within(&self, root: &Path) -> PathBuf {
         let mut resolved = root.to_path_buf();
-        for component in self.0.split('/') {
+        for component in self.components() {
             resolved.push(component);
         }
         resolved
+    }
+
+    /// The path's components, in order, always at least one.
+    pub fn components(&self) -> impl Iterator<Item = &str> {
+        self.0.split('/')
     }
 }
 

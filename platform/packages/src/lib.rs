@@ -20,5 +20,5 @@ mod path;
 pub use capability::{Capability, GrantedCapabilities, InstallPolicy, InstalledApp};
 pub use error::{IdError, ManifestError, NameError, PathError, PayloadError};
 pub use id::{AppId, DisplayName};
-pub use manifest::{MANIFEST_FILE_NAME, Manifest};
+pub use manifest::{MANIFEST_FILE_NAME, MAX_ASSETS, MAX_MANIFEST_BYTES, Manifest};
 pub use path::RelativePath;

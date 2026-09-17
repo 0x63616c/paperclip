@@ -60,7 +60,12 @@ impl fmt::Display for ProtocolVersion {
 }
 
 /// Why a `major.minor` string could not be read as a [`ProtocolVersion`].
+///
+/// `#[non_exhaustive]` because this is re-exported as the `source` of
+/// `ManifestError::Protocol`, so it is part of a public error chain that other
+/// crates match on.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ParseError {
     /// The string was not exactly two dot-separated parts.
     #[error("expected `major.minor`, got `{0}`")]

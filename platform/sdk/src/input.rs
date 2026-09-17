@@ -4,7 +4,14 @@
 //! right place and that a tile the size of a fingertip is hit when it is
 //! pressed. It proves nothing about the pen: pressure, tilt, palm rejection
 //! and latency are device facts, and this type carries no field pretending
-//! otherwise until WWW-1 says what the device actually reports.
+//! otherwise.
+//!
+//! WWW-1 has since enumerated what the device reports — pressure, tilt, hover
+//! distance, `BTN_TOOL_RUBBER` for the eraser, and ten multitouch slots — so
+//! the shape here is known to be a subset rather than merely unknown. It stays
+//! a subset on purpose: the fields arrive with the event source that fills
+//! them (WWW-5), not before. [`PointerEvent`] is `#[non_exhaustive]` so that
+//! is an addition rather than a break.
 
 use crate::geometry::Point;
 
@@ -39,7 +46,15 @@ pub enum PointerPhase {
 /// If you are holding one of these, the coordinates are on the canvas: events
 /// that landed in the letterbox were dropped by
 /// [`DisplayMapping`](crate::DisplayMapping) before this type existed.
+///
+/// `#[non_exhaustive]` because WWW-1 established that the device reports more
+/// than this carries — pen pressure (0–4096), tilt (±9000), hover distance,
+/// eraser as a tool type, and up to ten simultaneous touch contacts, which
+/// will need an identifier per contact. Those fields land when WWW-5 defines
+/// the input contract; constructing through [`Self::new`] means that is an
+/// addition rather than a break at every call site.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct PointerEvent {
     /// Where the event landed, in canvas space.
     pub at: Point,

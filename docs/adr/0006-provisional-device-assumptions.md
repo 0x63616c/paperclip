@@ -46,3 +46,24 @@ mean something.
 
 Nothing. If WWW-1 closes every gate favourably, the table becomes a record of
 what was checked, which is worth keeping.
+
+## Outcome at the Stage 2 review gate (WWW-10)
+
+The gate ran the table against the WWW-1 report and the WWW-20 device session.
+Four of the seven were confirmed (A1, A2 with the DPI corrected from ~230 to a
+measured 228, A3 with a caveat about pixel packing, A4); two were refuted (A5,
+the pointer model, which the device exceeds in five separate ways; A6, the
+target triple, which is now known to be `aarch64-unknown-linux-gnu`); one is
+still open and turned out to matter more than it looked (A7).
+
+The decision recorded here worked. Every verdict was reached by reading one
+row and one named constant, and the two refutations were found rather than
+discovered later by something breaking. The cost of the practice was one table;
+the two refuted rows would otherwise have surfaced as a Stage 3 rewrite.
+
+One adjustment it did not anticipate: A5 was recorded as a *value* assumption
+("input arrives as press/move/release") when the thing that actually mattered
+was the *shape of the type carrying it*. A wrong constant changes one line; a
+wrong public struct changes every call site. Assumptions that sit in a type
+signature rather than a constant should say so, and the type should be
+`#[non_exhaustive]` from the start.

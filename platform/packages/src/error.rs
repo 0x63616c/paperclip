@@ -94,6 +94,42 @@ pub enum ManifestError {
         value: String,
     },
 
+    /// `app.protocol` is not a `major.minor` protocol version.
+    ///
+    /// Distinct from [`Self::UnsupportedProtocol`]: this one could not be read
+    /// at all, that one was read and cannot be honoured.
+    #[error("app.protocol `{value}` is not a protocol version")]
+    Protocol {
+        /// The protocol as written.
+        value: String,
+        /// What specifically was wrong.
+        #[source]
+        source: paper_protocol::ParseError,
+    },
+
+    /// More assets declared than [`MAX_ASSETS`](crate::MAX_ASSETS).
+    #[error("app.assets declares {declared} paths, over the limit of {max}")]
+    TooManyAssets {
+        /// How many were declared.
+        declared: usize,
+        /// The limit.
+        max: usize,
+    },
+
+    /// The manifest is larger than [`MAX_MANIFEST_BYTES`](crate::MAX_MANIFEST_BYTES).
+    ///
+    /// Refused before parsing: §12 wants bounded sizes, and the manifest is
+    /// read from a package nothing has vouched for yet.
+    #[error("{path} is {len} bytes, over the {max} byte manifest limit")]
+    TooLarge {
+        /// The manifest that was too big.
+        path: PathBuf,
+        /// Its size in bytes.
+        len: u64,
+        /// The limit.
+        max: u64,
+    },
+
     /// The app was built against a protocol this platform cannot speak.
     #[error("app declares protocol {declared}, which this platform ({current}) cannot run")]
     UnsupportedProtocol {
@@ -223,6 +259,20 @@ pub enum PayloadError {
         /// The manifest-relative path that was expected.
         path: String,
     },
+    /// A declared path, or a directory on the way to it, is a symlink.
+    ///
+    /// Refused rather than followed: a package that ships `bin/run` as a link
+    /// to `/bin/sh` passes every textual check [`RelativePath`](crate::RelativePath)
+    /// can make, and would then be launched as if it were the package's own
+    /// executable (§12).
+    #[error("`{path}` escapes the package: `{component}` is a symlink")]
+    SymlinkedPath {
+        /// The manifest-relative path that was declared.
+        path: String,
+        /// The component that turned out to be a link.
+        component: String,
+    },
+
     /// A declared asset is not in the payload.
     #[error("declared asset `{path}` is missing from the package payload")]
     MissingAsset {

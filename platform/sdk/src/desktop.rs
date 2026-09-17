@@ -33,8 +33,10 @@ use crate::input::{Pointer, PointerEvent, PointerPhase};
 pub enum PreviewEvent<'a> {
     /// Draw a frame. The canvas arrives cleared to the paper colour.
     Render(&'a mut Canvas),
-    /// A pointer event, already in canvas space. Events that landed in the
-    /// letterbox never arrive.
+    /// A pointer event, already in canvas space. A press that *begins* in a
+    /// letterbox bar never arrives; one that begins on the canvas and ends off
+    /// it arrives as [`PointerPhase::Cancelled`] at its last canvas position,
+    /// so a contact always ends.
     Pointer(PointerEvent),
     /// A printable key, lower-cased. Escape closes the window and is not
     /// forwarded.
@@ -164,6 +166,7 @@ pub fn run(
         graphics: None,
         cursor: PhysicalPosition::new(0.0, 0.0),
         pressed: false,
+        contact: None,
         captured: false,
         failure: None,
     };
@@ -191,6 +194,9 @@ struct Preview<H> {
     graphics: Option<Graphics>,
     cursor: PhysicalPosition<f64>,
     pressed: bool,
+    /// Where the outstanding contact was last seen, in canvas space. `Some`
+    /// means an app is holding a press that has to be ended somehow.
+    contact: Option<Point>,
     captured: bool,
     failure: Option<PreviewError>,
 }
@@ -303,19 +309,45 @@ impl<H: FnMut(PreviewEvent<'_>)> Preview<H> {
     }
 
     fn pointer(&mut self, phase: PointerPhase) {
-        let Some(window) = self.window.as_ref() else {
+        let Some(window) = self.window.clone() else {
             return;
         };
         let mapping = self.mapping(window.inner_size());
         let physical = Point::new(self.cursor.x as f32, self.cursor.y as f32);
-        if let Some(at) = mapping.to_canvas(physical) {
-            (self.handler)(PreviewEvent::Pointer(PointerEvent::new(
-                at,
-                phase,
-                Pointer::Mouse,
-            )));
+        let mapped = mapping.to_canvas(physical);
+        if let Some(event) = resolve_pointer(&mut self.contact, mapped, phase) {
+            (self.handler)(PreviewEvent::Pointer(event));
             window.request_redraw();
         }
+    }
+}
+
+/// Turns a mapped position and a phase into the event the app should see,
+/// tracking the outstanding contact in `contact`.
+///
+/// The subtle case is a press that begins on the canvas and ends off it.
+/// [`DisplayMapping::to_canvas`] returns `None` in the letterbox, which is
+/// right for a press that *starts* there — but dropping the matching `Up` on
+/// that rule alone leaves the app holding a contact that never ends, and it
+/// draws a tile as held until something else happens to clear it. So an
+/// outstanding contact leaving the canvas is reported as
+/// [`PointerPhase::Cancelled`] at the last place it was seen.
+fn resolve_pointer(
+    contact: &mut Option<Point>,
+    mapped: Option<Point>,
+    phase: PointerPhase,
+) -> Option<PointerEvent> {
+    match (mapped, phase) {
+        (Some(at), phase) => {
+            *contact = matches!(phase, PointerPhase::Down | PointerPhase::Moved).then_some(at);
+            Some(PointerEvent::new(at, phase, Pointer::Mouse))
+        }
+        // A press that begins in a letterbox bar belongs to nothing, and
+        // there is no earlier position to attribute it to either.
+        (None, PointerPhase::Down) => None,
+        (None, _) => contact
+            .take()
+            .map(|at| PointerEvent::new(at, PointerPhase::Cancelled, Pointer::Mouse)),
     }
 }
 
@@ -408,5 +440,66 @@ impl<H: FnMut(PreviewEvent<'_>)> ApplicationHandler for Preview<H> {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_pointer;
+    use crate::geometry::Point;
+    use crate::input::PointerPhase;
+
+    #[test]
+    fn events_on_the_canvas_pass_through_unchanged() {
+        let mut contact = None;
+        let at = Point::new(100.0, 200.0);
+        let event = resolve_pointer(&mut contact, Some(at), PointerPhase::Down).expect("delivered");
+        assert_eq!(event.phase, PointerPhase::Down);
+        assert_eq!(event.at, at);
+        assert_eq!(contact, Some(at));
+
+        let event = resolve_pointer(&mut contact, Some(at), PointerPhase::Up).expect("delivered");
+        assert_eq!(event.phase, PointerPhase::Up);
+        assert_eq!(contact, None);
+    }
+
+    #[test]
+    fn a_press_that_begins_in_the_letterbox_reaches_nothing() {
+        let mut contact = None;
+        assert!(resolve_pointer(&mut contact, None, PointerPhase::Down).is_none());
+        assert_eq!(contact, None);
+        // And the release that follows it invents nothing either.
+        assert!(resolve_pointer(&mut contact, None, PointerPhase::Up).is_none());
+    }
+
+    #[test]
+    fn a_press_released_outside_the_canvas_is_cancelled_rather_than_dropped() {
+        // Press a tile, drag into the letterbox bar, release there. Without
+        // the cancel the app never hears the contact end and draws the tile
+        // as held for the rest of the session.
+        let mut contact = None;
+        let at = Point::new(400.0, 900.0);
+        resolve_pointer(&mut contact, Some(at), PointerPhase::Down).expect("press delivered");
+
+        let event =
+            resolve_pointer(&mut contact, None, PointerPhase::Up).expect("cancel delivered");
+        assert_eq!(event.phase, PointerPhase::Cancelled);
+        assert_eq!(event.at, at, "cancelled where the contact was last seen");
+        assert_eq!(contact, None);
+    }
+
+    #[test]
+    fn a_drag_off_the_canvas_cancels_once_and_not_again() {
+        let mut contact = None;
+        let at = Point::new(10.0, 10.0);
+        resolve_pointer(&mut contact, Some(at), PointerPhase::Down).expect("press delivered");
+        assert_eq!(
+            resolve_pointer(&mut contact, None, PointerPhase::Moved)
+                .expect("cancel delivered")
+                .phase,
+            PointerPhase::Cancelled
+        );
+        assert!(resolve_pointer(&mut contact, None, PointerPhase::Up).is_none());
+        assert!(resolve_pointer(&mut contact, None, PointerPhase::Cancelled).is_none());
     }
 }
