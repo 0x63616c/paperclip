@@ -43,6 +43,23 @@ pub enum PreviewEvent<'a> {
     Key(char),
 }
 
+/// What the caller wants the preview to do after handling one [`PreviewEvent`].
+///
+/// Escape and the window's close button already close the preview from
+/// inside; this is the door for a caller that needs to close it from its own
+/// logic instead — `paperctl dev` ending a session to rebuild or to switch
+/// which app is running, for instance, where waiting for the next OS event to
+/// notice would leave a stale frame on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum PreviewControl {
+    /// Keep the window open.
+    #[default]
+    Continue,
+    /// Close the window; `run` returns `Ok(())` once it does.
+    Exit,
+}
+
 /// What to capture, and whether to stop afterwards.
 ///
 /// `window` is the whole window buffer including letterbox bars — the
@@ -147,7 +164,7 @@ pub enum PreviewError {
 /// state the screens need.
 pub fn run(
     options: PreviewOptions,
-    handler: impl FnMut(PreviewEvent<'_>),
+    handler: impl FnMut(PreviewEvent<'_>) -> PreviewControl,
 ) -> Result<(), PreviewError> {
     let event_loop = EventLoop::new().map_err(PreviewError::EventLoop)?;
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -225,7 +242,7 @@ struct Preview<H> {
     failure: Option<PreviewError>,
 }
 
-impl<H: FnMut(PreviewEvent<'_>)> Preview<H> {
+impl<H: FnMut(PreviewEvent<'_>) -> PreviewControl> Preview<H> {
     fn mapping(&self, surface: PhysicalSize<u32>) -> DisplayMapping {
         DisplayMapping::fit(
             self.options.canvas,
@@ -251,7 +268,7 @@ impl<H: FnMut(PreviewEvent<'_>)> Preview<H> {
         };
 
         self.canvas.clear(crate::color::palette::PAPER);
-        (self.handler)(PreviewEvent::Render(&mut self.canvas));
+        let control = (self.handler)(PreviewEvent::Render(&mut self.canvas));
 
         let mapping = self.mapping(physical);
         let surface_size = Size::new(physical.width, physical.height);
@@ -301,6 +318,10 @@ impl<H: FnMut(PreviewEvent<'_>)> Preview<H> {
                 event_loop.exit();
             }
         }
+
+        if control == PreviewControl::Exit {
+            event_loop.exit();
+        }
     }
 
     fn write_capture(&self) -> Result<(), PreviewError> {
@@ -325,7 +346,7 @@ impl<H: FnMut(PreviewEvent<'_>)> Preview<H> {
         Ok(())
     }
 
-    fn pointer(&mut self, phase: PointerPhase) {
+    fn pointer(&mut self, event_loop: &ActiveEventLoop, phase: PointerPhase) {
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -333,8 +354,11 @@ impl<H: FnMut(PreviewEvent<'_>)> Preview<H> {
         let physical = Point::new(self.cursor.x as f32, self.cursor.y as f32);
         let mapped = mapping.to_canvas(physical);
         if let Some(event) = resolve_pointer(&mut self.contact, mapped, phase) {
-            (self.handler)(PreviewEvent::Pointer(event));
+            let control = (self.handler)(PreviewEvent::Pointer(event));
             window.request_redraw();
+            if control == PreviewControl::Exit {
+                event_loop.exit();
+            }
         }
     }
 }
@@ -433,7 +457,7 @@ fn resolve_pointer(
     }
 }
 
-impl<H: FnMut(PreviewEvent<'_>)> ApplicationHandler for Preview<H> {
+impl<H: FnMut(PreviewEvent<'_>) -> PreviewControl> ApplicationHandler for Preview<H> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -480,13 +504,13 @@ impl<H: FnMut(PreviewEvent<'_>)> ApplicationHandler for Preview<H> {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = position;
                 if self.pressed {
-                    self.pointer(PointerPhase::Moved);
+                    self.pointer(event_loop, PointerPhase::Moved);
                 }
             }
             WindowEvent::CursorLeft { .. } => {
                 if self.pressed {
                     self.pressed = false;
-                    self.pointer(PointerPhase::Cancelled);
+                    self.pointer(event_loop, PointerPhase::Cancelled);
                 }
             }
             WindowEvent::MouseInput {
@@ -504,16 +528,20 @@ impl<H: FnMut(PreviewEvent<'_>)> ApplicationHandler for Preview<H> {
                         PointerPhase::Up
                     }
                 };
-                self.pointer(phase);
+                self.pointer(event_loop, phase);
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 match event.logical_key {
                     Key::Named(NamedKey::Escape) => event_loop.exit(),
                     Key::Character(ref text) => {
                         if let Some(character) = text.chars().next() {
-                            (self.handler)(PreviewEvent::Key(character.to_ascii_lowercase()));
+                            let control =
+                                (self.handler)(PreviewEvent::Key(character.to_ascii_lowercase()));
                             if let Some(window) = self.window.as_ref() {
                                 window.request_redraw();
+                            }
+                            if control == PreviewControl::Exit {
+                                event_loop.exit();
                             }
                         }
                     }

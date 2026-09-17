@@ -31,6 +31,11 @@ pub(crate) enum CommandError {
     #[error("the desktop preview could not run")]
     Preview(#[from] paper_sdk::desktop::PreviewError),
 
+    /// `paperctl dev` could not run a session.
+    #[cfg(feature = "desktop")]
+    #[error("the dev loop failed")]
+    Dev(#[from] crate::dev::DevError),
+
     /// A manifest was rejected.
     #[error("{path} is not a valid manifest")]
     Manifest {

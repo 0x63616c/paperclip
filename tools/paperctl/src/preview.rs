@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use paper_sdk::SCREEN;
-use paper_sdk::desktop::{Capture, PreviewEvent, PreviewOptions};
+use paper_sdk::desktop::{Capture, PreviewControl, PreviewEvent, PreviewOptions};
 
 use crate::ScreenArg;
 use crate::error::CommandError;
@@ -74,14 +74,18 @@ pub(crate) fn run(args: PreviewArgs) -> Result<(), CommandError> {
         SCREEN.width, SCREEN.height
     );
 
-    paper_sdk::desktop::run(options, |event| match event {
-        PreviewEvent::Render(canvas) => screens.render(canvas),
-        PreviewEvent::Pointer(pointer) => screens.pointer(pointer),
-        PreviewEvent::Key(key) => screens.key(key),
-        // `PreviewEvent` is non-exhaustive so the backend can gain an event
-        // without breaking every consumer. Ignoring the unknown one is right:
-        // a preview that has not learned about it has nothing to do with it.
-        _ => {}
+    paper_sdk::desktop::run(options, |event| {
+        match event {
+            PreviewEvent::Render(canvas) => screens.render(canvas),
+            PreviewEvent::Pointer(pointer) => screens.pointer(pointer),
+            PreviewEvent::Key(key) => screens.key(key),
+            // `PreviewEvent` is non-exhaustive so the backend can gain an
+            // event without breaking every consumer. Ignoring the unknown
+            // one is right: a preview that has not learned about it has
+            // nothing to do with it.
+            _ => {}
+        }
+        PreviewControl::Continue
     })?;
 
     Ok(())

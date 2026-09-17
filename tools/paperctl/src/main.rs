@@ -14,6 +14,8 @@
 //! contain them. `install`, `list`, `rollback` and `recover` hold only public
 //! keys, and do to a store exactly what the tablet does to its own (§12).
 
+#[cfg(feature = "desktop")]
+mod dev;
 mod device;
 mod error;
 mod install;
@@ -48,6 +50,9 @@ enum Command {
     /// Open the desktop preview window.
     #[cfg(feature = "desktop")]
     Preview(preview::PreviewArgs),
+    /// Run a real app in a live window, watching for source changes (§14, §15).
+    #[cfg(feature = "desktop")]
+    Dev(dev::DevArgs),
     /// Render screens to PNG files without opening a window.
     #[cfg(feature = "apps")]
     Screenshot(ScreenshotArgs),
@@ -151,6 +156,8 @@ fn run(cli: Cli) -> Result<(), CommandError> {
     match cli.command {
         #[cfg(feature = "desktop")]
         Command::Preview(args) => preview::run(args),
+        #[cfg(feature = "desktop")]
+        Command::Dev(args) => dev::run(&args),
         #[cfg(feature = "apps")]
         Command::Screenshot(args) => screenshot(&args),
         #[cfg(feature = "apps")]
