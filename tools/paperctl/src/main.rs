@@ -18,6 +18,8 @@ mod device;
 mod error;
 mod install;
 mod manifest;
+#[cfg(feature = "apps")]
+mod open;
 #[cfg(feature = "publishing")]
 mod packaging;
 #[cfg(feature = "desktop")]
@@ -49,6 +51,10 @@ enum Command {
     /// Render screens to PNG files without opening a window.
     #[cfg(feature = "apps")]
     Screenshot(ScreenshotArgs),
+    /// Present a screen on the tablet's panel, hold it, and give the display
+    /// back (§4).
+    #[cfg(feature = "apps")]
+    Open(open::OpenArgs),
     /// Validate a `paper.toml` manifest.
     Manifest {
         #[command(subcommand)]
@@ -147,6 +153,8 @@ fn run(cli: Cli) -> Result<(), CommandError> {
         Command::Preview(args) => preview::run(args),
         #[cfg(feature = "apps")]
         Command::Screenshot(args) => screenshot(&args),
+        #[cfg(feature = "apps")]
+        Command::Open(args) => open::run(&args),
         Command::Manifest { command } => manifest::run(command),
         Command::Isolation(args) => device::run(device::DeviceCommand::Isolation(args)),
         Command::Units(args) => device::run(device::DeviceCommand::Units(args)),

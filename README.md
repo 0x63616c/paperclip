@@ -21,6 +21,7 @@ for what the isolation does and does not actually enforce.
 cargo test --workspace
 cargo run -p paperctl -- preview --screen home     # h · c · f · n · esc
 cargo run -p paperctl -- screenshot --screen all --out-dir artifacts
+cargo run -p paperctl -- open --dry-run                # the frame a device run would present
 cargo run -p paperctl -- manifest validate apps/chess
 cargo run -p paperctl -- isolation --target paper-pro   # what §11 really enforces
 cargo run -p paperctl -- key generate --out-dir ~/.paperclip

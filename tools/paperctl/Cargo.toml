@@ -25,11 +25,17 @@ desktop = ["apps", "paper-sdk/desktop"]
 # gates its own publishing half — the tablet installs and verifies, and must
 # not contain a code path that can sign a release (§12).
 publishing = ["paper-packages/publishing"]
+# Link the vendor waveform engine, so `paperctl open` can reach the glass.
+# aarch64 Linux only, and it needs the vendor library off the device; see
+# `platform/device/native/README.md`. Without it `open` refuses rather than
+# stopping Xochitl to present into memory.
+vendor-engine = ["apps", "paper-device/vendor-engine"]
 
 [dependencies]
 clap = { workspace = true }
 paper-app-store = { workspace = true, optional = true }
 paper-chess = { workspace = true, optional = true }
+paper-device = { workspace = true }
 paper-home = { workspace = true, optional = true }
 paper-host = { workspace = true }
 paper-packages = { workspace = true }

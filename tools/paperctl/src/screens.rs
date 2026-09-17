@@ -5,7 +5,9 @@ use paper_chess::{BoardLayout, ChessScreen};
 use paper_home::{HomeScreen, ShelfEntry, ShelfGlyph, ShelfLayout, SystemFact};
 use paper_packages::Manifest;
 use paper_packages::inventory::{AppEntry, CatalogStatus, Inventory};
-use paper_sdk::{Canvas, PointerEvent, PointerPhase, SCREEN};
+use paper_sdk::{Canvas, SCREEN};
+#[cfg(feature = "desktop")]
+use paper_sdk::{PointerEvent, PointerPhase};
 use paper_settings::{PageLayout, PlaceholderHost, SettingsLayout, SettingsScreen};
 
 use crate::error::CommandError;
@@ -36,6 +38,7 @@ pub(crate) enum Screen {
 
 impl Screen {
     /// Every screen the preview can show, in cycling order.
+    #[cfg(feature = "desktop")]
     const ALL: [Screen; 4] = [
         Screen::Home,
         Screen::Chess,
@@ -54,6 +57,7 @@ impl Screen {
     }
 
     /// The next screen in cycling order.
+    #[cfg(feature = "desktop")]
     fn next(self) -> Self {
         let index = Self::ALL
             .iter()
@@ -103,6 +107,9 @@ pub(crate) struct Screens {
     home: HomeScreen,
     chess: ChessScreen,
     settings: SettingsScreen,
+    // Only the preview window drives Settings interactively; the device build
+    // renders and presents, so it carries neither the host nor the handlers.
+    #[cfg(feature = "desktop")]
     settings_host: PlaceholderHost,
     app_store: AppStoreScreen,
     shelf: Option<ShelfLayout>,
@@ -146,6 +153,7 @@ impl Screens {
             home,
             chess: ChessScreen::new(),
             settings,
+            #[cfg(feature = "desktop")]
             settings_host,
             app_store,
             shelf: None,
@@ -156,6 +164,7 @@ impl Screens {
     }
 
     /// Shows a specific screen.
+    #[cfg(feature = "desktop")]
     pub(crate) fn show(&mut self, screen: Screen) {
         self.current = screen;
     }
@@ -227,6 +236,7 @@ impl Screens {
     }
 
     /// Feeds a pointer event to whichever screen is showing.
+    #[cfg(feature = "desktop")]
     pub(crate) fn pointer(&mut self, event: PointerEvent) {
         match self.current {
             Screen::Home => {
@@ -314,6 +324,7 @@ impl Screens {
     }
 
     /// Handles a key press in the preview.
+    #[cfg(feature = "desktop")]
     pub(crate) fn key(&mut self, key: char) {
         match key {
             'h' => self.current = Screen::Home,

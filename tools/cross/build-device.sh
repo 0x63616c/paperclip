@@ -1,7 +1,14 @@
 #!/bin/sh
 # Build a Paperclip binary for the tablet, with the vendor waveform engine.
 #
-#   ./tools/cross/build-device.sh <example-name>
+#   ./tools/cross/build-device.sh <example-name>     # a paper-device example
+#   ./tools/cross/build-device.sh --bin paperctl     # the command line itself
+#
+# `--bin paperctl` is the one a person runs: `paperctl open` presents a screen
+# on the panel and gives the display back (WWW-23). It is built with
+# `--no-default-features` plus `vendor-engine`, because the tablet has no
+# windowing stack and must not contain a code path that can sign a release
+# (§12) — the same reasoning as the `paperctl stock` build.
 #
 # Runs in an aarch64 Debian bookworm container, and both halves of that matter:
 #
@@ -23,7 +30,14 @@
 #                             copied off the device, so the ABI is the
 #                             device's own  (default ~/paperclip-vendor/lib)
 
-example=${1:-takeover}
+kind=example
+target=takeover
+case "${1:-}" in
+    --bin) kind=bin; target=${2:?--bin needs a name} ;;
+    "") ;;
+    *) target=$1 ;;
+esac
+
 qt=${PAPERCLIP_QT_INCLUDE:-$HOME/paperclip-qt/include}
 vendor=${PAPERCLIP_VENDOR_LIB_DIR:-$HOME/paperclip-vendor/lib}
 here=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -39,7 +53,7 @@ docker run --rm --platform linux/arm64 \
     -v "$qt:/qt:ro" \
     -v "$vendor:/vendor:ro" \
     -v "$HOME/.cargo/registry:/root/.cargo/registry" \
-    -e "EXAMPLE=$example" \
+    -e "KIND=$kind" -e "TARGET=$target" \
     debian:bookworm-slim sh -euc '
         export DEBIAN_FRONTEND=noninteractive
         apt-get -qq update >/dev/null
@@ -55,10 +69,20 @@ docker run --rm --platform linux/arm64 \
         # native build, so the system compiler is the linker.
         export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=cc
         cd /src
-        cargo build --release -p paper-device --example "$EXAMPLE" \
-            --features vendor-engine \
-            --target-dir /src/target/device-container
+        if [ "$KIND" = bin ]; then
+            cargo build --release -p "$TARGET" --bin "$TARGET" \
+                --no-default-features --features vendor-engine \
+                --target-dir /src/target/device-container
+        else
+            cargo build --release -p paper-device --example "$TARGET" \
+                --features vendor-engine \
+                --target-dir /src/target/device-container
+        fi
     '
-built="$here/target/device-container/release/examples/$example"
-[ -f "$built" ] || { echo "build produced nothing" >&2; exit 1; }
-echo "built: target/device-container/release/examples/$example"
+if [ "$kind" = bin ]; then
+    out=release/$target
+else
+    out=release/examples/$target
+fi
+[ -f "$here/target/device-container/$out" ] || { echo "build produced nothing" >&2; exit 1; }
+echo "built: target/device-container/$out"

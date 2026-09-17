@@ -149,6 +149,46 @@ cargo build -p paperctl --no-default-features   # what ships to /home/root/paper
 `paperctl stock` — the independent recovery path — exists only in a Linux
 build. On a Mac it says so rather than pretending.
 
+## First light: a screen on the actual panel
+
+`paperctl open` is the whole of it — one command, run over SSH on the tablet.
+It renders the screen through the same code `screenshot` uses, stops Xochitl,
+presents through the vendor waveform engine, holds the image, clears the panel,
+gives the display back and re-reads stock's health.
+
+```sh
+# On the Mac: build it for the tablet, with the vendor engine linked.
+tools/cross/build-device.sh --bin paperctl
+scp target/device-container/release/paperctl remarkable-wifi:/home/root/paperclip/bin/
+
+# On the tablet.
+/home/root/paperclip/bin/paperctl open              # Home, held 60s
+/home/root/paperclip/bin/paperctl open --hold 300   # long enough to photograph
+```
+
+Nothing installs on the root filesystem: the binary lives under
+`/home/root/paperclip`, and `open` writes no units at all (§13, ADR-0008).
+
+On a Mac, `--dry-run` does the render, the digest and the swap it would ask for,
+and touches nothing:
+
+```sh
+cargo run -p paperctl -- open --dry-run
+```
+
+The digest is the point of comparing the two. It is a SHA-256 of the exact
+ARGB8888 the engine is handed, so "tonight's run and this morning's presented
+the same bytes" is checkable in a way "it looked the same" is not.
+
+**What a successful run does and does not claim.** It claims the engine
+accepted the buffer, what the connector and rails said while it was up, and
+that stock came back with `NRestarts` unmoved. It does not claim the image was
+right — nothing in the process can see the glass, and `open` says
+`presented without error, appearance unverified` rather than something warmer
+(§17). The one thing it does check about the pixels is that they are not blank:
+a frame that rasterised to bare background refuses the takeover, because an
+empty panel and a perfect one produce identical logs from this side.
+
 ## The failure harness
 
 Every §10 recovery row, caused for real against systemd, in an aarch64 Linux

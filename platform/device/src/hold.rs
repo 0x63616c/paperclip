@@ -750,18 +750,13 @@ mod linux {
     /// Xochitl start, which is the resource it is least safe to spend.
     fn wait_for_registry(systemctl: &Systemctl) -> RegistryCheck {
         let started = Instant::now();
-        let mut check = RegistryCheck {
-            holder_pid: None,
-            xochitl_pid: None,
-            waited: Duration::ZERO,
-        };
         loop {
             let holder = crate::session::DisplayLockHolder::read_from(std::path::Path::new(
                 EPFRAMEBUFFER_LOCK,
             ))
             .ok()
             .flatten();
-            check = RegistryCheck {
+            let check = RegistryCheck {
                 holder_pid: holder.and_then(|holder| holder.pid),
                 xochitl_pid: systemctl.main_pid(),
                 waited: started.elapsed(),

@@ -101,6 +101,38 @@ pub(crate) enum CommandError {
         what: &'static str,
     },
 
+    /// The device adapter refused, or the panel did.
+    #[error("the display session did not complete")]
+    Device(#[source] paper_device::DeviceError),
+
+    /// A build that cannot reach the glass was asked to present.
+    ///
+    /// Its own variant rather than a generic refusal because the remedy is a
+    /// build flag, and because the alternative — stopping Xochitl to draw into
+    /// a `MemoryPanel` — would look like a successful session in every log.
+    #[cfg(target_os = "linux")]
+    #[error(
+        "this paperctl was built without the vendor waveform engine, so it cannot reach the panel\n\
+         build it with `--features vendor-engine` for aarch64, or pass --dry-run"
+    )]
+    NoVendorEngine,
+
+    /// The display came back, and stock did not come back the same.
+    ///
+    /// Distinct from [`Self::StockUnavailable`]: there the tablet may still be
+    /// without a UI, here it has one and something else is wrong — most
+    /// importantly a `NRestarts` that moved, which means Xochitl crashed and
+    /// the tablet is closer to an emergency shell than it was.
+    #[cfg(target_os = "linux")]
+    #[error(
+        "the display was handed back but stock did not come back as it was found: {regressions}\n\
+         check `systemctl show xochitl.service -p NRestarts -p ActiveState` before taking it again"
+    )]
+    StockRegressed {
+        /// What differed, from `StockHealth::regressions_from`.
+        regressions: String,
+    },
+
     /// Stock could not be restored. Never softened: §10 forbids claiming a
     /// recovery that did not happen.
     #[cfg(target_os = "linux")]
