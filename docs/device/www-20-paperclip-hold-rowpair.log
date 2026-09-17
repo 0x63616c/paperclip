@@ -1,0 +1,211 @@
+[01:44:25] hold starting: 180s packing=rowpair mode=geometry
+[01:44:25] pre: xochitl=active uptime=32396s charger=1
+[01:44:25] guardian armed (270s)
+[01:44:25] stopping xochitl
+[01:44:26] starting probe: --hold 180 --pack rowpair 
+[01:44:26.532] watchdog armed at 240 seconds
+[01:44:26.532] SET_MASTER granted
+[01:44:26.532] resources: 1 crtc, 1 connector, 1 encoder
+[01:44:26.532] connector 36: type=7 connection=1 modes=1 0mm x 0mm
+[01:44:26.532]   mode[0] 405x1084 @85 vrefresh=85 clock=54000
+[01:44:26.532] using connector 36, crtc 34, mode 405x1084
+[01:44:26.532] saved CRTC state: fb=0 mode_valid=0 x=0 y=0
+[01:44:26.537] CREATE_DUMB: 405x1084 bpp=32 pitch=1620 size=1756080
+[01:44:26.537] panel model: 1620x2160 at 4bpp -> 1620 bytes/row needed, fb provides 1620
+[01:44:26.537] ADDFB: fb_id=37
+[01:44:26.537] mmap ok at 0xffffab851000
+[01:44:26.597] SETCRTC accepted: crtc 34 scanning fb 37 (405x1084)
+[01:44:26.643] HOLD: geometry(packing=ROWPAIR) held for 180s with 1s ticker
+[01:44:26.644] HOLD tick 0
+[01:44:27.644] HOLD tick 1
+[01:44:28.644] HOLD tick 2
+[01:44:29.645] HOLD tick 3
+[01:44:30.645] HOLD tick 4
+[01:44:31] 5s in: probe alive=yes conn=enabled vcom=enabled/1
+[01:44:31.646] HOLD tick 5
+[01:44:32.646] HOLD tick 6
+[01:44:33.647] HOLD tick 7
+[01:44:34.647] HOLD tick 8
+[01:44:35.647] HOLD tick 9
+[01:44:36.648] HOLD tick 10
+[01:44:37.648] HOLD tick 11
+[01:44:38.649] HOLD tick 12
+[01:44:39.649] HOLD tick 13
+[01:44:40.649] HOLD tick 14
+[01:44:41.650] HOLD tick 15
+[01:44:42.650] HOLD tick 16
+[01:44:43.651] HOLD tick 17
+[01:44:44.651] HOLD tick 18
+[01:44:45.651] HOLD tick 19
+[01:44:46.652] HOLD tick 20
+[01:44:47.652] HOLD tick 21
+[01:44:48.653] HOLD tick 22
+[01:44:49.653] HOLD tick 23
+[01:44:50.654] HOLD tick 24
+[01:44:51.654] HOLD tick 25
+[01:44:52.654] HOLD tick 26
+[01:44:53.655] HOLD tick 27
+[01:44:54.655] HOLD tick 28
+[01:44:55.656] HOLD tick 29
+[01:44:56.656] HOLD tick 30
+[01:44:57.656] HOLD tick 31
+[01:44:58.657] HOLD tick 32
+[01:44:59.657] HOLD tick 33
+[01:45:00.658] HOLD tick 34
+[01:45:01.658] HOLD tick 35
+[01:45:02.658] HOLD tick 36
+[01:45:03.659] HOLD tick 37
+[01:45:04.659] HOLD tick 38
+[01:45:05.660] HOLD tick 39
+[01:45:06.660] HOLD tick 40
+[01:45:07.661] HOLD tick 41
+[01:45:08.661] HOLD tick 42
+[01:45:09.661] HOLD tick 43
+[01:45:10.662] HOLD tick 44
+[01:45:11.662] HOLD tick 45
+[01:45:12.663] HOLD tick 46
+[01:45:13.663] HOLD tick 47
+[01:45:14.663] HOLD tick 48
+[01:45:15.664] HOLD tick 49
+[01:45:16.664] HOLD tick 50
+[01:45:17.665] HOLD tick 51
+[01:45:18.665] HOLD tick 52
+[01:45:19.666] HOLD tick 53
+[01:45:20.666] HOLD tick 54
+[01:45:21.666] HOLD tick 55
+[01:45:22.667] HOLD tick 56
+[01:45:23.667] HOLD tick 57
+[01:45:24.668] HOLD tick 58
+[01:45:25.668] HOLD tick 59
+[01:45:26.668] HOLD tick 60
+[01:45:27.669] HOLD tick 61
+[01:45:28.669] HOLD tick 62
+[01:45:29.670] HOLD tick 63
+[01:45:30.670] HOLD tick 64
+[01:45:31.671] HOLD tick 65
+[01:45:32.671] HOLD tick 66
+[01:45:33.671] HOLD tick 67
+[01:45:34.672] HOLD tick 68
+[01:45:35.672] HOLD tick 69
+[01:45:36.673] HOLD tick 70
+[01:45:37.673] HOLD tick 71
+[01:45:38.673] HOLD tick 72
+[01:45:39.674] HOLD tick 73
+[01:45:40.674] HOLD tick 74
+[01:45:41.675] HOLD tick 75
+[01:45:42.675] HOLD tick 76
+[01:45:43.676] HOLD tick 77
+[01:45:44.676] HOLD tick 78
+[01:45:45.676] HOLD tick 79
+[01:45:46.677] HOLD tick 80
+[01:45:47.677] HOLD tick 81
+[01:45:48.678] HOLD tick 82
+[01:45:49.678] HOLD tick 83
+[01:45:50.679] HOLD tick 84
+[01:45:51.679] HOLD tick 85
+[01:45:52.679] HOLD tick 86
+[01:45:53.680] HOLD tick 87
+[01:45:54.680] HOLD tick 88
+[01:45:55.681] HOLD tick 89
+[01:45:56.681] HOLD tick 90
+[01:45:57.681] HOLD tick 91
+[01:45:58.682] HOLD tick 92
+[01:45:59.682] HOLD tick 93
+[01:46:00.683] HOLD tick 94
+[01:46:01.683] HOLD tick 95
+[01:46:02.684] HOLD tick 96
+[01:46:03.684] HOLD tick 97
+[01:46:04.684] HOLD tick 98
+[01:46:05.685] HOLD tick 99
+[01:46:06.685] HOLD tick 100
+[01:46:07.686] HOLD tick 101
+[01:46:08.686] HOLD tick 102
+[01:46:09.686] HOLD tick 103
+[01:46:10.687] HOLD tick 104
+[01:46:11.687] HOLD tick 105
+[01:46:12.688] HOLD tick 106
+[01:46:13.688] HOLD tick 107
+[01:46:14.688] HOLD tick 108
+[01:46:15.689] HOLD tick 109
+[01:46:16.689] HOLD tick 110
+[01:46:17.690] HOLD tick 111
+[01:46:18.690] HOLD tick 112
+[01:46:19.691] HOLD tick 113
+[01:46:20.691] HOLD tick 114
+[01:46:21.691] HOLD tick 115
+[01:46:22.692] HOLD tick 116
+[01:46:23.692] HOLD tick 117
+[01:46:24.693] HOLD tick 118
+[01:46:25.693] HOLD tick 119
+[01:46:26.694] HOLD tick 120
+[01:46:27.694] HOLD tick 121
+[01:46:28.695] HOLD tick 122
+[01:46:29.695] HOLD tick 123
+[01:46:30.695] HOLD tick 124
+[01:46:31.696] HOLD tick 125
+[01:46:32.696] HOLD tick 126
+[01:46:33.697] HOLD tick 127
+[01:46:34.697] HOLD tick 128
+[01:46:35.697] HOLD tick 129
+[01:46:36.698] HOLD tick 130
+[01:46:37.698] HOLD tick 131
+[01:46:38.699] HOLD tick 132
+[01:46:39.699] HOLD tick 133
+[01:46:40.700] HOLD tick 134
+[01:46:41.700] HOLD tick 135
+[01:46:42.700] HOLD tick 136
+[01:46:43.701] HOLD tick 137
+[01:46:44.701] HOLD tick 138
+[01:46:45.702] HOLD tick 139
+[01:46:46.702] HOLD tick 140
+[01:46:47.703] HOLD tick 141
+[01:46:48.703] HOLD tick 142
+[01:46:49.704] HOLD tick 143
+[01:46:50.704] HOLD tick 144
+[01:46:51.704] HOLD tick 145
+[01:46:52.705] HOLD tick 146
+[01:46:53.705] HOLD tick 147
+[01:46:54.706] HOLD tick 148
+[01:46:55.706] HOLD tick 149
+[01:46:56.707] HOLD tick 150
+[01:46:57.707] HOLD tick 151
+[01:46:58.707] HOLD tick 152
+[01:46:59.708] HOLD tick 153
+[01:47:00.708] HOLD tick 154
+[01:47:01.709] HOLD tick 155
+[01:47:02.709] HOLD tick 156
+[01:47:03.710] HOLD tick 157
+[01:47:04.710] HOLD tick 158
+[01:47:05.710] HOLD tick 159
+[01:47:06.711] HOLD tick 160
+[01:47:07.711] HOLD tick 161
+[01:47:08.712] HOLD tick 162
+[01:47:09.712] HOLD tick 163
+[01:47:10.712] HOLD tick 164
+[01:47:11.713] HOLD tick 165
+[01:47:12.713] HOLD tick 166
+[01:47:13.713] HOLD tick 167
+[01:47:14.714] HOLD tick 168
+[01:47:15.714] HOLD tick 169
+[01:47:16.715] HOLD tick 170
+[01:47:17.715] HOLD tick 171
+[01:47:18.716] HOLD tick 172
+[01:47:19.716] HOLD tick 173
+[01:47:20.716] HOLD tick 174
+[01:47:21.717] HOLD tick 175
+[01:47:22.717] HOLD tick 176
+[01:47:23.718] HOLD tick 177
+[01:47:24.718] HOLD tick 178
+[01:47:25.719] HOLD tick 179
+[01:47:26.719] HOLD complete
+[01:47:26.729] restore: CRTC 34 returned to saved state (fb=0 mode_valid=0)
+[01:47:26.729] restore: DRM master dropped
+[01:47:26.729] restore: complete
+[01:47:26] probe exited rc=0
+[01:47:26] === restore begins ===
+[01:47:28] post: xochitl=active pid=28721
+[01:47:28] post: system=running failed=[]
+[01:47:28] post: /home=mounted notebooks=53
+[01:47:28] post: conn=disabled
+[01:47:28] DONE
+[01:47:28] === restore complete ===

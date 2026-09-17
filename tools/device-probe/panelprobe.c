@@ -379,6 +379,8 @@ int main(int argc, char **argv)
     double t_scene = 10.0, t_flash = 6.0;
     int do_fid = 0;
     double t_hold = 0.0;   /* --hold S: single scene, held with a ticker */
+    enum packing hold_pack = PACK_ROWPAIR;   /* --pack */
+    int hold_fid = 0;                        /* --hold-fiducials */
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--watchdog") && i + 1 < argc)
@@ -389,8 +391,17 @@ int main(int argc, char **argv)
             do_fid = 1;
         else if (!strcmp(argv[i], "--hold") && i + 1 < argc)
             t_hold = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--hold-fiducials"))
+            hold_fid = 1;
+        else if (!strcmp(argv[i], "--pack") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "rowpair")) hold_pack = PACK_ROWPAIR;
+            else if (!strcmp(v, "halves")) hold_pack = PACK_HALVES;
+            else if (!strcmp(v, "interleaved")) hold_pack = PACK_INTERLV;
+            else { fprintf(stderr, "unknown --pack %s\n", v); return 64; }
+        }
         else {
-            fprintf(stderr, "usage: %s [--watchdog S] [--scene-seconds S] [--fiducials] [--hold S]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--watchdog S] [--scene-seconds S] [--fiducials] [--hold S] [--pack rowpair|halves|interleaved] [--hold-fiducials]\n", argv[0]);
             return 64;
         }
     }
@@ -472,9 +483,15 @@ int main(int argc, char **argv)
          * happens to a custom display session across a suspend/resume cycle:
          * if the ticker keeps advancing afterwards the process survived, and
          * the wrapper's sysfs sampler says whether the panel stayed powered. */
-        cur_pack = PACK_ROWPAIR;
-        scene_geometry();
-        logf_("HOLD: geometry(ROWPAIR) held for %.0fs with 1s ticker", t_hold);
+        cur_pack = hold_pack;
+        if (hold_fid)
+            scene_fiducials();
+        else
+            scene_geometry();
+        logf_("HOLD: %s(packing=%s) held for %.0fs with 1s ticker",
+              hold_fid ? "fiducials" : "geometry",
+              hold_pack == PACK_ROWPAIR ? "ROWPAIR" :
+              hold_pack == PACK_HALVES ? "HALVES" : "INTERLEAVED", t_hold);
         for (int t = 0; (double)t < t_hold; t++) {
             /* advance a black square along the top edge, one step per second */
             rect(40 + ((t - 1) % 30) * 50, 40, 40, 30, WHITE);
