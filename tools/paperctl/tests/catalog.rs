@@ -45,10 +45,11 @@ fn paperctl(args: &[&str]) -> String {
 /// A minimal aarch64 ELF header: enough for the package-time check that an
 /// entrypoint is a program for the device and not a script or a Mac binary.
 ///
-/// No app crate in this tree has a binary target yet — apps are linked into
-/// `paperctl` and run in-process — so there is no real `bin/sudoku` to
-/// package. That limits what this proves to the catalog path, which is what it
-/// is for; it proves nothing about a binary that starts.
+/// A stand-in rather than the real cross-compiled `bin/sudoku` (WWW-42,
+/// ADR-0022) on purpose: this test is about the catalog path, not about a
+/// binary that starts, and staging the real one needs a cross build this
+/// suite should not carry as a dependency. `apps/sudoku/tests/entrypoint.rs`
+/// is where a real, spawned `bin/sudoku` answers a real `Hello`.
 fn device_entrypoint() -> Vec<u8> {
     let mut bytes = vec![0x7f, b'E', b'L', b'F', 2, 1];
     bytes.resize(16, 0);
