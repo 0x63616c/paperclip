@@ -67,8 +67,11 @@ be the first thing on screen after boot and must not attempt to replace the PIN.
 
 - USB CDC (`10.11.99.1`) **does not survive autosleep**; the host interface goes
   quiet and recovers only after the gadget re-enumerates.
-- Wi-Fi (`192.168.0.180`) works and survives suspend. WWW-1 recorded Wi-Fi SSH
-  as never established; it is available. Use it for anything spanning a suspend.
+- Wi-Fi (`192.168.0.180`) works and survives autosleep (the shallow periodic
+  suspend). It does not survive the deeper sleep state that presents "paper
+  tablet is sleeping" — that state fully de-enumerates the USB gadget interface
+  and Wi-Fi stops answering. WWW-1 recorded Wi-Fi SSH as never established; it
+  is available during active operation and autosleep cycles.
 
 ## Input coordinate spaces are one space, not two
 

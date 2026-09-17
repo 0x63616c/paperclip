@@ -6,9 +6,8 @@ is only testable on Linux, so `tests/failure-harness` runs in a VM and refuses
 to run anywhere else. Its *decisions* are tested on the Mac like everything
 else, and the two are kept apart on purpose.
 
-Nothing in this repository has run on the tablet. See `recovery.md` for what
-exists on that side and what does not, and `isolation.md` for what the
-isolation really enforces.
+The display takeover, rendering and input handling have run on the tablet
+(WWW-20). See `docs/device/www-20-notes.md` for observations from that session.
 
 ## Prerequisites
 

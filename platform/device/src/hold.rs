@@ -207,9 +207,13 @@ impl FrameDigest {
     ///
     /// Used to refuse a takeover rather than present a void, which is the one
     /// failure that would otherwise be indistinguishable from a working
-    /// session in every log this process can write.
+    /// session in every log this process can write. Rejects frames with less
+    /// than 1% ink to catch obviously wrong buffers (noise, glitches, or
+    /// uninitialized memory). Real screens are at least 13% ink (Settings);
+    /// this threshold is conservative to avoid rejecting legitimate screens
+    /// while catching low-coverage anomalies.
     pub fn looks_drawn(&self) -> bool {
-        self.ink_per_mille > 0
+        self.ink_per_mille >= 10
     }
 }
 
@@ -1188,6 +1192,35 @@ mod tests {
         assert_eq!(digest.ink_per_mille(), 0);
         assert!(!digest.looks_drawn());
         assert!(FrameDigest::of(&drawn()).expect("digests").looks_drawn());
+    }
+
+    #[test]
+    fn frames_with_minimal_ink_are_rejected_as_likely_wrong() {
+        // A frame with ~0.1% ink (1 per mille) is below the threshold and
+        // should be rejected to catch noise, glitches or uninitialized buffers.
+        let mut almost_blank = Canvas::new(SCREEN).expect("allocates");
+        almost_blank.clear(palette::PAPER);
+        // A single pixel is ~0.0000037 per mille, so this is still much larger
+        // than any single pixel but tiny compared to real screens (13%+).
+        for y in 0..10 {
+            for x in 0..10 {
+                almost_blank.fill_rect(
+                    Rect::new(x as f32, y as f32, 1.0, 1.0),
+                    palette::INK,
+                );
+            }
+        }
+        let digest = FrameDigest::of(&almost_blank).expect("digests");
+        assert!(
+            digest.ink_per_mille() < 10,
+            "test setup should produce < 1% ink, got {}/1000",
+            digest.ink_per_mille()
+        );
+        assert!(
+            !digest.looks_drawn(),
+            "frames with <1% ink should be rejected, got {}/1000",
+            digest.ink_per_mille()
+        );
     }
 
     #[test]
