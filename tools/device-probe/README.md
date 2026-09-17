@@ -32,7 +32,33 @@ Every path that touches the tablet must leave stock Xochitl running:
 Run the probe over **Wi-Fi**, not USB: the USB CDC gadget does not survive the
 tablet's autosleep, while Wi-Fi does (WWW-20).
 
-## Modes
+## `pull-vendor-lib.sh`
+
+```sh
+./pull-vendor-lib.sh ~/paperclip-vendor [ssh-host]
+```
+
+Copies `/usr/lib/plugins/scenegraph/libqsgepaper.so` off the tablet and records
+its SHA-256, the firmware build it came from, and its licence line. Three reads
+and a copy; nothing on the device is modified and no service is touched.
+
+The library is proprietary (`LICENSE: CLOSED`) and must never be committed, so
+the script refuses a destination inside a git work tree. `platform/device`
+links it via `PAPERCLIP_VENDOR_LIB_DIR`; see
+`platform/device/native/README.md`.
+
+Keep the recorded digest. SWUpdate replaces the whole rootfs slot on every OS
+update, so a changed digest is the signal to re-run
+`platform/device/native/check-abi.sh` before trusting anything that links it.
+
+## `evname.c`, and its Rust successor
+
+`evname` prints the `/dev/input` mapping and classifies each node from its
+advertised axes. `platform/device`'s `device-report` example does the same
+thing in Rust, plus the wakelock and display-lock checks, and is the one to
+reach for now — this stays as the dependency-free fallback.
+
+## `panelprobe` modes
 
 - default — six diagnostic scenes: a packing-independent flash and grey ramp, a
   coarse framebuffer-space checkerboard, then the same asymmetric figure drawn

@@ -4,4 +4,9 @@
 [toolchain]
 channel = "1.94.0"
 components = ["rustfmt", "clippy"]
+# The tablet: aarch64, glibc, `ld-linux-aarch64.so.1` (WWW-1). Added by WWW-3
+# with the first build that exercises it, which is what A6 in
+# `docs/assumptions.md` said the condition for adding it was. The linker is a
+# `zig cc` wrapper; see `.cargo/config.toml` and `docs/development.md`.
+targets = ["aarch64-unknown-linux-gnu"]
 profile = "minimal"

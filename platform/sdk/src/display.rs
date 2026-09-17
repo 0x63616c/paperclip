@@ -10,11 +10,17 @@ use crate::geometry::{Point, Rect, Size};
 /// hard-codes these numbers; changing this constant changes the target
 /// everywhere, which is the point of it being a constant.
 ///
-/// What is *not* settled is how these pixels reach the panel. The DRM dumb
-/// buffer WWW-20 obtained is 1620 bytes × 1084 rows for 1620 × 2160 pixels —
-/// four bits per pixel, two panel rows per buffer row — so the device adapter
-/// (WWW-3) owes a packing and quantisation step between this canvas and the
-/// framebuffer. The exact packing is still an open hardware gate.
+/// The pixel format is settled too, and it is the one this canvas already
+/// produces: **1620 × 2160 ARGB8888**. An earlier reading of the DRM mode —
+/// 1620 bytes × 1084 rows, therefore 4bpp with two panel rows packed per
+/// buffer row — was refuted on hardware. That mode is a *proprietary packed
+/// transport*, not a pixel format anybody writes into, and no third party has
+/// reverse-engineered it. Presentation goes through the vendor waveform
+/// engine instead (ADR-0007), so there is no packing or quantisation step and
+/// none should be written.
+///
+/// What is still not settled is whether a Paperclip surface is legible on the
+/// glass. Nothing in this repository has presented a pixel on the tablet.
 pub const SCREEN: Size = Size::new(1620, 2160);
 
 /// How canvas space sits inside a physical surface.
@@ -22,8 +28,9 @@ pub const SCREEN: Size = Size::new(1620, 2160);
 /// The canvas is scaled uniformly — never stretched — and centred, leaving
 /// letterbox bars on whichever axis has spare room. On a Mac that is almost
 /// always the horizontal axis, because a 3:4 portrait canvas is taller than
-/// any laptop screen; on the tablet the mapping is expected to be identity,
-/// and this type will say so rather than being bypassed.
+/// any laptop screen. On the tablet the mapping is the identity, and
+/// `paper_device::present` refuses a canvas of any other size rather than
+/// scaling one — a blurred UI on e-ink is worse than an error.
 ///
 /// All physical coordinates are **physical** pixels. Window systems report
 /// logical points on HiDPI displays; convert with the scale factor before

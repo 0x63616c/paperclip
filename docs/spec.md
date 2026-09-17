@@ -32,6 +32,18 @@ Used throughout the specification and binding in this repository:
 | §16 | Chess rules library — a WWW-6 decision, explicitly not taken here |
 | §18 | Delivery order |
 
+## Amendments
+
+The specification is amended by decision, not by edit — `pasted-text.txt` is
+dated and stays as it was. Where a section has been amended, the replacement
+text lives in the ADR that carries the decision, and a reader of that section
+should go there first.
+
+| Section | Amended by | What changed |
+|---|---|---|
+| §10 | [ADR-0008](adr/0008-runtime-only-units-and-no-root-filesystem-install.md) | Persistence, Independence, Reboot and Deferred are replaced. This firmware has no writable persistent unit directory, so runtime units under `/run/systemd/system` established by `paperctl` are the only mechanism, and auto-start at boot is deferred. Accepted verbatim on 2026-09-17. |
+| §9 (display transport) | [ADR-0007](adr/0007-display-transport-via-vendor-waveform-engine.md) | Presentation goes through the vendor waveform engine, not raw DRM. The `405x1084 -> 1620x2160` packing is proprietary and explicitly out of scope. |
+
 ## Two rules that decide when anything is finished
 
 Quoted here because they govern how every claim in this repository should be

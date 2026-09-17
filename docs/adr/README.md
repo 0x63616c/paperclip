@@ -13,3 +13,6 @@ device survey and several of these are bets.
 | [0004](0004-built-in-stroke-font-and-vector-pieces.md) | A built-in stroke font and vector chess pieces |
 | [0005](0005-greyscale-first-palette.md) | A greyscale-first palette |
 | [0006](0006-provisional-device-assumptions.md) | Recording device-facing assumptions instead of guessing |
+| [0007](0007-display-transport-via-vendor-waveform-engine.md) | Presentation goes through the vendor waveform engine, not raw DRM |
+| [0008](0008-runtime-only-units-and-no-root-filesystem-install.md) | Runtime-only units, and nothing on the root filesystem |
+| [0009](0009-device-adapter-ffi-boundary.md) | The device adapter's FFI boundary |
