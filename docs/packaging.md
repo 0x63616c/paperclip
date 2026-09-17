@@ -8,6 +8,16 @@ Paperclip store. The decisions behind all of this are
 Everything below runs on the Mac today. Nothing in this document has run on the
 tablet.
 
+`apps/chess` and `apps/sudoku` are library crates; the entrypoint their
+manifests name, `bin/chess` and `bin/sudoku`, is a `[[bin]]` target built and
+cross-compiled separately (ADR-0022, WWW-42). `paperctl package` reads whatever
+its payload declares, wherever it is asked to look — it does not build
+anything — so `bin/<app>` has to already be staged in the source directory
+before `package` has something to read. `tools/package-app.sh <app>` does
+that: it cross-compiles the entrypoint for `aarch64-unknown-linux-gnu` and
+drops the binary at `apps/<app>/bin/<app>`, which is what makes the commands
+below work from a clean checkout.
+
 ## The two halves
 
 `paperctl` is split, and the split is the point:
@@ -45,6 +55,7 @@ two of them (WWW-39): "install an app that is not Chess" is now a path with
 something in it.
 
 ```sh
+./tools/package-app.sh chess
 paperctl package apps/chess --out build/chess-0.2.0.paperpkg
 paperctl check build/chess-0.2.0.paperpkg          # opens it the way a device would
 paperctl publish build/chess-0.2.0.paperpkg \

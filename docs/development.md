@@ -302,7 +302,12 @@ a staged package, not a source directory.
 
 ## Packaging and catalogs
 
+`apps/chess` and `apps/sudoku` are library crates plus a `[[bin]]` entrypoint
+(ADR-0022); `package` needs the entrypoint built and staged into `bin/<app>`
+before it has a payload to read:
+
 ```sh
+./tools/package-app.sh chess      # cross-compiles bin/chess, stages it in place
 cargo run -p paperctl -- key generate --out-dir ~/.paperclip
 cargo run -p paperctl -- package apps/chess --out build/chess.paperpkg
 cargo run -p paperctl -- publish build/chess.paperpkg \

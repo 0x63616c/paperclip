@@ -1,0 +1,163 @@
+# ADR-0022 — App entrypoint binaries, and stdio as the launch transport
+
+**Status:** accepted (WWW-42). **Not exercised on hardware.** The entrypoints
+this ADR adds have been built for `aarch64-unknown-linux-gnu`, packaged,
+signed, published, installed into a scratch store and confirmed to be aarch64
+ELF executables. Nothing here has run as a launched process on the tablet: the
+Mac has no way to execute an aarch64 binary, and no host process on the device
+has spawned one yet (WWW-4's supervisor).
+
+## Context
+
+Every app is a library crate. `paperctl run`/`paperctl dev` host `ChessApp`,
+`SudokuApp`, `HomeApp` and `SettingsApp` in-process, behind `DevApp`
+(`tools/paperctl/src/session.rs`), connected to `paper_sdk::run` over a
+loopback `UnixStream::pair()`. That proves the protocol end to end, but it
+proves it between two ends of the same process — never between two processes,
+which is what the app contract (§8, ADR-0016) actually specifies and what
+`paperctl package` assumes exists: every `paper.toml` names an `entrypoint`
+(`bin/chess`, `bin/sudoku`, ...) and nothing in the workspace builds one.
+`paperctl package apps/chess` and `paperctl package apps/sudoku` both fail —
+identically, on the same missing file — which means neither app has ever
+actually been installed from a package with a real payload.
+
+Two questions had no answer before this stage: how does an app become an
+executable at all, and how does a process launched from that executable reach
+the host that speaks `paper_protocol` to it.
+
+## Decision
+
+### A `[[bin]]` target per catalog app, sharing the crate that already exists
+
+`apps/chess/Cargo.toml` and `apps/sudoku/Cargo.toml` each grow a `[[bin]]`
+pointing at a new `src/main.rs`, alongside the existing `src/lib.rs`. The
+binary is nearly nothing:
+
+```rust
+fn main() -> ExitCode {
+    let outcome = paper_sdk::run(ChessApp::new(), io::stdin(), io::stdout(), LocalSurfaces::new());
+    match outcome {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("paper-chess: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+```
+
+This is deliberately the same lifecycle `DevApp::Chess` already gets inside
+`paperctl` — the same `App` impl, the same `paper_sdk::run` loop — on the far
+side of a real process boundary instead of a thread. No new code path needed
+inventing; the entrypoint is the existing contract, wired to `main`.
+
+Only Chess and Sudoku get one. Home, Settings and the App Store ship *with*
+the platform release (project decision, 2026-09-16, §13) rather than through
+the catalog, so nothing packages them with `paperctl package`, and their
+`paper.toml` files still naming `bin/home` etc. is a latent inconsistency this
+stage does not resolve — see "What is not established".
+
+### The launch transport is the process's own stdin/stdout
+
+`paper_sdk::run` takes any `Read`/`Write` pair; it does not know or care what
+they are. The options were a Unix domain socket at a path passed on the
+command line, or the pipes a parent process gets for free when it spawns a
+child. Stdio was chosen:
+
+- It needs no new argument convention, no socket directory, and no cleanup —
+  a spawned child already has a reader and a writer the moment it exists.
+- It is what a future supervisor gets for free from `std::process::Command`
+  (or the equivalent unit configuration), so nothing here is thrown away when
+  WWW-4 builds the real launcher.
+- `codec::write_message` already calls `flush()` after every message
+  (`platform/protocol/src/codec.rs`), which is what makes this safe against
+  `Stdout`'s internal `LineWriter`: a length-prefixed binary message has no
+  reason to contain a newline, and without an explicit flush a message could
+  sit in the buffer indefinitely waiting for one.
+
+An app must never print anything else to stdout — there is no framing that
+distinguishes a stray `println!` from a protocol message, and one would be
+read as a corrupt frame. Nothing in `paper_sdk` or either app does; this is a
+rule for the next entrypoint someone writes, not a check anything enforces
+(see `docs/app-contract.md`'s opening: the SDK is not a security boundary).
+
+### The surface is still `LocalSurfaces`, not a host mapping
+
+`Hello.surface` describes a drawing surface, and ADR-0016 already named the
+real transport for it as a file descriptor passed with the launch connection
+— WWW-4's work, unproven on this firmware. This stage does not build that.
+Both entrypoints open a `paper_sdk::LocalSurfaces` provider, exactly what the
+desktop preview and every existing test use: the app allocates its own
+buffer and publishes into it. A conformance-test host, or a future real one,
+reads `Hello.surface` and gets the same descriptor either way — what differs
+is who owns the memory behind it, which is invisible to the app.
+
+### Staging is a script, not a manual step
+
+`archive::build` (`platform/packages/src/archive.rs`) reads exactly what the
+manifest declares from the source directory it is pointed at; it does not
+build anything. So `apps/chess` needs `bin/chess` sitting next to `paper.toml`
+before `paperctl package apps/chess` has a payload to read. `tools/
+package-app.sh <chess|sudoku>` does the cross-compile
+(`--target aarch64-unknown-linux-gnu`, release profile) and copies the result
+to `apps/<app>/bin/<app>`. Neither app links Qt or the vendor waveform engine
+— pixels never cross the wire (ADR-0016 §3) — so this needs none of
+`tools/cross/build-device.sh`'s Docker/Qt-headers/vendor-library machinery,
+only the `aarch64-linux-gnu-cc` (`zig cc`) wrapper `.cargo/config.toml`
+already points the target at.
+
+`apps/*/bin/` is gitignored: it is what the script produces, not something
+committed, the same relationship `/target/` already has to the rest of the
+workspace.
+
+## Consequences
+
+- `paperctl package apps/chess` and `paperctl package apps/sudoku` work from a
+  clean checkout, once `tools/package-app.sh` has staged their binaries.
+  `paperctl check`, `publish`, `install` and `rollback` were already proven
+  against a stand-in payload (WWW-42's own report); this stage re-runs that
+  round trip with the real cross-compiled binary and confirms the installed
+  entrypoint is an aarch64 ELF that answers `Hello` with `Ready` and, on a
+  `PrepareToExit`, replies `Saved` before exiting — `apps/chess/tests/
+  entrypoint.rs` and `apps/sudoku/tests/entrypoint.rs` assert exactly that,
+  spawning the built binary rather than linking the app in-process.
+- `docs/packaging.md` and `docs/development.md` are corrected: the five-command
+  publishing flow needs a staging step first, and "install an app that is not
+  Chess is now a path with something in it" was not true until this stage —
+  neither app had ever built a payload before it.
+
+## What is not established
+
+- **Nothing has run on the tablet.** Every check above — the ELF header, the
+  `Hello`/`Ready`/`Saved` handshake, the install into a scratch `--root` — ran
+  on the Mac, against a cross-compiled binary this build cannot execute
+  itself. Running it for real needs a host process on the device to launch
+  it, which does not exist yet, or a manual SSH invocation, which this stage
+  did not perform: copying and executing a new binary on the tablet is a
+  state-changing device operation the project's standing constraints gate on
+  Calum's approval, and building that approval into a script was out of scope
+  for what this issue asked for.
+- **Home, Settings and the App Store still declare `entrypoint = "bin/*"`**
+  with nothing building those binaries. They ship with the platform release
+  rather than through `paperctl package`, so nothing exercises the gap today,
+  but a `paperctl check apps/home` would fail exactly as Chess and Sudoku did
+  before this stage.
+- **The FD-mapped surface is still open.** `LocalSurfaces` is correct for
+  every test and the desktop preview; whether a real launched process can
+  receive a mapping from a real host, on this firmware, is unmeasured (see
+  ADR-0016's own "what would make this wrong").
+
+## What would make this wrong
+
+- **If pen/touch coalescing ever needs the app to see a message before the
+  socket layer has fully drained a batch**, stdio's per-message flush is the
+  same cost a Unix socket would pay — this is not a reason to change it, but
+  it is the assumption behind calling it free.
+- **If a future entrypoint needs bidirectional back-pressure or shutdown
+  semantics finer than "the writer end closes"**, a Unix domain socket carries
+  those (e.g. `shutdown(SHUT_WR)` independent of the pipe halves) where a pair
+  of OS pipes does not. Nothing built so far needs it.
+- **If Home, Settings or the App Store ever needs to be installable through
+  the catalog rather than shipped with the platform**, it gets the same
+  `[[bin]]` + `main.rs` treatment this ADR gives Chess and Sudoku, not a new
+  design.

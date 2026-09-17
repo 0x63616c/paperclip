@@ -28,3 +28,4 @@ device survey and several of these are bets.
 | [0019](0019-platform-update-transaction.md) | The platform update transaction: stage, activate, verify, commit, roll back |
 | [0020](0020-mac-side-device-transport.md) | The Mac-side device transport, and where auto-discovery is still unproven |
 | [0021](0021-per-cell-damage-and-the-sudoku-app.md) | How an app claims per-cell damage, and Sudoku as the worked example |
+| [0022](0022-app-entrypoint-binaries-and-stdio-transport.md) | App entrypoint binaries, and stdio as the launch transport |

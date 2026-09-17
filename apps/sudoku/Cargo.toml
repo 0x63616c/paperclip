@@ -8,6 +8,10 @@ license.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "sudoku"
+path = "src/main.rs"
+
 [dependencies]
 getrandom = { workspace = true }
 paper-sdk = { workspace = true }

@@ -4,3 +4,7 @@
 
 # Preview output. Screenshots that matter are attached to issues, not committed.
 /artifacts/
+
+# `tools/package-app.sh`'s staged entrypoint binaries. Build artefacts, not
+# source — the cross-compiled aarch64 ELF a source tree does not ship with.
+/apps/*/bin/
