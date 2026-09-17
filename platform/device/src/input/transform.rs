@@ -22,8 +22,16 @@
 //! 0.750 — so the active sensing area is taller than the glass and a pure
 //! scale cannot be exactly right everywhere. The scales above are what this
 //! stage was told to implement, and they are the defaults. The offset exists,
-//! zeroed, so that the measured correction WWW-21 produces from taps on
-//! rendered fiducials is a number to set rather than a type to redesign.
+//! zeroed, so that the measured correction WWW-21 produces is a number to set
+//! rather than a type to redesign.
+//!
+//! WWW-20's second calibration attempt narrows how large that correction can
+//! be: real touches reached x=33 and x=2003 against an axis maximum of 2064,
+//! and y=0 and y=2726 against 2832. So the reported range is physically
+//! reachable and there is no large dead margin between digitizer and glass —
+//! which is why a zeroed offset is a reasonable default rather than a
+//! placeholder. It is still not a measured transform: nine contacts whose
+//! intended targets are unknown do not determine one.
 //!
 //! [`PointerTransform::mirror_y`] is likewise present and off: the single
 //! orientation check is deferred to WWW-21, and a flag defaulted to the
