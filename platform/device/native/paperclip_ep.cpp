@@ -177,8 +177,10 @@ int32_t present(paperclip_ep *ep, QRect rect, int32_t content, int32_t mode,
     try {
         const int screen_mode = (content == PAPERCLIP_EP_CONTENT_COLOR ? 0x100 : 0) | mode;
         const int flags = full != 0 ? 1 : 0;
-        ep->engine->swapBuffers(rect, static_cast<EPScreenMode>(screen_mode),
-                                QFlags<UpdateFlag>(static_cast<UpdateFlag>(flags)));
+        ep->engine->swapBuffers(
+            rect, static_cast<EPScreenMode>(screen_mode),
+            QFlags<EPFramebuffer::UpdateFlag>(
+                static_cast<EPFramebuffer::UpdateFlag>(flags)));
         return PAPERCLIP_EP_OK;
     } catch (const std::exception &error) {
         return fail(PAPERCLIP_EP_EXCEPTION, error.what());

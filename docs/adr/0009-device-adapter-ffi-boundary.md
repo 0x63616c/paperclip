@@ -120,23 +120,61 @@ type *names*, and `native/check-abi.sh`:
 4. given a copy of the library, additionally checks each mangled name is
    really exported by it.
 
-Steps 1–3 pass as of 2026-09-17. Step 4 has not run: the tablet was
-unreachable during WWW-3's first pass. The mangled names are recorded in
-`vendor-abi.txt` so a reader can see exactly what will be linked:
+**All four steps pass as of 2026-09-17**, against `libqsgepaper.so` sha256
+`3f76b7db328f7e16cde2d360ebe4a1db043a113cd2386d4c995cc4d25a0eeaec`, pulled
+read-only from image `20260827113527` (`IMG_VERSION 3.28.0.172`). The seven
+mangled names, each confirmed exported by that library:
 
 ```
 _ZN13EPFramebuffer8instanceEv
 _ZN13EPFramebuffer10setBuffersESt5tupleIJ6QImageS1_EEPS1_
-_ZN13EPFramebuffer11swapBuffersE5QRect12EPScreenMode6QFlagsI10UpdateFlagE
-_ZN13EPFramebuffer11swapBuffersERK7QRegionRK15EPScreenModeMap6QFlagsI10UpdateFlagE
+_ZN13EPFramebuffer11swapBuffersE5QRect12EPScreenMode6QFlagsINS_10UpdateFlagEE
+_ZN13EPFramebuffer11swapBuffersERK7QRegionRK15EPScreenModeMap6QFlagsINS_10UpdateFlagEE
 _ZN13EPFramebuffer12ghostControlENS_16GhostControlModeE
 _ZN13EPFramebuffer13checkLockFileEv
 _ZN13EPFramebuffer11handleCrashEv
 ```
 
+**Step 4 earned its keep on its first run.** Two of the seven came back
+`MISSING`: the signatures recorded from WWW-20's inspection had
+`QFlags<UpdateFlag>`, and the library has `QFlags<EPFramebuffer::UpdateFlag>` —
+the enum is nested, not global. That is a one-token difference that mangles to
+`NS_10UpdateFlagE` rather than `10UpdateFlagE` and would have linked to
+nothing. `ep_abi.hpp`, `vendor-abi.txt` and the bridge's `swapBuffers` call are
+corrected.
+
 This is also the firmware-drift alarm. When an OS update replaces the rootfs,
 re-running the check against the new library says immediately whether the ABI
 moved, rather than leaving it to be discovered by a black screen.
+
+## What else the library says about itself
+
+Read out of the pulled copy, and none of it good news for the primary path:
+
+- **`EPFramebuffer` is a `QObject`.** It exports `qt_metacall`, `qt_metacast`
+  and `staticMetaObject`, and has a `framebufferUpdated(const QRect &)`
+  signal. It also has a public constructor and destructor, a
+  `forceInstance(EPFramebuffer *)`, and `showForWindow(QWindow *)` /
+  `hideForWindow(QWindow *)` — an API that expects windows to exist.
+- **It needs Qt Quick.** `DT_NEEDED` lists `libQt6Core.so.6`,
+  `libQt6Gui.so.6`, **`libQt6Qml.so.6`, `libQt6Quick.so.6`**, `libdrm.so.2`,
+  `libstdc++.so.6`. It is a *scenegraph* plugin, which is what its path says,
+  and it references `QCoreApplication::self`.
+- **Waveform tables are per-panel-lot.** Strings include
+  `"Loading waveforms from: %s"`, `"Using user defined waveform file."` and
+  `wf_search: unable to find correct waveform for lot: %s and tft: %s`. So
+  waveform selection is not a pure mode number; the engine looks up a table
+  keyed by the individual panel.
+
+Taken together this makes the risk already listed under "what would make this
+wrong" — that `EPFramebuffer` needs a live `QGuiApplication` — **substantially
+more likely than it looked when ADR-0007 chose this path**. It does not refute
+the primary path: a bridge can construct a `QGuiApplication` itself, and that
+is what Quill must be doing. It does mean the "no Qt runtime" simplicity that
+made `libqsgepaper` attractive over the QPA plugin is probably not real, and
+that if a `QGuiApplication` turns out to be required anyway, rmweb's `epaper`
+QPA route becomes the cheaper of two Qt-shaped options rather than the
+fallback. **Decide that with the first compile, not before.**
 
 ## Provenance
 
@@ -173,8 +211,9 @@ pointed at by `PAPERCLIP_VENDOR_LIB_DIR`.
 
 | Gate | Status | What it blocks |
 |---|---|---|
-| The bridge compiles against Qt 6.10.3 and `libqsgepaper.so` | **not attempted** — no SDK, no library | everything below |
-| The declared symbols are exported by the real library | **not checked** — step 4 above | linking at all |
+| The declared symbols are exported by the real library | **closed 2026-09-17** — all seven present | linking at all |
+| The bridge compiles against Qt 6.10.3 and `libqsgepaper.so` | **not attempted** — the SDK is not installed | everything below |
+| Whether `EPFramebuffer` needs a live `QGuiApplication` | **open, and now likely** — see above | whether the primary path is simpler than the fallback at all |
 | A Paperclip surface is legible on the glass | **open** | §18 item 2, the stage's whole point |
 | Which tuple element the engine presents from | **guessed** in `paperclip_ep_open` | drawing landing on the wrong page |
 | The `EPScreenMode` / `UpdateFlag` / `GhostControlMode` numeric values | **guessed** | wrong waveform, silently |

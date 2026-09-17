@@ -39,11 +39,21 @@ template <typename Enum> class QFlags;
 
 class EPScreenModeMap;
 enum EPScreenMode : int;
-enum UpdateFlag : int;
 
+// `EPFramebuffer` is a `QObject` on this image — it exports `qt_metacall`,
+// `qt_metacast`, `staticMetaObject` and a `framebufferUpdated(const QRect&)`
+// signal. That is not declared here because none of it is called and the base
+// class does not affect the mangling of the members that are. It is recorded
+// because it raises a real question: a QObject may expect a running
+// `QCoreApplication`. See ADR-0009, "what would make this wrong".
 class EPFramebuffer {
 public:
+    // Both nested, not global. `UpdateFlag` being nested is what the first run
+    // of `check-abi.sh` against the real library caught: the two `swapBuffers`
+    // overloads mangle `QFlags<EPFramebuffer::UpdateFlag>` as `NS_10UpdateFlagE`
+    // and the global reading produced `10UpdateFlagE`, which links to nothing.
     enum GhostControlMode : int;
+    enum UpdateFlag : int;
 
     static EPFramebuffer *instance();
 

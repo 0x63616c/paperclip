@@ -68,8 +68,17 @@ linker error, and refuses outright on a non-aarch64 target.
 
 ## Status
 
-**This has never been compiled.** WWW-3's first pass could reach neither the
-tablet nor the SDK. What is verified is `check-abi.sh` steps 1–3; everything
-else in `paperclip_ep.cpp` is unvalidated, and the guesses are marked
-`UNVERIFIED` in the source. ADR-0009 lists every open gate and what each one
-blocks.
+**This has never been compiled.** WWW-3 obtained `libqsgepaper.so` but not the
+SDK, so nothing here has been through a compiler that could link it.
+
+What *is* verified: `check-abi.sh` passes all four steps against the real
+library, sha256 `3f76b7db…`, image `20260827113527`. All seven symbols are
+present — after the check caught that `UpdateFlag` is nested in
+`EPFramebuffer` rather than global, which is a link failure the recorded
+signatures would otherwise have produced.
+
+Everything else in `paperclip_ep.cpp` is unvalidated, and the guesses are
+marked `UNVERIFIED` in the source. Note in particular that the library needs
+`libQt6Qml.so.6` and `libQt6Quick.so.6` and that `EPFramebuffer` is a
+`QObject`, so it may well require a running `QGuiApplication` — ADR-0009 has
+the detail and every other open gate.

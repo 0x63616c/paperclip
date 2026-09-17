@@ -1,8 +1,12 @@
 # Exported signatures of libqsgepaper.so that platform/device/native calls.
 #
-# Source: WWW-20's inspection of /usr/lib/plugins/scenegraph/libqsgepaper.so on
-# reMarkable Paper Pro image 20260827113527 (see docs/adr/0007-...). Recorded as
-# the demangler prints them, one per line, comments and blank lines ignored.
+# Source: /usr/lib/plugins/scenegraph/libqsgepaper.so on reMarkable Paper Pro
+# image 20260827113527, sha256 3f76b7db328f7e16cde2d360ebe4a1db043a113cd2386d4c9
+# 95cc4d25a0eeaec, pulled 2026-09-17 by WWW-3. First recorded from WWW-20's
+# inspection; the two swapBuffers overloads were CORRECTED against the library
+# itself, which showed UpdateFlag to be nested in EPFramebuffer rather than
+# global. Recorded as the demangler prints them, one per line, comments and
+# blank lines ignored.
 #
 # `check-abi.sh` compares what `ep_abi.hpp` generates against this list. If a
 # firmware update changes one of these, the check fails here first rather than
@@ -10,19 +14,19 @@
 
 EPFramebuffer::instance()
 EPFramebuffer::setBuffers(std::tuple<QImage, QImage>, QImage*)
-EPFramebuffer::swapBuffers(QRect, EPScreenMode, QFlags<UpdateFlag>)
-EPFramebuffer::swapBuffers(QRegion const&, EPScreenModeMap const&, QFlags<UpdateFlag>)
+EPFramebuffer::swapBuffers(QRect, EPScreenMode, QFlags<EPFramebuffer::UpdateFlag>)
+EPFramebuffer::swapBuffers(QRegion const&, EPScreenModeMap const&, QFlags<EPFramebuffer::UpdateFlag>)
 EPFramebuffer::ghostControl(EPFramebuffer::GhostControlMode)
 EPFramebuffer::checkLockFile()
 EPFramebuffer::handleCrash()
 
 # The mangled names these produce, as emitted by `check-abi.sh` on 2026-09-17
-# and recorded so a reader can see what will actually be linked:
+# and each confirmed present in the library above:
 #
 #   _ZN13EPFramebuffer8instanceEv
 #   _ZN13EPFramebuffer10setBuffersESt5tupleIJ6QImageS1_EEPS1_
-#   _ZN13EPFramebuffer11swapBuffersE5QRect12EPScreenMode6QFlagsI10UpdateFlagE
-#   _ZN13EPFramebuffer11swapBuffersERK7QRegionRK15EPScreenModeMap6QFlagsI10UpdateFlagE
+#   _ZN13EPFramebuffer11swapBuffersE5QRect12EPScreenMode6QFlagsINS_10UpdateFlagEE
+#   _ZN13EPFramebuffer11swapBuffersERK7QRegionRK15EPScreenModeMap6QFlagsINS_10UpdateFlagEE
 #   _ZN13EPFramebuffer12ghostControlENS_16GhostControlModeE
 #   _ZN13EPFramebuffer13checkLockFileEv
 #   _ZN13EPFramebuffer11handleCrashEv

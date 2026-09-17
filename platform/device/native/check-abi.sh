@@ -30,7 +30,6 @@ class QRegion;
 template <typename Enum> class QFlags;
 class EPScreenModeMap;
 enum EPScreenMode : int;
-enum UpdateFlag : int;
 
 #include "ep_abi.hpp"
 
@@ -39,10 +38,11 @@ void paperclip_abi_probe() {
     EPFramebuffer::instance();
     void (EPFramebuffer::*set)(std::tuple<QImage, QImage>, QImage *) =
         &EPFramebuffer::setBuffers;
-    void (EPFramebuffer::*swap_rect)(QRect, EPScreenMode, QFlags<UpdateFlag>) =
+    void (EPFramebuffer::*swap_rect)(QRect, EPScreenMode,
+                                     QFlags<EPFramebuffer::UpdateFlag>) =
         &EPFramebuffer::swapBuffers;
     void (EPFramebuffer::*swap_region)(const QRegion &, const EPScreenModeMap &,
-                                       QFlags<UpdateFlag>) =
+                                       QFlags<EPFramebuffer::UpdateFlag>) =
         &EPFramebuffer::swapBuffers;
     void (EPFramebuffer::*ghost)(EPFramebuffer::GhostControlMode) =
         &EPFramebuffer::ghostControl;
