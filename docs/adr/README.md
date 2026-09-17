@@ -29,3 +29,4 @@ device survey and several of these are bets.
 | [0020](0020-mac-side-device-transport.md) | The Mac-side device transport, and where auto-discovery is still unproven |
 | [0021](0021-per-cell-damage-and-the-sudoku-app.md) | How an app claims per-cell damage, and Sudoku as the worked example |
 | [0022](0022-app-entrypoint-binaries-and-stdio-transport.md) | App entrypoint binaries, and stdio as the launch transport |
+| [0023](0023-paperctl-logs-doctor-deploy.md) | `paperctl logs`, `doctor` and `deploy`, replacing a set of personal shell aliases |

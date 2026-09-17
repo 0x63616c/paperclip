@@ -287,4 +287,36 @@ pub(crate) enum CommandError {
     /// `paperctl devices --output json` could not encode its result.
     #[error("cannot encode devices as JSON")]
     Json(#[source] serde_json::Error),
+
+    /// The Mac-side run history could not be read or written.
+    #[cfg(not(target_os = "linux"))]
+    #[error("the run log could not be used")]
+    RunLog(#[from] crate::transport::runlog::RunLogError),
+
+    /// `paperctl logs` found nothing retained yet.
+    #[cfg(not(target_os = "linux"))]
+    #[error("no runs retained yet; looked in {dir}")]
+    NoRuns {
+        /// Where it looked.
+        dir: PathBuf,
+    },
+
+    /// `paperctl logs --last N` asked for a run further back than what is
+    /// retained.
+    #[cfg(not(target_os = "linux"))]
+    #[error("only {retained} run(s) retained; `--last {position}` does not exist")]
+    NoSuchRun {
+        /// What was asked for.
+        position: usize,
+        /// How many runs actually exist.
+        retained: usize,
+    },
+
+    /// `paperctl deploy`'s local cross-compile step could not run or failed.
+    #[cfg(not(target_os = "linux"))]
+    #[error("{detail}")]
+    Deploy {
+        /// What went wrong.
+        detail: String,
+    },
 }

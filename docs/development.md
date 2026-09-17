@@ -193,6 +193,44 @@ The pin and the cached last-good host live in one file, `paperctl devices
 --help` prints exactly where (`~/.config/paperctl/config.toml`, or
 `$PAPERCTL_CONFIG_DIR`/`$XDG_CONFIG_HOME` if set).
 
+## Logs, doctor and deploy (WWW-34)
+
+Three commands that used to be shell aliases on Calum's Mac, kept out of this
+repository and out of the resolution order above — none of them run on the
+device.
+
+```sh
+paperctl logs                # the newest recorded run (open, deploy)
+paperctl logs --list         # every retained run
+paperctl logs --last 2       # the one before the newest
+paperctl logs --output json
+
+paperctl doctor              # can the tablet be reached, and is it healthy
+paperctl doctor --output json
+
+paperctl deploy               # cross-compile paperctl and install it on the tablet
+paperctl deploy --dry-run     # the build and install commands, no device touched
+```
+
+`logs` reads the run history `open` and `deploy` write; run records live
+under the same directory as the device config (`runs/`, next to
+`config.toml`). It fails, naming the path it looked in, when nothing is
+retained yet — never a silent empty list.
+
+`doctor` resolves a device through the same order as `paperctl devices`, but
+with its own short reachability budget rather than the 30s one `open` and
+`stock` need to wake a sleeping tablet (WWW-35) — a diagnostic has to answer
+inside its own 15s failure bound, so a sleeping tablet reads as unreachable
+here rather than waiting to find out. It exits 0 when healthy, a distinct
+nonzero when the tablet cannot be reached at all, and another distinct
+nonzero when it is reachable but degraded (`NRestarts > 0`, the vendor
+display lock held, or the on-device `paperctl` missing or a different
+version).
+
+`deploy` is the dev-loop replacement for building `paperctl` by hand and
+copying it into place — see the next section, which now runs it instead of
+the manual `scp`.
+
 ## First light: a screen on the actual panel
 
 `paperctl open` renders the screen through the same code `screenshot` uses,
@@ -204,11 +242,10 @@ started it, because a live session does not reliably survive one (WWW-23).
 
 ```sh
 # On the Mac: build it for the tablet, with the vendor engine linked, and
-# copy it into place. Direct shell access, not `paperctl` — the binary has to
-# exist on the tablet before anything can forward to it.
-tools/cross/build-device.sh --bin paperctl
-ssh remarkable-wifi 'mkdir -p /home/root/paperclip/bin'
-scp target/device-container/release/paperctl remarkable-wifi:/home/root/paperclip/bin/
+# install it — the binary has to exist on the tablet before anything can
+# forward to it. The very first time, `mkdir -p /home/root/paperclip/bin`
+# over SSH first; `deploy` installs into that directory, it does not create it.
+paperctl deploy
 
 # From the Mac, from here on.
 paperctl open              # Home, held 60s, on whichever tablet resolves
@@ -335,7 +372,7 @@ apps/chess-rules    chess legality, game state and the save format
 apps/sudoku         the Sudoku screen, and the worked example of per-cell damage
 apps/sudoku-rules   sudoku generation, validation, solving and the save format
 apps/settings       the Settings screen: apps, storage, grants, catalog, platform, diagnostics
-tools/paperctl      the command line: stock, setup, upgrade, remove, packaging
+tools/paperctl      the command line: stock, setup, upgrade, remove, packaging, logs, doctor, deploy
 tools/fault-app     a session that misbehaves to order, for the harness
 tools/vm-harness    scripts that build the VM the harness runs in
 tools/cross         the zig cc linker wrapper for the device triple

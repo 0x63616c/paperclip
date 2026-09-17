@@ -25,8 +25,25 @@ pub(crate) mod discover;
 // it.
 #[cfg(not(target_os = "linux"))]
 pub(crate) mod remote;
+// The Mac-side run history behind `paperctl logs` (WWW-34). `open` and
+// `deploy` are the writers; both are Mac-only, so this is gated the same way
+// as `remote` rather than compiled into a device build that never uses it.
+#[cfg(not(target_os = "linux"))]
+pub(crate) mod runlog;
+#[cfg(not(target_os = "linux"))]
+pub(crate) mod test_doubles;
 
 use clap::Args;
+
+/// Table for a terminal, or JSON for a script — shared by every command that
+/// offers both (`devices`, `doctor`, `logs`) so the flag looks and behaves
+/// identically everywhere it appears, rather than three near-identical
+/// per-command enums.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum OutputFormat {
+    Table,
+    Json,
+}
 
 /// The tablet to reach. Flattened into every device-touching subcommand, and
 /// only compiled on the Mac side — on the device there is nothing to reach,

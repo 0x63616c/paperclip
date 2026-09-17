@@ -300,12 +300,25 @@ fn dry_run(canvas: &Canvas, plan: &HoldPlan) -> Result<(), CommandError> {
 /// On a Mac, presenting means forwarding to the tablet's own `paperctl open`
 /// over SSH (WWW-33) — detached, because a live SSH session does not
 /// reliably survive a long hold (WWW-23).
+///
+/// Once a device has resolved, the attempt is recorded through
+/// `runlog::wrap` (WWW-34): `paperctl logs` is what replaces the retired
+/// shell alias that used to `cat` an invented `/tmp` path after a run like
+/// this one. A resolution failure is not recorded — nothing ran yet for
+/// there to be a report about.
 #[cfg(not(target_os = "linux"))]
 fn present(_canvas: &Canvas, plan: &HoldPlan, args: &OpenArgs) -> Result<(), CommandError> {
     let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
     println!("device   {host} ({source})");
-    crate::transport::remote::run_open(&host, &args.remote_argv(), plan.hold)?;
-    Ok(())
+    crate::transport::runlog::wrap(
+        &crate::transport::runlog::default_dir(),
+        "open",
+        Some(&host),
+        || {
+            crate::transport::remote::run_open(&host, &args.remote_argv(), plan.hold)
+                .map_err(CommandError::from)
+        },
+    )
 }
 
 #[cfg(not(target_os = "linux"))]

@@ -21,11 +21,17 @@
 //! word "updater" is internal and appears in no command, screen or
 //! user-facing document.
 
+#[cfg(not(target_os = "linux"))]
+mod deploy;
 #[cfg(feature = "desktop")]
 mod dev;
 mod device;
+#[cfg(not(target_os = "linux"))]
+mod doctor;
 mod error;
 mod install;
+#[cfg(not(target_os = "linux"))]
+mod logs;
 mod manifest;
 #[cfg(feature = "apps")]
 mod open;
@@ -124,6 +130,15 @@ enum Command {
     /// (`$PAPERCTL_CONFIG_DIR/config.toml` or
     /// `$XDG_CONFIG_HOME/paperctl/config.toml` override it).
     Devices(transport::devices::DevicesArgs),
+    /// The last run's report — what `open` (and `deploy`) actually did.
+    #[cfg(not(target_os = "linux"))]
+    Logs(logs::LogsArgs),
+    /// Can the tablet be reached, and is it healthy (WWW-34).
+    #[cfg(not(target_os = "linux"))]
+    Doctor(doctor::DoctorArgs),
+    /// Cross-compile `paperctl` for the device and install it (WWW-34).
+    #[cfg(not(target_os = "linux"))]
+    Deploy(deploy::DeployArgs),
 }
 
 /// Which screen to draw.
@@ -177,8 +192,21 @@ struct ScreenshotArgs {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
-        Ok(()) => ExitCode::SUCCESS,
+    let cli = Cli::parse();
+    // `doctor` alone reports through its exit code, not just its output: 0
+    // healthy, and a *distinct* nonzero for unreachable vs. reachable-but-
+    // degraded (WWW-34 acceptance criterion 9). Every other command only
+    // ever exits 0 or 1, so it stays on the uniform path below.
+    #[cfg(not(target_os = "linux"))]
+    if let Command::Doctor(args) = &cli.command {
+        return to_exit_code(doctor::run(args));
+    }
+    to_exit_code(run(cli).map(|()| ExitCode::SUCCESS))
+}
+
+fn to_exit_code(result: Result<ExitCode, CommandError>) -> ExitCode {
+    match result {
+        Ok(code) => code,
         Err(error) => {
             report(&error);
             ExitCode::FAILURE
@@ -218,6 +246,15 @@ fn run(cli: Cli) -> Result<(), CommandError> {
         Command::Upgrade(args) => upgrade::run(args),
         Command::Remove(args) => upgrade::remove(&args),
         Command::Devices(args) => transport::devices::run(&args),
+        #[cfg(not(target_os = "linux"))]
+        Command::Logs(args) => logs::run(&args),
+        // `Doctor` is intercepted in `main` before this function is ever
+        // called, because it needs its verdict as an exit code, not just as
+        // output — this arm exists only so the match stays exhaustive.
+        #[cfg(not(target_os = "linux"))]
+        Command::Doctor(_) => unreachable!("Command::Doctor is handled in main before run()"),
+        #[cfg(not(target_os = "linux"))]
+        Command::Deploy(args) => deploy::run(&args),
     }
 }
 

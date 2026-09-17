@@ -13,6 +13,7 @@
 //! side polls the log for the `EXIT=` marker instead of waiting on the SSH
 //! process itself.
 
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -70,6 +71,29 @@ pub(crate) enum TransportError {
         /// How long this side waited.
         waited: Duration,
     },
+    /// A local file `deploy` needed to send could not be read.
+    #[error("cannot read {path} to send it to the tablet")]
+    LocalFile {
+        /// Which file.
+        path: std::path::PathBuf,
+        /// Why.
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+/// What a captured remote command returned.
+///
+/// Distinct from [`SshRunner::run_blocking`], which inherits stdio because
+/// forwarding it live *is* the point of every other command here: `doctor`
+/// has to parse the answer, and `deploy`'s install step has to know whether
+/// it worked before it can say so.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CapturedOutput {
+    /// What the remote command printed to stdout.
+    pub(crate) stdout: String,
+    /// What it exited with.
+    pub(crate) exit_code: i32,
 }
 
 /// The primitive operations a device transport needs from SSH. A trait so
@@ -98,6 +122,28 @@ pub(crate) trait SshRunner {
         host: &str,
         log_path: &str,
     ) -> Result<(String, Option<i32>), TransportError>;
+
+    /// Runs a literal `remote_command` on `host` — not necessarily the
+    /// on-device `paperctl` — as one blocking call, capturing its stdout
+    /// rather than inheriting it. For a read-only diagnostic query
+    /// (`doctor`) that has to parse the answer.
+    fn run_capture(
+        &self,
+        host: &str,
+        remote_command: &str,
+    ) -> Result<CapturedOutput, TransportError>;
+
+    /// Runs `remote_command` on `host` with `local_file` piped in as stdin,
+    /// capturing stdout. The one primitive `deploy` needs to get a binary
+    /// onto the tablet without a second protocol: `ssh host 'cat > path' <
+    /// file` does what `scp` would, through the exact transport everything
+    /// else here already uses.
+    fn run_with_stdin(
+        &self,
+        host: &str,
+        remote_command: &str,
+        local_file: &Path,
+    ) -> Result<CapturedOutput, TransportError>;
 }
 
 /// Shells out to the system `ssh` binary — preferred over an in-process SSH
@@ -200,6 +246,41 @@ impl SshRunner for SystemSsh {
         });
         Ok((text, exit))
     }
+
+    fn run_capture(
+        &self,
+        host: &str,
+        remote_command: &str,
+    ) -> Result<CapturedOutput, TransportError> {
+        let mut command = Self::base(host);
+        command.arg(remote_command);
+        let output = command.output().map_err(Self::spawn_err)?;
+        Ok(CapturedOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
+
+    fn run_with_stdin(
+        &self,
+        host: &str,
+        remote_command: &str,
+        local_file: &Path,
+    ) -> Result<CapturedOutput, TransportError> {
+        let file = std::fs::File::open(local_file).map_err(|source| TransportError::LocalFile {
+            path: local_file.to_path_buf(),
+            source,
+        })?;
+        let mut command = Self::base(host);
+        command
+            .arg(remote_command)
+            .stdin(std::process::Stdio::from(file));
+        let output = command.output().map_err(Self::spawn_err)?;
+        Ok(CapturedOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
 }
 
 /// Single-quotes `value` for use inside a remote shell command.
@@ -217,6 +298,16 @@ fn shell_join<'a>(argv: impl Iterator<Item = &'a String>) -> String {
 /// Resolves which tablet to talk to, given whatever `--device` was passed
 /// (`None` if the flag was absent).
 pub(crate) fn resolve_device(flag: Option<&str>) -> Result<(String, DeviceSource), TransportError> {
+    resolve_device_with_timeout(flag, PROBE_TIMEOUT)
+}
+
+/// [`resolve_device`], with the reachability budget given explicitly —
+/// `doctor` and `deploy` pass [`discover::QUICK_PROBE_TIMEOUT`] instead of
+/// [`PROBE_TIMEOUT`]; see that constant for why.
+pub(crate) fn resolve_device_with_timeout(
+    flag: Option<&str>,
+    timeout: Duration,
+) -> Result<(String, DeviceSource), TransportError> {
     let mut config = Config::load(&crate::transport::config::default_path())?;
     let inputs = discover::Inputs {
         flag: flag.map(str::to_owned),
@@ -225,7 +316,7 @@ pub(crate) fn resolve_device(flag: Option<&str>) -> Result<(String, DeviceSource
         usb: Some(discover::USB_HOST.to_owned()),
         cache: config.cached().map(str::to_owned),
     };
-    let (host, source) = discover::resolve(&inputs, &SystemProber, PROBE_TIMEOUT)?;
+    let (host, source) = discover::resolve(&inputs, &SystemProber, timeout)?;
 
     // Remember it for next time, unless it already is the cache — sparing a
     // write on the overwhelmingly common case of resolving the same tablet
@@ -308,52 +399,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-
-    #[derive(Default)]
-    struct FakeSsh {
-        blocking_calls: RefCell<Vec<(String, Vec<String>)>>,
-        detached_calls: RefCell<Vec<(String, Vec<String>, String)>>,
-        poll_calls: RefCell<Vec<(String, String)>>,
-        blocking_result: i32,
-        /// Exit codes to hand back on successive polls — lets a test make the
-        /// fake "still running" once before it finishes.
-        poll_results: RefCell<Vec<Option<i32>>>,
-    }
-
-    impl SshRunner for FakeSsh {
-        fn run_blocking(&self, host: &str, remote_argv: &[String]) -> Result<i32, TransportError> {
-            self.blocking_calls
-                .borrow_mut()
-                .push((host.to_owned(), remote_argv.to_vec()));
-            Ok(self.blocking_result)
-        }
-
-        fn start_detached(
-            &self,
-            host: &str,
-            remote_argv: &[String],
-            log_path: &str,
-        ) -> Result<(), TransportError> {
-            self.detached_calls.borrow_mut().push((
-                host.to_owned(),
-                remote_argv.to_vec(),
-                log_path.to_owned(),
-            ));
-            Ok(())
-        }
-
-        fn poll_detached(
-            &self,
-            host: &str,
-            log_path: &str,
-        ) -> Result<(String, Option<i32>), TransportError> {
-            self.poll_calls
-                .borrow_mut()
-                .push((host.to_owned(), log_path.to_owned()));
-            let exit = self.poll_results.borrow_mut().pop().unwrap_or(Some(0));
-            Ok((String::new(), exit))
-        }
-    }
+    use crate::transport::test_doubles::FakeSsh;
 
     #[test]
     fn a_short_command_runs_blocking_not_detached() {

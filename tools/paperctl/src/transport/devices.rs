@@ -7,6 +7,7 @@
 use clap::{Args, Subcommand};
 
 use crate::error::CommandError;
+use crate::transport::OutputFormat;
 use crate::transport::config::Config;
 use crate::transport::discover::{self, PROBE_TIMEOUT, SystemProber};
 
@@ -21,12 +22,6 @@ pub(crate) struct DevicesArgs {
     /// Table for a terminal, or one JSON array.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     output: OutputFormat,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub(crate) enum OutputFormat {
-    Table,
-    Json,
 }
 
 #[derive(Debug, Subcommand)]

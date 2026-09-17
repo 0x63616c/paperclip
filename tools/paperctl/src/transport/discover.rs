@@ -35,6 +35,17 @@ const SSH_PORT: u16 = 22;
 /// has any chance of landing after the wake.
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The bound `doctor` and `deploy` use for their own resolution, instead of
+/// [`PROBE_TIMEOUT`].
+///
+/// `open`, `stock` and friends need that 30s budget to wake a sleeping
+/// tablet's Wi-Fi (WWW-35). `doctor` and `deploy` cannot spend it and still
+/// meet their own 15s "no device reachable" failure bound (WWW-34 acceptance
+/// criterion 8), so they accept the cheaper, honest trade instead: a
+/// sleeping tablet reads as unreachable rather than waiting to find out. A
+/// person who wants a diagnostic against a sleeping tablet wakes it first.
+pub(crate) const QUICK_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+
 /// How long any single connection attempt inside [`PROBE_TIMEOUT`]'s budget
 /// gets. Short and repeated, not long and singular — see [`PROBE_TIMEOUT`].
 const CONNECT_ATTEMPT: Duration = Duration::from_secs(2);
