@@ -76,9 +76,15 @@ An app cannot grant itself anything. This is enforced by types, not by review:
 `InstallPolicy::deny_all()` is the starting point. Capabilities are added to it
 by the host, per app id.
 
-Current capabilities: `storage`, `network`, `sharing`. The list grows when the
-host gains the enforcement point that goes with a new entry, not before — a
-capability nothing checks is a comment pretending to be a type.
+Current capabilities: `storage`, `network`, `sharing`, `packages`. The list
+grows when the host gains the enforcement point that goes with a new entry, not
+before — a capability nothing checks is a comment pretending to be a type.
+
+`packages` is the one with a visible enforcement point today:
+`PackageManager::on_behalf_of` refuses to hand an installer to an app that was
+not granted it. The App Store manages packages because policy granted it that,
+not because it is the App Store; it is a client of a platform facility, not the
+owner of one.
 
 ## Protocol compatibility
 

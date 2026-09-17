@@ -30,7 +30,10 @@ repository = "https://github.com/0x63616c/paperclip"
 
 [workspace.dependencies]
 paper-protocol = { path = "platform/protocol" }
-paper-packages = { path = "platform/packages" }
+# `default-features = false` here: the default feature is `publishing`, which
+# is the half that holds a signing key. A consumer that needs it says so
+# (`paperctl`), and the device build cannot pick it up by accident (§12).
+paper-packages = { path = "platform/packages", default-features = false }
 # `default-features = false` here, `features = ["desktop"]` at the one
 # consumer that needs a window. Apps must not drag in a windowing stack.
 paper-sdk = { path = "platform/sdk", default-features = false }

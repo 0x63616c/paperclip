@@ -19,3 +19,5 @@ device survey and several of these are bets.
 | [0010](0010-input-coordinate-transforms.md) | Input coordinate transforms are a hardware constant |
 | [0011](0011-takeover-ordering-and-the-restore-guarantee.md) | Takeover ordering, and what guarantees the restore |
 | [0012](0012-supervisor-shape-and-where-it-is-proven.md) | The supervisor's shape, and where it is proven |
+| [0013](0013-package-archive-and-the-signed-release-envelope.md) | The `.paperpkg` archive, and exactly which bytes are signed |
+| [0014](0014-install-transaction-durability-and-rollback.md) | The install transaction: durability, activation and rollback |

@@ -3,6 +3,11 @@
 use std::io;
 use std::path::PathBuf;
 
+use paper_packages::archive::ArchiveError;
+use paper_packages::catalog::CatalogError;
+use paper_packages::install::InstallError;
+use paper_packages::signing::SignatureError;
+use paper_packages::store::StoreError;
 use paper_packages::{ManifestError, PayloadError};
 
 /// A command failure, phrased for someone at a terminal.
@@ -91,7 +96,6 @@ pub(crate) enum CommandError {
     },
 
     /// A file could not be read.
-    #[cfg(target_os = "linux")]
     #[error("cannot read {path}")]
     Read {
         /// Which file.
@@ -99,6 +103,63 @@ pub(crate) enum CommandError {
         /// The underlying I/O failure.
         #[source]
         source: io::Error,
+    },
+
+    /// A package archive could not be built or opened.
+    #[error("the package could not be handled")]
+    Archive(#[from] ArchiveError),
+
+    /// A catalog could not be published to or checked.
+    #[cfg(feature = "publishing")]
+    #[error("the catalog operation failed")]
+    Publish(#[from] paper_packages::publish::PublishError),
+
+    /// A catalog could not be read or believed.
+    #[error("the catalog could not be read")]
+    Catalog(#[from] CatalogError),
+
+    /// An install, rollback or recovery failed.
+    #[error("the package operation failed")]
+    Install(#[from] InstallError),
+
+    /// A key or signature was not usable.
+    #[error("the key or signature is not usable")]
+    Signature(#[from] SignatureError),
+
+    /// The package store could not be read or written.
+    #[error("the package store could not be used")]
+    Store(#[from] StoreError),
+
+    /// `<app-id>` or `<app-id>@<version>`, and this was neither.
+    #[error("`{value}` is not an app id or `<app-id>@<version>`")]
+    AppSpec {
+        /// What was typed.
+        value: String,
+    },
+
+    /// The catalog does not offer the app that was asked for.
+    #[error("catalog `{catalog}` does not offer `{app}`")]
+    NotOffered {
+        /// Which app.
+        app: String,
+        /// Which catalog.
+        catalog: String,
+    },
+
+    /// Checking a catalog needs a key to check it against.
+    #[cfg(feature = "publishing")]
+    #[error("checking a catalog needs `--trust <public key>`")]
+    TrustRequired,
+
+    /// A signing key is already there.
+    #[cfg(feature = "publishing")]
+    #[error(
+        "{path} already exists. Overwriting a signing key makes every release \
+         already published unverifiable; pass --force only if that is what you mean."
+    )]
+    KeyExists {
+        /// Which file.
+        path: PathBuf,
     },
 
     /// A file could not be written.

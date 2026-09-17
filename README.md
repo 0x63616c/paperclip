@@ -23,6 +23,7 @@ cargo run -p paperctl -- preview --screen home     # h · c · f · n · esc
 cargo run -p paperctl -- screenshot --screen all --out-dir artifacts
 cargo run -p paperctl -- manifest validate apps/chess
 cargo run -p paperctl -- isolation --target paper-pro   # what §11 really enforces
+cargo run -p paperctl -- key generate --out-dir ~/.paperclip
 ```
 
 The failure harness needs a Linux VM, and says so rather than skipping:
@@ -37,7 +38,7 @@ tools/vm-harness/run-harness.sh ~/paperclip-vm
 | Path | What |
 |---|---|
 | `platform/protocol` | Protocol version identifiers |
-| `platform/packages` | `paper.toml`: parsing, validation, capability grants |
+| `platform/packages` | `paper.toml`, `.paperpkg` archives, signing, catalogs, the installer |
 | `platform/sdk` | Canvas, palette, text, display mapping, input, desktop backend |
 | `platform/host` | The supervisor: state machine, deadlines, units, recovery |
 | `apps/home` | The home screen |
@@ -55,6 +56,7 @@ Crates appear as their functionality lands; the destination layout is in
 
 - [Development](docs/development.md) — build, preview, screenshot, style
 - [App contract](docs/app-contract.md) — `paper.toml` and the capability rule
+- [Packaging](docs/packaging.md) — building, signing, publishing, installing, rolling back
 - [Assumptions](docs/assumptions.md) — what Stage 1 bet on, and where each bet lives
 - [Recovery](docs/recovery.md) — stock Xochitl policy, the states, and what to do with a tablet that is misbehaving
 - [Isolation](docs/isolation.md) — what §11 enforces, what it does not, and what is merely accepted

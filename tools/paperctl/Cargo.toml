@@ -15,11 +15,16 @@ repository.workspace = true
 # for a developer's Mac; leaving it *mandatory* would mean the one command that
 # rescues a stuck device could not be built for it.
 [features]
-default = ["desktop"]
+default = ["desktop", "publishing"]
 # The offscreen renderer and the built-in screens.
 apps = ["dep:paper-chess", "dep:paper-home"]
 # The preview window, which drags in winit and softbuffer.
 desktop = ["apps", "paper-sdk/desktop"]
+# `paperctl key`, `package`, `publish` and `check`: the commands that hold a
+# signing key. Off in the device build for the same reason `paper-packages`
+# gates its own publishing half — the tablet installs and verifies, and must
+# not contain a code path that can sign a release (§12).
+publishing = ["paper-packages/publishing"]
 
 [dependencies]
 clap = { workspace = true }
@@ -29,6 +34,7 @@ paper-host = { workspace = true }
 paper-packages = { workspace = true }
 paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
+semver = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

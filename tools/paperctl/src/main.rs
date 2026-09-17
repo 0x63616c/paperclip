@@ -7,10 +7,19 @@
 //! independent recovery path — the command a person runs over SSH when the
 //! screen is wrong, and the command `paperclip-restore-stock.service` runs
 //! when nobody is there to.
+//!
+//! Stage 7 adds the two halves of software distribution, and the split between
+//! them is the point. `key`, `package`, `publish` and `check` hold a signing
+//! key and are behind the `publishing` feature, so the device build does not
+//! contain them. `install`, `list`, `rollback` and `recover` hold only public
+//! keys, and do to a store exactly what the tablet does to its own (§12).
 
 mod device;
 mod error;
+mod install;
 mod manifest;
+#[cfg(feature = "publishing")]
+mod packaging;
 #[cfg(feature = "desktop")]
 mod preview;
 #[cfg(feature = "apps")]
@@ -51,6 +60,29 @@ enum Command {
     Units(device::UnitsArgs),
     /// Return the display to stock — the independent recovery path (§10).
     Stock(device::StockArgs),
+    /// Manage publishing keys.
+    #[cfg(feature = "publishing")]
+    Key {
+        #[command(subcommand)]
+        command: packaging::KeyCommand,
+    },
+    /// Build a `.paperpkg` from a package directory.
+    #[cfg(feature = "publishing")]
+    Package(packaging::PackageArgs),
+    /// Publish a package into a catalog.
+    #[cfg(feature = "publishing")]
+    Publish(packaging::PublishArgs),
+    /// Verify a catalog, or a single package.
+    #[cfg(feature = "publishing")]
+    Check(packaging::CheckArgs),
+    /// Install or update an app from a catalog.
+    Install(install::InstallArgs),
+    /// Show what is installed, and optionally what a catalog offers.
+    List(install::ListArgs),
+    /// Select the previous release of an app.
+    Rollback(install::RollbackArgs),
+    /// Finish or undo whatever an interrupted install left behind.
+    Recover(install::RecoverArgs),
 }
 
 /// Which screen to draw.
@@ -108,6 +140,18 @@ fn run(cli: Cli) -> Result<(), CommandError> {
         Command::Isolation(args) => device::run(device::DeviceCommand::Isolation(args)),
         Command::Units(args) => device::run(device::DeviceCommand::Units(args)),
         Command::Stock(args) => device::run(device::DeviceCommand::Stock(args)),
+        #[cfg(feature = "publishing")]
+        Command::Key { command } => packaging::key(command),
+        #[cfg(feature = "publishing")]
+        Command::Package(args) => packaging::package(&args),
+        #[cfg(feature = "publishing")]
+        Command::Publish(args) => packaging::publish(&args),
+        #[cfg(feature = "publishing")]
+        Command::Check(args) => packaging::check(&args),
+        Command::Install(args) => install::install(&args),
+        Command::List(args) => install::list(&args),
+        Command::Rollback(args) => install::rollback(&args),
+        Command::Recover(args) => install::recover(&args),
     }
 }
 

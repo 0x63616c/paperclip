@@ -181,11 +181,25 @@ exists. It will fail in a source tree, because `bin/chess` is a build output
 and not a file anybody commits. That is the correct answer: `--payload` is for
 a staged package, not a source directory.
 
+## Packaging and catalogs
+
+```sh
+cargo run -p paperctl -- key generate --out-dir ~/.paperclip
+cargo run -p paperctl -- package apps/chess --out build/chess.paperpkg
+cargo run -p paperctl -- publish build/chess.paperpkg \
+    --catalog ~/catalogs/home --key ~/.paperclip/paperclip.key
+cargo run -p paperctl -- install dev.calum.chess \
+    --catalog ~/catalogs/home --trust ~/.paperclip/paperclip.pub --root /tmp/store
+```
+
+The whole workflow, the catalog layout, and how to reproduce each §15 scenario
+by hand are in [`packaging.md`](packaging.md).
+
 ## Layout
 
 ```
 platform/protocol   protocol version identifiers
-platform/packages   paper.toml: parsing, validation, capability grants
+platform/packages   paper.toml, .paperpkg archives, signing, catalogs, the installer
 platform/sdk        canvas, palette, text, display mapping, input, desktop backend
 platform/device     the tablet adapter: waveform presentation, evdev, session locks
 platform/device/native  the only C++: a C ABI over the vendor waveform engine
