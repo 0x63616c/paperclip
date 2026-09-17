@@ -103,6 +103,11 @@ pub(crate) const CASES: &[Case] = &[
         run: stock_fails_to_start,
     },
     Case {
+        name: "start-budget-refusal",
+        row: "Never let stock fail — refuse to take the display near StartLimitBurst",
+        run: start_budget_refusal,
+    },
+    Case {
         name: "reboot",
         row: "Reboot — stock startup stays the default; no automatic takeover",
         run: reboot,
@@ -667,6 +672,48 @@ fn stock_fails_to_start(fixture: &Fixture) -> Outcome {
     let _ = systemctl(&["reset-failed", STOCK_UNIT]);
     let _ = unit;
     Ok(evidence)
+}
+
+fn start_budget_refusal(fixture: &Fixture) -> Outcome {
+    start_supervisor(fixture)?;
+    // Three recent starts recorded, which is `platform/device`'s whole
+    // allowance out of systemd's four. A fourth would be the one that fails
+    // the unit, and Xochitl's OnFailure= is an emergency shell on a device
+    // with no serial console attached.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    fs::write(
+        fixture.paths.state.join("xochitl-starts"),
+        format!("{now}\n{}\n{}\n", now - 5, now - 10),
+    )
+    .map_err(|error| error.to_string())?;
+
+    fixture.install_app("dev.calum.unlucky", &["healthy"])?;
+    let unit = fixture.app_unit("dev.calum.unlucky");
+    fixture.command("app dev.calum.unlucky")?;
+
+    // The session must never start, and stock must never be stopped.
+    std::thread::sleep(Duration::from_secs(6));
+    if unit_active(&unit) {
+        return Err("a session started with the start budget spent".to_owned());
+    }
+    if !unit_active(STOCK_UNIT) {
+        return Err("stock was stopped despite the refusal".to_owned());
+    }
+    let state = fixture.status_field("state").unwrap_or_default();
+    if state != "stock" {
+        return Err(format!(
+            "the supervisor ended in `{state}`, not back at stock"
+        ));
+    }
+    Ok(vec![
+        "three recent starts recorded — the whole device-level allowance".to_owned(),
+        format!("{unit} never started"),
+        format!("{STOCK_UNIT} never stopped"),
+        "supervisor back at stock, having refused rather than begun".to_owned(),
+    ])
 }
 
 fn reboot(fixture: &Fixture) -> Outcome {

@@ -16,7 +16,7 @@ a real systemd on aarch64. It is not device qualification, and the isolation rep
 prints for this machine is not the one that applies to the Paper Pro — see the
 `facilities` case, which asserts the two are different.
 
-17/17 cases passed.
+18/18 cases passed.
 
 | Case | Requirement | Result | Took |
 |---|---|---|---|
@@ -26,13 +26,14 @@ prints for this machine is not the one that applies to the Paper Pro — see the
 | `app-crash-abort` | App/Home crash — abort() is a signal death, not an exit code | **pass** | 3.6s |
 | `app-hang` | App hang — deadline, graceful termination, bounded force termination | **pass** | 4.2s |
 | `heartbeat-is-not-progress` | App hang — a heartbeat on an unrelated thread does not prove the UI works | **pass** | 4.3s |
-| `ignored-termination` | App hang — a session that refuses SIGTERM is still bounded | **pass** | 6.7s |
+| `ignored-termination` | App hang — a session that refuses SIGTERM is still bounded | **pass** | 6.8s |
 | `lingering-children` | Child survives parent — contain and terminate the complete tree | **pass** | 3.7s |
 | `display-process-crash` | Display process crash — terminate the dependent session, restore stock | **pass** | 1.7s |
 | `host-crash` | Host crash — an independent systemd path cleans up and restores stock | **pass** | 1.3s |
 | `ssh-disconnect` | SSH disconnect — the session does not depend on the terminal that started it | **pass** | 2.2s |
-| `repeated-failures` | Repeated failures — stop retrying, no restart loops, diagnostics left behind | **pass** | 15.6s |
-| `stock-fails-to-start` | Xochitl fails to start — explicit failed state, preserved logs, no false claim | **pass** | 102.4s |
+| `repeated-failures` | Repeated failures — stop retrying, no restart loops, diagnostics left behind | **pass** | 15.5s |
+| `stock-fails-to-start` | Xochitl fails to start — explicit failed state, preserved logs, no false claim | **pass** | 102.3s |
+| `start-budget-refusal` | Never let stock fail — refuse to take the display near StartLimitBurst | **pass** | 6.0s |
 | `reboot` | Reboot — stock startup stays the default; no automatic takeover | **pass** | 0.2s |
 | `memory-pressure` | Extra hazard — memory exhaustion is contained and attributable | **pass** | 3.6s |
 | `disk-full` | Extra hazard — a full writable grant does not take the device with it | **pass** | 3.6s |
@@ -126,7 +127,7 @@ Child survives parent — contain and terminate the complete tree
 
 Display process crash — terminate the dependent session, restore stock
 
-- display owner was pid 31870; registry cleared
+- display owner was pid 34923; registry cleared
 - paperclip-harness-stock.service active again
 - paperclip-app@dev.calum.display.service cgroup empty
 - paperclip-session.target inactive
@@ -136,7 +137,7 @@ Display process crash — terminate the dependent session, restore stock
 
 Host crash — an independent systemd path cleans up and restores stock
 
-- supervisor pid 31904 killed with SIGKILL
+- supervisor pid 34957 killed with SIGKILL
 - paperclip-restore-stock.service ran from systemd's OnFailure= with no supervisor alive
 - paperclip-harness-stock.service active again
 - paperclip-app@dev.calum.orphaned.service cgroup empty
@@ -146,7 +147,7 @@ Host crash — an independent systemd path cleans up and restores stock
 
 SSH disconnect — the session does not depend on the terminal that started it
 
-- stand-in login session 31942 killed
+- stand-in login session 34995 killed
 - session and supervisor still running (1 process(es))
 - session cgroup is /paperclip.slice/paperclip-app@dev.calum.remote.service — systemd's, not a login scope
 - paperclip-harness-stock.service active again
@@ -169,10 +170,19 @@ Repeated failures — stop retrying, no restart loops, diagnostics left behind
 Xochitl fails to start — explicit failed state, preserved logs, no false claim
 
 - supervisor state is `failed`
-- 26386 bytes of preserved logs at /run/paperclip-harness/diagnostics/last-failure.txt
+- 26428 bytes of preserved logs at /run/paperclip-harness/diagnostics/last-failure.txt
 - no claim of a successful recovery anywhere in the status
 - `paperctl stock` failed explicitly and independently of the supervisor
 - stock start attempts recorded: 0
+
+### `start-budget-refusal` — pass
+
+Never let stock fail — refuse to take the display near StartLimitBurst
+
+- three recent starts recorded — the whole device-level allowance
+- paperclip-app@dev.calum.unlucky.service never started
+- paperclip-harness-stock.service never stopped
+- supervisor back at stock, having refused rather than begun
 
 ### `reboot` — pass
 
@@ -202,7 +212,7 @@ Extra hazard — a full writable grant does not take the device with it
 - paperclip-app@dev.calum.filler.service cgroup empty
 - paperclip-session.target inactive
 - the supervisor and its state directory were unaffected
-- supervisor could still write its status (71 bytes)
+- supervisor could still write its status (78 bytes)
 
 ### `write-outside-grants` — pass
 

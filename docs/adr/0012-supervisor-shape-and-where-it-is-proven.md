@@ -74,6 +74,13 @@ one policy, several callers. The same arithmetic sets the supervisor's restore
 budget to one: `Stock::restore` already does two guarded starts, so a
 host-level retry multiplies rather than adds, and two would be exactly four.
 
+**On asking before taking.** The supervisor takes the display by starting
+`paperclip-session.target`, whose `Conflicts=` stops stock — which means it
+never calls `Stock::stop_for_session` and would walk straight past that
+function's budget check. So it asks `StartBudget` directly before starting
+anything. A takeover that cannot be handed back is worse than a takeover that
+never happened, and WWW-3 has the device evidence for what the limit costs.
+
 **On terminal meaning terminal.** The first version recorded that the failure
 budget was spent and then honoured the next request anyway. The VM caught it:
 `repeated-failures` failed with *"a request after the budget was honoured; that

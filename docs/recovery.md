@@ -129,6 +129,7 @@ Each row demonstrated in the VM harness; see the report for what was observed.
 | SSH disconnects | Everything was started by systemd and lives in `paperclip.slice`, not in a login scope. The terminal going away changes nothing. |
 | Failures repeat | Three inside two minutes and the supervisor stops relaunching: it returns to stock, records the diagnosis, and *refuses the next request*. Recording exhaustion while still honouring requests is a restart loop with extra steps. |
 | Xochitl will not start | `Failed`, explicitly. Logs preserved under the diagnostics directory, `paperctl stock` exits non-zero with `stock Xochitl was NOT restored`, and nothing claims a recovery happened. The wakelock is deliberately **kept**, so the tablet stays awake and reachable over SSH instead of suspending into a state nobody can diagnose. |
+| Stock is near its start limit | The supervisor refuses to take the display at all, rather than starting a session it may not be able to hand back. WWW-3 measured the cost on the tablet: a Xochitl restart it did not survive cleanly consumed two of its four permitted starts. The refusal is counted as a session that failed to start, so repeated refusals spend the failure budget and stop. |
 | Reboot | Stock. Units live only in `/run/systemd/system`, which is a tmpfs; nothing is enabled and nothing is installed on the root filesystem (ADR-0008). |
 
 ## The independent path

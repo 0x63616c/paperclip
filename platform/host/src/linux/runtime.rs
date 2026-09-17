@@ -446,6 +446,33 @@ impl Supervisor {
                 self.restore(1);
             }
             other => {
+                // Before anything else: may a session begin at all?
+                //
+                // Taking the display means stock stops, and stock stopping
+                // means stock has to be started again later. WWW-3 measured
+                // what that costs on the tablet — a restart Xochitl did not
+                // survive cleanly consumed two of its four permitted starts —
+                // so `platform/device` refuses a takeover near the limit. The
+                // supervisor has to ask, because it takes the display by
+                // starting the session target rather than by calling
+                // `Stock::stop_for_session`, and would otherwise walk straight
+                // past the check.
+                //
+                // A refusal is reported as the session failing to start, which
+                // is what it is: the machine recovers to stock, and repeated
+                // refusals spend the failure budget and stop.
+                if let Err(refusal) =
+                    paper_device::stock::StartBudget::at(&self.config.start_budget)
+                        .allows_session(SystemTime::now())
+                {
+                    eprintln!("paperclip-host: refusing to take the display: {refusal}");
+                    self.queued.push(Event::SessionExited {
+                        owner: other.clone(),
+                        status: ExitKind::Error,
+                    });
+                    self.incoming = Some(other.clone());
+                    return;
+                }
                 let unit = session_unit_name(other);
                 self.incoming = Some(other.clone());
                 self.progress = Some(ProgressWatch::new(
