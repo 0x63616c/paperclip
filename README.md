@@ -42,10 +42,11 @@ tools/vm-harness/run-harness.sh ~/paperclip-vm
 | `platform/packages` | `paper.toml`, `.paperpkg` archives, signing, catalogs, the installer |
 | `platform/sdk` | Canvas, palette, text, display mapping, input, desktop backend |
 | `platform/host` | The supervisor: state machine, deadlines, units, recovery |
+| `platform/updater` | The platform update transaction: stage, activate, verify, commit, roll back |
 | `apps/home` | The home screen |
 | `apps/app-store` | The App Store: installed, offered, and installing it |
 | `apps/chess` | The Chess screen |
-| `tools/paperctl` | The command line, including `paperctl stock` |
+| `tools/paperctl` | The command line: `stock`, `setup`, `upgrade`, `remove`, packaging |
 | `tools/fault-app` | A session that misbehaves to order |
 | `tools/vm-harness` | Scripts that build the VM the harness runs in |
 | `tests/system` | Cross-crate tests |
@@ -59,6 +60,7 @@ Crates appear as their functionality lands; the destination layout is in
 - [Development](docs/development.md) — build, preview, screenshot, style
 - [App contract](docs/app-contract.md) — `paper.toml` and the capability rule
 - [Packaging](docs/packaging.md) — building, signing, publishing, installing, rolling back
+- [Updating](docs/updating.md) — upgrading Paperclip itself, rolling it back, removing it
 - [Assumptions](docs/assumptions.md) — what Stage 1 bet on, and where each bet lives
 - [Recovery](docs/recovery.md) — stock Xochitl policy, the states, and what to do with a tablet that is misbehaving
 - [Isolation](docs/isolation.md) — what §11 enforces, what it does not, and what is merely accepted

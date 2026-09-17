@@ -25,3 +25,4 @@ device survey and several of these are bets.
 | [0016](0016-app-protocol-and-the-sdk-boundary.md) | The app protocol, and what the SDK is not |
 | [0017](0017-chess-rules-library.md) | Chess rules library, and where it lives |
 | [0018](0018-launch-request.md) | A fourth request: `Launch` |
+| [0019](0019-platform-update-transaction.md) | The platform update transaction: stage, activate, verify, commit, roll back |

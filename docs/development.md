@@ -258,10 +258,11 @@ platform/sdk        canvas, palette, text, display mapping, input, desktop backe
 platform/device     the tablet adapter: waveform presentation, evdev, session locks
 platform/device/native  the only C++: a C ABI over the vendor waveform engine
 platform/host       the supervisor: state machine, deadlines, units, recovery
+platform/updater    the platform update transaction and the removal path
 apps/home           the home screen
 apps/chess          the Chess screen
 apps/settings       the Settings screen: apps, storage, grants, catalog, platform, diagnostics
-tools/paperctl      the command line, including `paperctl stock`
+tools/paperctl      the command line: stock, setup, upgrade, remove, packaging
 tools/fault-app     a session that misbehaves to order, for the harness
 tools/vm-harness    scripts that build the VM the harness runs in
 tools/cross         the zig cc linker wrapper for the device triple
