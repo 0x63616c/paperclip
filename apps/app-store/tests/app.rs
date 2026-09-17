@@ -42,6 +42,18 @@ protocol = "1.0"
 entrypoint = "bin/chess"
 "#;
 
+/// Sudoku (WWW-39): the second catalog app, published here for the same
+/// reason it exists at all — "install an app that is not Chess" needs
+/// something to install that is not Chess.
+const SUDOKU_MANIFEST: &str = r#"
+[app]
+id = "dev.calum.sudoku"
+name = "Sudoku"
+version = "VERSION"
+protocol = "1.0"
+entrypoint = "bin/sudoku"
+"#;
+
 const STORE_MANIFEST: &str = r#"
 [app]
 id = "dev.calum.app-store"
@@ -101,16 +113,32 @@ impl World {
     }
 
     fn publish(&self, version: &str, notes: &str) {
-        let source = self.work.join(format!("src-{version}"));
+        self.publish_app("chess", MANIFEST, version, notes);
+    }
+
+    fn publish_sudoku(&self, version: &str, notes: &str) {
+        self.publish_app("sudoku", SUDOKU_MANIFEST, version, notes);
+    }
+
+    /// Builds a source tree from `manifest_template` (its `VERSION`
+    /// placeholder filled in), packages it and publishes it — the
+    /// `paperctl package` / `paperctl publish` workflow `docs/packaging.md`
+    /// describes, minus the CLI.
+    fn publish_app(&self, leaf: &str, manifest_template: &str, version: &str, notes: &str) {
+        let source = self.work.join(format!("src-{leaf}-{version}"));
         fs::create_dir_all(source.join("bin")).expect("a source tree");
         fs::write(
             source.join("paper.toml"),
-            MANIFEST.replace("VERSION", version),
+            manifest_template.replace("VERSION", version),
         )
         .expect("a manifest");
-        fs::write(source.join("bin/chess"), format!("chess {version}")).expect("a binary");
+        fs::write(
+            source.join(format!("bin/{leaf}")),
+            format!("{leaf} {version}"),
+        )
+        .expect("a binary");
 
-        let package = self.work.join(format!("chess-{version}.paperpkg"));
+        let package = self.work.join(format!("{leaf}-{version}.paperpkg"));
         let mut bytes = Vec::new();
         archive::build(&source, &mut bytes).expect("a package");
         fs::write(&package, &bytes).expect("a package file");
@@ -122,6 +150,10 @@ impl World {
 
 fn chess() -> AppId {
     "dev.calum.chess".parse().expect("a valid id")
+}
+
+fn sudoku() -> AppId {
+    "dev.calum.sudoku".parse().expect("a valid id")
 }
 
 fn app_paths() -> AppPaths {
@@ -231,46 +263,47 @@ fn finish_session(
     }
 }
 
-#[test]
-fn pressing_install_against_a_real_catalog_ends_with_it_on_disk() {
-    let world = World::new();
-    world.publish("0.1.0", "First cut.");
-
-    // Computed the same way the app itself renders, independent of the
-    // session, so the tap lands where the button actually is (the same
-    // convention `ChessApp`'s own tests use for `square_center`).
+/// The install button's position, computed the same way the app itself
+/// renders, independent of the session — the same convention `ChessApp`'s
+/// own tests use for `square_center` — so a tap lands where the button
+/// actually is. Assumes one offered, uninstalled row, which is what every
+/// test in this file publishes.
+fn install_button(world: &World) -> paper_protocol::Point {
     let probe = AppStoreScreen::new(world.source().inventory().expect("an inventory"));
     let mut canvas = Canvas::new(SCREEN).expect("a canvas");
     let StoreLayout::List(list) = paper_app_store::render(&mut canvas, &probe) else {
         panic!("an offered, uninstalled app shows the list");
     };
-    let install_at = list
-        .rows
+    list.rows
         .first()
         .expect("one row")
         .action
         .expect("an install button")
-        .center();
+        .center()
+}
 
-    let (mut host_reader, mut host_writer, handle) = start_session(world.source());
-    assert_eq!(
-        draw(&mut host_reader, &mut host_writer, 1),
-        Damage::Full,
-        "the first frame is always the whole panel"
-    );
-
-    let reply = send(&mut host_reader, &mut host_writer, &pointer_up(install_at));
+/// Presses at `at` and confirms the tap itself was taken — the redraw a
+/// `begin`-ing operation always asks for — without waiting to find out
+/// whether the operation it started succeeds or fails.
+fn press_install(
+    host_reader: &mut UnixStream,
+    host_writer: &mut UnixStream,
+    at: paper_protocol::Point,
+) {
+    let reply = send(host_reader, host_writer, &pointer_up(at));
     assert!(
         matches!(reply, AppMessage::Request(Request::Redraw)),
         "pressing install must ask for a redraw, got {reply:?}"
     );
+}
 
-    // Draws until the install has actually finished (`Damage::Full`, which
-    // only `Completion::Done` produces) rather than sleeping a guessed
-    // duration — a real, local `paperpkg` installs in well under a second,
-    // but nothing here should depend on exactly how fast.
-    let finished = (2..52).any(|frame| {
-        let damage = draw(&mut host_reader, &mut host_writer, frame);
+/// Draws until the operation in flight settles — `Damage::Full`, which only
+/// `Completion::Done` (success or failure) produces — rather than sleeping a
+/// guessed duration. Settling either way looks the same on the wire; callers
+/// tell success from failure by what ends up on disk afterward.
+fn wait_for_settle(host_reader: &mut UnixStream, host_writer: &mut UnixStream) {
+    let settled = (2..52).any(|frame| {
+        let damage = draw(host_reader, host_writer, frame);
         if damage == Damage::Full {
             true
         } else {
@@ -278,8 +311,23 @@ fn pressing_install_against_a_real_catalog_ends_with_it_on_disk() {
             false
         }
     });
-    assert!(finished, "the install never finished");
+    assert!(settled, "the operation never finished");
+}
 
+#[test]
+fn pressing_install_against_a_real_catalog_ends_with_it_on_disk() {
+    let world = World::new();
+    world.publish("0.1.0", "First cut.");
+    let install_at = install_button(&world);
+
+    let (mut host_reader, mut host_writer, handle) = start_session(world.source());
+    assert_eq!(
+        draw(&mut host_reader, &mut host_writer, 1),
+        Damage::Full,
+        "the first frame is always the whole panel"
+    );
+    press_install(&mut host_reader, &mut host_writer, install_at);
+    wait_for_settle(&mut host_reader, &mut host_writer);
     finish_session(host_reader, host_writer, handle);
 
     let after = world
@@ -289,4 +337,93 @@ fn pressing_install_against_a_real_catalog_ends_with_it_on_disk() {
     let entry = after.entry(&chess()).expect("chess has a row");
     assert_eq!(entry.installed, Some(Version::parse("0.1.0").unwrap()));
     assert_eq!(entry.state, AppState::UpToDate);
+}
+
+/// WWW-39's whole reason to exist: "install an app that is not Chess" needs
+/// something to install that is not Chess. Same shape as the test above,
+/// against Sudoku's own manifest and binary, so the App Store's install path
+/// is proven against a second app rather than only the one it always had.
+#[test]
+fn installing_sudoku_the_second_catalog_app_ends_with_it_on_disk() {
+    let world = World::new();
+    world.publish_sudoku("0.1.0", "First puzzle.");
+    let install_at = install_button(&world);
+
+    let (mut host_reader, mut host_writer, handle) = start_session(world.source());
+    assert_eq!(draw(&mut host_reader, &mut host_writer, 1), Damage::Full);
+    press_install(&mut host_reader, &mut host_writer, install_at);
+    wait_for_settle(&mut host_reader, &mut host_writer);
+    finish_session(host_reader, host_writer, handle);
+
+    let after = world
+        .source()
+        .inventory()
+        .expect("a survey after the install");
+    let entry = after.entry(&sudoku()).expect("sudoku has a row");
+    assert_eq!(entry.installed, Some(Version::parse("0.1.0").unwrap()));
+    assert_eq!(entry.state, AppState::UpToDate);
+}
+
+/// The other half of the issue's verification: "a failed signature ...
+/// must surface as `Failure`, not a panic." Tampers the same way
+/// `apps/app-store/tests/store.rs`'s `a_tampered_release_is_refused...`
+/// does, but through `AppStoreApp` and a real session rather than calling
+/// `PackagesSource` directly — proving the wire adapter maps the error
+/// without crashing, not just that `PackagesSource` returns one.
+#[test]
+fn a_bad_signature_surfaces_as_a_failure_not_a_panic() {
+    let world = World::new();
+    world.publish("0.1.0", "First cut.");
+    let install_at = install_button(&world);
+
+    let descriptor = world
+        .catalog
+        .join("apps/dev.calum.chess/0.1.0/release.toml");
+    let text = fs::read_to_string(&descriptor).expect("a descriptor");
+    fs::write(&descriptor, text.replace("size = ", "size  = ")).expect("tampering");
+
+    let (mut host_reader, mut host_writer, handle) = start_session(world.source());
+    assert_eq!(draw(&mut host_reader, &mut host_writer, 1), Damage::Full);
+    press_install(&mut host_reader, &mut host_writer, install_at);
+    wait_for_settle(&mut host_reader, &mut host_writer);
+
+    // No panic: the session is still alive and finishes a normal shutdown.
+    finish_session(host_reader, host_writer, handle);
+
+    // Not a silent no-op either: a tampered release must not end up
+    // installed just because the failure was handled gracefully.
+    let after = world.source().inventory().expect("a survey");
+    let entry = after.entry(&chess()).expect("chess still has a row");
+    assert_eq!(
+        entry.installed, None,
+        "a tampered release must not end up installed"
+    );
+}
+
+/// The last leg of the same verification line: "... and an unreachable
+/// catalog must both surface as `Failure`, not a panic." The catalog is
+/// reachable when the session opens — the row is offered, same as every
+/// other test here — and disappears only after, so the failure comes from
+/// the fetch `Request::Install` triggers, not from the initial survey
+/// (which already treats an unreachable catalog as "stale", not an error).
+#[test]
+fn an_unreachable_catalog_surfaces_as_a_failure_not_a_panic() {
+    let world = World::new();
+    world.publish("0.1.0", "First cut.");
+    let install_at = install_button(&world);
+
+    let (mut host_reader, mut host_writer, handle) = start_session(world.source());
+    assert_eq!(draw(&mut host_reader, &mut host_writer, 1), Damage::Full);
+
+    fs::remove_dir_all(&world.catalog).expect("removes the catalog out from under the install");
+
+    press_install(&mut host_reader, &mut host_writer, install_at);
+    wait_for_settle(&mut host_reader, &mut host_writer);
+    finish_session(host_reader, host_writer, handle);
+
+    // The store never saw a store directory for chess to land in, either.
+    assert!(
+        !world.layout.root().join("apps/dev.calum.chess").exists(),
+        "an install that failed to fetch must not create a release directory"
+    );
 }
