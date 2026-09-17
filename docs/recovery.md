@@ -93,13 +93,18 @@ Mac and none exercised on the tablet:
 | `Panel::clear` | drives the panel white with a settled waveform | on `MemoryPanel` only |
 | `VendorPanel` | the vendor waveform engine behind a C ABI | **never compiled** — ADR-0009 |
 | `device-report` | a read-only readiness report to run on the tablet | cross-links; never run |
+| `Stock` | stops and restores Xochitl, never kills it, one guarded retry | against a fake systemd, not against systemd |
+| `StartBudget` | refuses a session near `StartLimitBurst` | on scratch files |
+| `Takeover` | owns the acquire/release order, restores on every path | ordering, drop, **panic**, and each failure branch |
+| `DetachedWatchdog` | a `setsid` guardian that outlives `SIGKILL` | the mechanism, on aarch64 Linux; not its script |
 
 ## What is still owed here
 
 - The verified backup procedure, and how "verified" is checked. (A backup from
   WWW-1 exists on the Mac; the *procedure* is not written down here.)
-- How the display is taken, and how it is given back — the sequencing, not
-  just the primitives. That needs the host state machine (WWW-4).
+- ~~How the display is taken, and how it is given back — the sequencing.~~
+  Written: `paper_device::Takeover` owns the order and ADR-0011 explains why it
+  is that order. Still never run on the tablet.
 - What happens on crash, on sleep, and on lock — the save-and-return-to-stock
   behaviour §5 chose over seamless resumption. WWW-21 owns the sleep and lock
   half.

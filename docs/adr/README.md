@@ -17,3 +17,4 @@ device survey and several of these are bets.
 | [0008](0008-runtime-only-units-and-no-root-filesystem-install.md) | Runtime-only units, and nothing on the root filesystem |
 | [0009](0009-device-adapter-ffi-boundary.md) | The device adapter's FFI boundary |
 | [0010](0010-input-coordinate-transforms.md) | Input coordinate transforms are a hardware constant |
+| [0011](0011-takeover-ordering-and-the-restore-guarantee.md) | Takeover ordering, and what guarantees the restore |

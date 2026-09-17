@@ -50,6 +50,8 @@ pub mod error;
 pub mod input;
 pub mod panel;
 pub mod session;
+pub mod stock;
+pub mod takeover;
 pub mod waveform;
 
 #[cfg(feature = "vendor-engine")]
@@ -61,6 +63,8 @@ pub use input::{
 };
 pub use panel::{MemoryPanel, Panel, PanelBuffer, Swap, present};
 pub use session::{DisplayLockHolder, DisplayLocks, RESUME_BRIDGE_DELAY, WakeLock};
+pub use stock::{STOCK_UNIT, ServiceControl, StartBudget, Stock, StockHealth};
+pub use takeover::{Takeover, WAKELOCK_TAG, Watchdog};
 pub use waveform::{ContentType, GhostControl, PixelRect, Refresh, Waveform};
 
 #[cfg(feature = "vendor-engine")]
