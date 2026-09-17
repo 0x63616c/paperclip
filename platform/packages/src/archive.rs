@@ -103,21 +103,57 @@ pub struct Extracted {
     pub bytes: u64,
 }
 
-/// Unpacks a `.paperpkg` stream into `destination`.
+/// What came out of an archive, before anything has been said about what the
+/// files *mean*.
+///
+/// The half of extraction that is the same for an app package and a platform
+/// release (§13): bounded, hostile-input-safe unpacking of a gzipped tar into
+/// a directory, with no symlinks, no device nodes, no absolute paths and no
+/// `..`. What is then required to be *in* that directory differs, and is the
+/// caller's question.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExtractedTree {
+    /// Files written, excluding directories.
+    pub files: usize,
+    /// Payload bytes written to disk.
+    pub bytes: u64,
+    /// Every regular file written, in the order the archive listed them.
+    pub names: Vec<RelativePath>,
+}
+
+impl ExtractedTree {
+    /// Whether a file with this exact relative path was written.
+    pub fn contains(&self, name: &str) -> bool {
+        self.names.iter().any(|written| written.as_str() == name)
+    }
+}
+
+/// Unpacks a gzipped tar stream into `destination`, checking nothing about
+/// what it contains.
 ///
 /// `destination` must exist and be empty; the caller owns it, and on any error
 /// it is the caller's job to remove it. Not doing that cleanup here is
 /// deliberate: the installer already has to delete a staging directory on
 /// failure, and a second, partial cleanup path is a second thing to get wrong.
 ///
-/// The manifest is parsed from the extracted `paper.toml` *after* extraction
-/// and the payload validated against it, so what a caller ends up holding
-/// describes the bytes that are actually on disk.
-pub fn extract(
+/// This is the shared core under [`extract`]. It exists so the platform
+/// updater does not need a second extractor: the protections here — the two
+/// size bounds, the entry ceiling, the refusal of anything that is not a
+/// regular file or a directory, the path sanitising — are the ones §12 asks
+/// for, and a second copy of them is a second copy to get wrong. A caller that
+/// wants an app package calls [`extract`]; a caller that wants a platform
+/// release calls this and then verifies its own signed manifest.
+///
+/// # Errors
+///
+/// Any bound exceeded, any forbidden entry, any unwritable path, or a stream
+/// that is not a readable gzipped tar.
+pub fn extract_tree(
     source: impl Read,
     destination: &Path,
     limits: ArchiveLimits,
-) -> Result<Extracted, ArchiveError> {
+) -> Result<ExtractedTree, ArchiveError> {
     ensure_empty_directory(destination)?;
 
     // Two bounds, because they stop different attacks: the outer one caps what
@@ -135,7 +171,7 @@ pub fn extract(
     let mut files = 0usize;
     let mut bytes = 0u64;
     let mut entries = 0usize;
-    let mut seen_manifest = false;
+    let mut names = Vec::new();
 
     let iter = archive.entries().map_err(ArchiveError::Malformed)?;
     for entry in iter {
@@ -164,12 +200,10 @@ pub fn extract(
                         max: limits.file_bytes,
                     });
                 }
-                if name.as_str() == MANIFEST_FILE_NAME {
-                    seen_manifest = true;
-                }
                 write_file(&mut entry, destination, &name, size)?;
                 files += 1;
                 bytes += size;
+                names.push(name);
             }
             other => {
                 return Err(ArchiveError::ForbiddenEntry {
@@ -180,7 +214,32 @@ pub fn extract(
         }
     }
 
-    if !seen_manifest {
+    Ok(ExtractedTree {
+        files,
+        bytes,
+        names,
+    })
+}
+
+/// Unpacks a `.paperpkg` stream into `destination`.
+///
+/// [`extract_tree`] does the unpacking; this adds what makes the result an
+/// *app package*. The manifest is parsed from the extracted `paper.toml`
+/// *after* extraction and the payload validated against it, so what a caller
+/// ends up holding describes the bytes that are actually on disk.
+///
+/// # Errors
+///
+/// Everything [`extract_tree`] can fail with, plus a missing, unparseable or
+/// unsatisfied `paper.toml`.
+pub fn extract(
+    source: impl Read,
+    destination: &Path,
+    limits: ArchiveLimits,
+) -> Result<Extracted, ArchiveError> {
+    let tree = extract_tree(source, destination, limits)?;
+
+    if !tree.contains(MANIFEST_FILE_NAME) {
         return Err(ArchiveError::NoManifest);
     }
 
@@ -197,8 +256,8 @@ pub fn extract(
 
     Ok(Extracted {
         manifest,
-        files,
-        bytes,
+        files: tree.files,
+        bytes: tree.bytes,
     })
 }
 

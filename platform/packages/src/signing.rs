@@ -54,6 +54,19 @@ impl Domain {
     /// A catalog index: which releases a catalog is offering, and its serial.
     pub const CATALOG: Domain = Domain(b"paperclip.catalog.v1\0");
 
+    /// A platform release manifest: the Host, Home, the App Store and
+    /// Settings as one tested release (§13).
+    ///
+    /// Separate from [`RELEASE`](Self::RELEASE) for the reason the separator
+    /// exists at all. An app release and a platform release are both "a
+    /// version and some digests", and a scheme where the two are
+    /// interchangeable is a scheme in which publishing an ordinary app can
+    /// produce a document that verifies as a replacement Host. §13 forbids
+    /// that outcome; this constant is one of the two things that make it
+    /// structurally impossible, the other being that the two live in
+    /// different trees.
+    pub const PLATFORM: Domain = Domain(b"paperclip.platform.v1\0");
+
     /// The separator bytes.
     pub fn as_bytes(self) -> &'static [u8] {
         self.0
