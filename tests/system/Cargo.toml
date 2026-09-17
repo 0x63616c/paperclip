@@ -37,6 +37,7 @@ paper-home = { workspace = true }
 paper-packages = { workspace = true }
 paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
+paper-settings = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

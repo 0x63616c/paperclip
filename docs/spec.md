@@ -43,6 +43,7 @@ should go there first.
 |---|---|---|
 | §10 | [ADR-0008](adr/0008-runtime-only-units-and-no-root-filesystem-install.md) | Persistence, Independence, Reboot and Deferred are replaced. This firmware has no writable persistent unit directory, so runtime units under `/run/systemd/system` established by `paperctl` are the only mechanism, and auto-start at boot is deferred. Accepted verbatim on 2026-09-17. |
 | §9 (display transport) | [ADR-0007](adr/0007-display-transport-via-vendor-waveform-engine.md) | Presentation goes through the vendor waveform engine, not raw DRM. The `405x1084 -> 1620x2160` packing is proprietary and explicitly out of scope. |
+| §3, §5 | [ADR-0015](adr/0015-settings-default-app-and-host-boundary.md) | Home, App Store and Settings ship with Paperclip and are always present, forming one tested platform release with the Host (§13). Everything else, including Chess, is installed through the catalog and independently versioned. Decided by Calum, 2026-09-16. |
 
 ## Two rules that decide when anything is finished
 

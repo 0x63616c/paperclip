@@ -1,0 +1,11 @@
+# Settings ships with Paperclip and is always present (project decision,
+# 2026-09-16, amending spec §3 and §5) but it carries the same manifest every
+# other app does. Being a default does not shorten the contract.
+
+[app]
+id = "dev.calum.settings"
+name = "Settings"
+version = "0.1.0"
+protocol = "1.0"
+entrypoint = "bin/settings"
+assets = []

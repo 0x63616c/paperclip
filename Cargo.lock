@@ -1349,6 +1349,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "paper-settings"
+version = "0.1.0"
+dependencies = [
+ "paper-packages",
+ "paper-sdk",
+]
+
+[[package]]
 name = "paper-system-tests"
 version = "0.1.0"
 dependencies = [
@@ -1357,6 +1365,7 @@ dependencies = [
  "paper-packages",
  "paper-protocol",
  "paper-sdk",
+ "paper-settings",
  "tempfile",
 ]
 
@@ -1371,6 +1380,7 @@ dependencies = [
  "paper-packages",
  "paper-protocol",
  "paper-sdk",
+ "paper-settings",
  "semver",
  "thiserror 2.0.20",
 ]

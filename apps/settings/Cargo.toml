@@ -1,0 +1,16 @@
+[package]
+name = "paper-settings"
+description = "The Settings app: installed apps, storage, grants, catalog, platform and diagnostics."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+paper-packages = { workspace = true }
+paper-sdk = { workspace = true }
+
+[lints]
+workspace = true

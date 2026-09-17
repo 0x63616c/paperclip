@@ -21,3 +21,4 @@ device survey and several of these are bets.
 | [0012](0012-supervisor-shape-and-where-it-is-proven.md) | The supervisor's shape, and where it is proven |
 | [0013](0013-package-archive-and-the-signed-release-envelope.md) | The `.paperpkg` archive, and exactly which bytes are signed |
 | [0014](0014-install-transaction-durability-and-rollback.md) | The install transaction: durability, activation and rollback |
+| [0015](0015-settings-default-app-and-host-boundary.md) | Settings is a default app, and its Host boundary |

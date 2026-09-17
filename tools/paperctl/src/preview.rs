@@ -70,7 +70,7 @@ pub(crate) fn run(args: PreviewArgs) -> Result<(), CommandError> {
     };
 
     eprintln!(
-        "preview: {}x{} canvas \u{00B7} keys: h home, c chess, f flip, n clear, esc quit",
+        "preview: {}x{} canvas \u{00B7} keys: h home, c chess, s settings, f flip, n clear, tab next, esc quit",
         SCREEN.width, SCREEN.height
     );
 

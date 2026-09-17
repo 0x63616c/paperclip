@@ -93,7 +93,9 @@ pub enum ScreenArg {
     Home,
     /// The Chess screen.
     Chess,
-    /// Both, one file each.
+    /// The Settings screen.
+    Settings,
+    /// Every screen, one file each.
     All,
 }
 
@@ -103,7 +105,8 @@ impl ScreenArg {
         match self {
             ScreenArg::Home => vec![Screen::Home],
             ScreenArg::Chess => vec![Screen::Chess],
-            ScreenArg::All => vec![Screen::Home, Screen::Chess],
+            ScreenArg::Settings => vec![Screen::Settings],
+            ScreenArg::All => vec![Screen::Home, Screen::Chess, Screen::Settings],
         }
     }
 }
@@ -159,23 +162,42 @@ fn run(cli: Cli) -> Result<(), CommandError> {
 fn screenshot(args: &ScreenshotArgs) -> Result<(), CommandError> {
     let mut screens = screens::Screens::new()?;
     for screen in args.screen.screens() {
+        if screen == Screen::Settings {
+            // Settings is one `Screen` but six pages plus a confirmation
+            // dialog (WWW-22): every one of them gets its own file rather
+            // than only the page the app happens to open on.
+            for (slug, canvas) in screens.render_settings_pages()? {
+                write_canvas(&canvas, &slug, &args.out_dir)?;
+            }
+            continue;
+        }
         let canvas = screens.render_offscreen(screen)?;
-        let path = args.out_dir.join(format!("{}.png", screen.slug()));
-        canvas
-            .write_png(&path)
-            .map_err(|source| CommandError::Write {
-                path: path.clone(),
-                source,
-            })?;
-        let size = canvas.size();
-        println!(
-            "{} -> {} ({}x{})",
-            screen.slug(),
-            path.display(),
-            size.width,
-            size.height
-        );
+        write_canvas(&canvas, screen.slug(), &args.out_dir)?;
     }
+    Ok(())
+}
+
+/// Writes one canvas to `<out_dir>/<slug>.png` and reports where it went.
+#[cfg(feature = "apps")]
+fn write_canvas(
+    canvas: &paper_sdk::Canvas,
+    slug: &str,
+    out_dir: &std::path::Path,
+) -> Result<(), CommandError> {
+    let path = out_dir.join(format!("{slug}.png"));
+    canvas
+        .write_png(&path)
+        .map_err(|source| CommandError::Write {
+            path: path.clone(),
+            source,
+        })?;
+    let size = canvas.size();
+    println!(
+        "{slug} -> {} ({}x{})",
+        path.display(),
+        size.width,
+        size.height
+    );
     Ok(())
 }
 

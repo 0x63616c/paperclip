@@ -17,11 +17,16 @@ use paper_packages::{
 };
 use paper_sdk::chrome::MIN_TOUCH_TARGET;
 use paper_sdk::{Canvas, DisplayMapping, Point, Pointer, PointerEvent, PointerPhase, SCREEN, Size};
+use paper_settings::{PlaceholderHost, SettingsScreen};
 
 /// The manifests the apps really ship, read from the repository.
-const APP_MANIFESTS: [(&str, &str); 2] = [
+const APP_MANIFESTS: [(&str, &str); 3] = [
     ("home", include_str!("../../../apps/home/paper.toml")),
     ("chess", include_str!("../../../apps/chess/paper.toml")),
+    (
+        "settings",
+        include_str!("../../../apps/settings/paper.toml"),
+    ),
 ];
 
 fn screen_canvas() -> Canvas {
@@ -60,6 +65,19 @@ fn both_screens_render_at_the_target_panel_geometry() {
         let png = canvas.to_png().expect("encodes as PNG");
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "{name} is not a PNG");
     }
+}
+
+#[test]
+fn the_settings_screen_renders_at_the_target_panel_geometry() {
+    let host = PlaceholderHost::new();
+    let screen = SettingsScreen::from_host(&host);
+    let mut canvas = screen_canvas();
+    paper_settings::render(&mut canvas, &screen);
+
+    assert_eq!(canvas.size(), SCREEN);
+    let coverage = canvas.ink_coverage();
+    assert!(coverage > 0.02, "settings drew almost nothing ({coverage})");
+    assert!(coverage < 0.90, "settings went nearly solid ({coverage})");
 }
 
 #[test]

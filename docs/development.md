@@ -86,8 +86,10 @@ autosleep, and Wi-Fi does (WWW-20).
 # Open the preview window
 cargo run -p paperctl -- preview --screen home
 cargo run -p paperctl -- preview --screen chess
+cargo run -p paperctl -- preview --screen settings
 
-# Keys: h home · c chess · f flip the board · n clear selection · esc quit
+# Keys: h home · c chess · s settings · f flip the board · n clear selection
+#       · tab next screen · esc quit
 ```
 
 The window opens at a fraction of the real panel size — 1620 × 2160 portrait
@@ -103,6 +105,10 @@ Offscreen, no window, full target resolution:
 ```sh
 cargo run -p paperctl -- screenshot --screen all --out-dir artifacts
 ```
+
+`--screen settings` writes one file per Settings page plus one confirmation
+dialog (`settings-confirm-uninstall.png`), reached through the same
+`SettingsScreen` methods a real tap would use rather than a hand-built dialog.
 
 From the live window, which also captures the letterbox and so is the evidence
 that the fit is right:
@@ -206,6 +212,7 @@ platform/device/native  the only C++: a C ABI over the vendor waveform engine
 platform/host       the supervisor: state machine, deadlines, units, recovery
 apps/home           the home screen
 apps/chess          the Chess screen
+apps/settings       the Settings screen: apps, storage, grants, catalog, platform, diagnostics
 tools/paperctl      the command line, including `paperctl stock`
 tools/fault-app     a session that misbehaves to order, for the harness
 tools/vm-harness    scripts that build the VM the harness runs in
