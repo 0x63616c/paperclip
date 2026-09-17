@@ -70,7 +70,7 @@ pub use hold::{
 pub use input::{
     ContactIds, InputNode, InputRole, PenDecoder, PointerTransform, RawEvent, TouchDecoder,
 };
-pub use panel::{MemoryPanel, Panel, PanelBuffer, Swap, present};
+pub use panel::{MemoryPanel, Panel, PanelBuffer, Plane, Swap, present};
 pub use session::{DisplayLockHolder, DisplayLocks, RESUME_BRIDGE_DELAY, WakeLock};
 pub use stock::{STOCK_UNIT, ServiceControl, StartBudget, Stock, StockHealth};
 pub use takeover::{Takeover, WAKELOCK_TAG, Watchdog};

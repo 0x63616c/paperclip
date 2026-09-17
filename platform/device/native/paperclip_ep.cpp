@@ -229,10 +229,14 @@ int32_t paperclip_ep_open(paperclip_ep **out)
         handle->back.fill(0xFFFFFFFFu);
         handle->aux.fill(0xFFFFFFFFu);
 
-        /* UNVERIFIED: which element of the tuple the engine presents from, and
-         * whether `aux` is the shadow or the target. If the first device build
-         * shows drawing land on the wrong page, this line is where to swap
-         * them, and ADR-0009 is where to record which way round it was. */
+        /* VERIFIED on hardware, WWW-23: the engine presents from `front`, the
+         * first element of the tuple, which is also what `paperclip_ep_buffer`
+         * hands out. Reading all three planes back after a full-panel swap gave
+         * `front` exactly the frame that was sent, while `back` and `aux` both
+         * still held the white they were filled with at open — their digest is
+         * the all-white 1620x2160 buffer's, computed independently. So the
+         * caller draws into the page the engine reads, and `aux` is neither the
+         * shadow nor the target for this call path. ADR-0009 records it. */
         engine->setBuffers(std::make_tuple(handle->front, handle->back), &handle->aux);
 
         *out = handle;
@@ -349,6 +353,54 @@ uint32_t *paperclip_ep_buffer(paperclip_ep *ep)
     } catch (...) {
         fail(PAPERCLIP_EP_EXCEPTION, "paperclip_ep_buffer: unknown C++ exception");
         return nullptr;
+    }
+}
+
+int32_t paperclip_ep_readback(paperclip_ep *ep, int32_t plane, uint32_t *out, int32_t len)
+{
+    const int32_t status = check(ep);
+    if (status != PAPERCLIP_EP_OK) {
+        return status;
+    }
+    if (out == nullptr || len <= 0) {
+        return fail(PAPERCLIP_EP_INVALID_ARGUMENT, "paperclip_ep_readback: no destination");
+    }
+    try {
+        const QImage *image = nullptr;
+        switch (plane) {
+        case PAPERCLIP_EP_PLANE_FRONT:
+            image = &ep->front;
+            break;
+        case PAPERCLIP_EP_PLANE_BACK:
+            image = &ep->back;
+            break;
+        case PAPERCLIP_EP_PLANE_AUX:
+            image = &ep->aux;
+            break;
+        default:
+            return fail(PAPERCLIP_EP_INVALID_ARGUMENT, "paperclip_ep_readback: no such plane");
+        }
+        /* constBits(), never bits(): the non-const accessor detaches the image
+         * from whatever the engine is sharing with it, which would make the
+         * measurement change the thing being measured — and, worse, could
+         * leave the caller drawing into a buffer the engine no longer reads. */
+        const uint32_t *pixels = reinterpret_cast<const uint32_t *>(image->constBits());
+        if (pixels == nullptr) {
+            return fail(PAPERCLIP_EP_NOT_OPEN, "paperclip_ep_readback: the plane has no pixels");
+        }
+        const int64_t available =
+            static_cast<int64_t>(image->bytesPerLine() / 4) * image->height();
+        const int64_t wanted = static_cast<int64_t>(len);
+        if (wanted > available) {
+            return fail(PAPERCLIP_EP_INVALID_ARGUMENT,
+                        "paperclip_ep_readback: destination larger than the plane");
+        }
+        memcpy(out, pixels, static_cast<size_t>(wanted) * sizeof(uint32_t));
+        return PAPERCLIP_EP_OK;
+    } catch (const std::exception &error) {
+        return fail(PAPERCLIP_EP_EXCEPTION, error.what());
+    } catch (...) {
+        return fail(PAPERCLIP_EP_EXCEPTION, "paperclip_ep_readback: unknown C++ exception");
     }
 }
 

@@ -254,6 +254,38 @@ gate is closed, `QCoreApplication` is a far lighter requirement than the
 `QGuiApplication` this ADR previously feared, and rmweb's QPA route stays the
 fallback rather than becoming the cheaper option.
 
+## Which buffer the engine presents from (WWW-23, on hardware)
+
+`paperclip_ep_open` hands the engine `setBuffers(make_tuple(front, back),
+&aux)`, and until WWW-23 which of the three it actually presents from was an
+open question carried as an `UNVERIFIED` comment in `paperclip_ep.cpp`.
+
+`paperclip_ep_readback` answers it. After a full-panel swap of the Home shelf:
+
+```
+readback front sha256:0fb73b27198efb386d8d5dc906b190430e9ef465f7243b69e8b72cb6b0b08dd2 == sent
+readback back  sha256:804c5351ba93f2c08ab9f6dc7ccc853873b11fb080c4d18f4c5f18539555117b != sent
+readback aux   sha256:804c5351ba93f2c08ab9f6dc7ccc853873b11fb080c4d18f4c5f18539555117b != sent
+```
+
+`804c5351…` is the digest of an all-white 1620x2160 ARGB8888 buffer, computed
+independently on the Mac — which is exactly what `open` fills all three planes
+with. So `back` and `aux` were never touched, and the engine presents from
+`front`, which is the plane `paperclip_ep_buffer` already hands the caller.
+Nothing needs swapping.
+
+The readback reads through `QImage::constBits()`, never `bits()`. The non-const
+accessor detaches the image from whatever the engine shares with it, so a
+readback written the obvious way would both invalidate its own measurement and
+risk leaving the caller drawing into a page the engine had stopped reading.
+
+**What a match supports, and what it does not.** It rules out the one failure
+that is otherwise invisible from inside the process: a silent fallback that
+returns success over a blank or substituted frame. It says nothing whatever
+about photons — `PanelWork::claim` therefore reads "engine holds the frame that
+was sent; presented without error, appearance on glass unverified", and weakens
+itself automatically if no plane matches.
+
 ## Provenance
 
 The wrapper's *shape* — a pixel buffer accessor, a mono-fast swap for live ink,

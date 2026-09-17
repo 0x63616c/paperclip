@@ -34,7 +34,7 @@ use paper_sdk::{Canvas, Size};
 use sha2::{Digest as _, Sha256};
 
 use crate::error::DeviceError;
-use crate::panel::{Panel, present};
+use crate::panel::{Panel, Plane, present};
 use crate::waveform::{PixelRect, Refresh, Waveform};
 
 /// How long the panel is held by default, which is how long a person has to
@@ -138,13 +138,35 @@ impl FrameDigest {
                 "the canvas would not fill an ARGB8888 buffer of its own size",
             ));
         }
+        Self::of_argb(&buffer, size, canvas.ink_coverage())
+    }
+
+    /// Digests a raw ARGB8888 buffer — the form a readback comes back in.
+    ///
+    /// `stride` is taken from `pixels.len() / size.height`, because a plane may
+    /// be padded and the padding is not part of the picture: hashing it would
+    /// make a readback incomparable with a canvas that has none.
+    pub fn of_argb(pixels: &[u32], size: Size, ink: f32) -> Result<Self, DeviceError> {
+        let rows = size.height as usize;
+        let width = size.width as usize;
+        if rows == 0 || width == 0 || pixels.len() < rows * width {
+            return Err(DeviceError::unexpected(format!(
+                "a {}x{} frame needs at least {} pixels, got {}",
+                size.width,
+                size.height,
+                rows * width,
+                pixels.len()
+            )));
+        }
+        let stride = pixels.len() / rows;
+        let buffer = pixels;
         let mut hasher = Sha256::new();
         // Row at a time: 3.5 million single-word updates is measurably slower
         // than 2160 row-sized ones, and the tablet is not a fast machine.
-        let mut row = Vec::with_capacity(size.width as usize * 4);
-        for line in buffer.chunks(size.width as usize) {
+        let mut row = Vec::with_capacity(width * 4);
+        for line in buffer.chunks(stride) {
             row.clear();
-            for pixel in line {
+            for pixel in &line[..width] {
                 row.extend_from_slice(&pixel.to_le_bytes());
             }
             hasher.update(&row);
@@ -152,7 +174,7 @@ impl FrameDigest {
         Ok(Self {
             digest: hasher.finalize().into(),
             size,
-            ink_per_mille: (canvas.ink_coverage() * 1000.0).round().max(0.0) as u32,
+            ink_per_mille: (ink * 1000.0).round().max(0.0) as u32,
         })
     }
 
@@ -464,15 +486,76 @@ pub struct PanelWork {
     pub clear: Duration,
     /// sysfs through the hold.
     pub samples: Vec<DisplaySample>,
+    /// What each of the engine's buffers held once the swap had been made.
+    pub readback: Vec<PlaneDigest>,
+}
+
+/// One plane, digested after the swap, next to the frame that was sent.
+///
+/// Asked for on WWW-23: move the claim from "the API did not error" to "the
+/// engine is holding our image". The technique is the one
+/// [libqsgepaper-snoop](https://github.com/pl-semiotics/libqsgepaper-snoop)
+/// demonstrates — the buffers are reachable from inside the owning process —
+/// minus the hooking, because we *are* the owning process and the bridge can
+/// simply hand them back.
+///
+/// What a match buys, precisely: the engine accepted these pixels and is
+/// holding them, which rules out a silent fallback presenting a blank or
+/// substituted frame and reporting success. What it does not buy: anything
+/// about photons. That still needs a camera (§17).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaneDigest {
+    /// Which buffer this is.
+    pub plane: Plane,
+    /// Its digest, or why it could not be read.
+    pub digest: Result<FrameDigest, String>,
+    /// Whether it equals the frame that was sent.
+    pub matches_sent: bool,
+}
+
+impl fmt::Display for PlaneDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.digest {
+            Ok(digest) => write!(
+                f,
+                "{:<5} sha256:{} {}",
+                self.plane.name(),
+                digest.to_hex(),
+                if self.matches_sent {
+                    "== sent"
+                } else {
+                    "!= sent"
+                }
+            ),
+            Err(why) => write!(f, "{:<5} unreadable: {why}", self.plane.name()),
+        }
+    }
 }
 
 impl PanelWork {
+    /// Which planes came back holding exactly what was sent.
+    pub fn holding(&self) -> Vec<Plane> {
+        self.readback
+            .iter()
+            .filter(|plane| plane.matches_sent)
+            .map(|plane| plane.plane)
+            .collect()
+    }
+
     /// The honest one-line claim, and the only one this code is entitled to.
+    ///
+    /// Three strengths, and the difference between them is the whole point of
+    /// reading the buffers back. None of them is about the glass.
     pub fn claim(&self) -> &'static str {
-        if self.real_panel {
-            "presented without error, appearance unverified"
+        if !self.real_panel {
+            return "not presented: the frame went to a memory panel, not to the glass";
+        }
+        if self.holding().is_empty() {
+            "presented without error, but no engine buffer holds the frame that was sent \
+             — appearance unverified and the pixels are unaccounted for"
         } else {
-            "not presented: the frame went to a memory panel, not to the glass"
+            "engine holds the frame that was sent; presented without error, \
+             appearance on glass unverified"
         }
     }
 }
@@ -502,6 +585,9 @@ impl fmt::Display for PanelWork {
         )?;
         for sample in &self.samples {
             writeln!(f, "  {sample}")?;
+        }
+        for plane in &self.readback {
+            writeln!(f, "  readback {plane}")?;
         }
         write!(f, "  {}", self.claim())
     }
@@ -603,12 +689,33 @@ pub fn present_and_hold(
             "the frame is entirely background; refusing to present an empty panel",
         ));
     }
+    let digest_hex = digest.to_hex();
 
     let panel_size = panel.size();
     let started = std::time::Instant::now();
     let rect = PixelRect::whole(panel_size);
     present(panel, canvas, rect, plan.waveform, plan.refresh)?;
     let present_took = started.elapsed();
+
+    // Read back before the hold, not after: the question is what the engine
+    // took from the swap, and a clear would answer a different one.
+    let readback = Plane::ALL
+        .iter()
+        .map(|plane| {
+            let digest = panel
+                .readback(*plane)
+                .and_then(|pixels| FrameDigest::of_argb(&pixels, panel_size, 0.0))
+                .map_err(|error| error.to_string());
+            let matches_sent = digest
+                .as_ref()
+                .is_ok_and(|read| read.to_hex() == digest_hex);
+            PlaneDigest {
+                plane: *plane,
+                digest,
+                matches_sent,
+            }
+        })
+        .collect();
 
     // Sampled on a schedule rather than in a busy loop: each sample is a
     // handful of sysfs reads, and doing them ten times a second during a
@@ -649,6 +756,7 @@ pub fn present_and_hold(
         held: plan.hold,
         clear: clear_took,
         samples,
+        readback,
     })
 }
 
@@ -936,7 +1044,8 @@ mod tests {
     use paper_sdk::{Canvas, Rect, SCREEN, Size, palette};
 
     use super::{DisplayProbe, FrameDigest, HoldPlan, WATCHDOG_MARGIN, present_and_hold};
-    use crate::panel::MemoryPanel;
+    use crate::error::DeviceError;
+    use crate::panel::{MemoryPanel, Plane};
     use crate::waveform::Refresh;
 
     fn drawn() -> Canvas {
@@ -1070,6 +1179,110 @@ mod tests {
 
         let missing = dir.path().join("never-written");
         super::PanelRecord::read(&missing).expect_err("refuses a record that is not there");
+    }
+
+    /// A panel whose buffers do not come back holding what was written.
+    ///
+    /// The failure the readback exists to catch: every call returns success,
+    /// and the pixels are not there.
+    #[derive(Debug)]
+    struct SilentFallback(MemoryPanel);
+
+    impl crate::panel::Panel for SilentFallback {
+        fn size(&self) -> Size {
+            self.0.size()
+        }
+        fn buffer(&mut self) -> Result<crate::panel::PanelBuffer<'_>, DeviceError> {
+            self.0.buffer()
+        }
+        fn swap(
+            &mut self,
+            rect: crate::waveform::PixelRect,
+            waveform: crate::waveform::Waveform,
+            refresh: Refresh,
+        ) -> Result<(), DeviceError> {
+            self.0.swap(rect, waveform, refresh)
+        }
+        fn readback(&self, _plane: Plane) -> Result<Vec<u32>, DeviceError> {
+            let size = self.0.size();
+            Ok(vec![
+                0xFFFF_FFFF;
+                size.width as usize * size.height as usize
+            ])
+        }
+        fn ghost_control(
+            &mut self,
+            mode: crate::waveform::GhostControl,
+        ) -> Result<(), DeviceError> {
+            self.0.ghost_control(mode)
+        }
+        fn clear(&mut self) -> Result<(), DeviceError> {
+            self.0.clear()
+        }
+    }
+
+    fn present_once(panel: &mut dyn crate::panel::Panel) -> super::PanelWork {
+        present_and_hold(
+            panel,
+            &drawn(),
+            &HoldPlan {
+                hold: Duration::ZERO,
+                ..HoldPlan::first_light()
+            },
+            &DisplayProbe::rooted(std::path::Path::new("/nonexistent")),
+            true,
+            |_| {},
+        )
+        .expect("presents")
+    }
+
+    #[test]
+    fn every_plane_is_read_back_and_compared_against_what_was_sent() {
+        let mut panel = MemoryPanel::new(SCREEN);
+        let work = present_once(&mut panel);
+
+        assert_eq!(work.readback.len(), 3);
+        for plane in &work.readback {
+            assert!(plane.matches_sent, "{plane}");
+            assert_eq!(
+                plane.digest.as_ref().expect("readable").to_hex(),
+                work.digest.to_hex()
+            );
+        }
+        assert_eq!(work.holding(), Plane::ALL.to_vec());
+    }
+
+    #[test]
+    fn a_panel_that_reports_success_over_the_wrong_pixels_is_caught() {
+        let mut panel = SilentFallback(MemoryPanel::new(SCREEN));
+        let work = present_once(&mut panel);
+
+        assert!(work.holding().is_empty());
+        assert!(
+            work.readback.iter().all(|plane| !plane.matches_sent),
+            "a blank readback must not match a drawn frame"
+        );
+        // The claim weakens by itself, so a caller printing it cannot overstate
+        // what happened even if it never looks at the planes.
+        assert!(work.claim().contains("unaccounted for"), "{}", work.claim());
+        assert!(!work.claim().contains("engine holds"));
+    }
+
+    #[test]
+    fn a_digest_ignores_stride_padding_so_a_readback_compares_with_a_canvas() {
+        let size = Size::new(4, 3);
+        let tight: Vec<u32> = (0..12).collect();
+        // The same picture in a buffer padded to a stride of six.
+        let mut padded = vec![0xDEAD_BEEFu32; 18];
+        for row in 0..3 {
+            padded[row * 6..row * 6 + 4].copy_from_slice(&tight[row * 4..row * 4 + 4]);
+        }
+        let a = FrameDigest::of_argb(&tight, size, 0.0).expect("digests");
+        let b = FrameDigest::of_argb(&padded, size, 0.0).expect("digests");
+        assert_eq!(a, b, "padding must not change the digest");
+
+        FrameDigest::of_argb(&tight[..6], size, 0.0)
+            .expect_err("a buffer too small for the frame is an error, not a short hash");
     }
 
     #[test]

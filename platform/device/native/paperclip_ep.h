@@ -47,7 +47,19 @@ extern "C" {
 
 /* Bumped whenever this header changes shape. The Rust side checks it at open
  * so a stale .so and a new crate fail loudly instead of corrupting a call. */
-#define PAPERCLIP_EP_ABI_VERSION 1u
+#define PAPERCLIP_EP_ABI_VERSION 2u
+
+/* Which of the three buffers `paperclip_ep_readback` copies out.
+ *
+ * `open` hands the engine `setBuffers(make_tuple(front, back), &aux)`, and
+ * which of them it presents from is not documented anywhere we can read. FRONT
+ * is where the caller draws, so reading it back answers "are the pixels I wrote
+ * still in the buffer the engine was given" — which is a different and weaker
+ * question than "is that image on the glass", and the only one available from
+ * inside the process. */
+#define PAPERCLIP_EP_PLANE_FRONT 0
+#define PAPERCLIP_EP_PLANE_BACK 1
+#define PAPERCLIP_EP_PLANE_AUX 2
 
 /* Content types, mirroring `ContentType` in platform/device/src/waveform.rs. */
 #define PAPERCLIP_EP_CONTENT_MONO 0
@@ -93,6 +105,16 @@ int32_t paperclip_ep_swap(paperclip_ep *ep, int32_t x, int32_t y, int32_t width,
                           int32_t full);
 
 /* Sets the engine's ghost-suppression mode. */
+/* Copy one plane out, for comparison against what was sent.
+ *
+ * `out` receives `len` uint32 of ARGB8888 at the plane's own stride. Reads
+ * through Qt's *const* accessor, so it cannot detach the image and cannot
+ * perturb what the engine is sharing — a readback that changed the thing it
+ * measured would be worse than none.
+ *
+ * Never a claim about the panel. See the note in the header comment. */
+int32_t paperclip_ep_readback(paperclip_ep *ep, int32_t plane, uint32_t *out, int32_t len);
+
 int32_t paperclip_ep_ghost_control(paperclip_ep *ep, int32_t mode);
 
 /* Drives the whole panel white with a settled waveform. */

@@ -10,24 +10,30 @@ at closely enough, and it is the most important thing on this page.
 
 ## The run that worked
 
-2026-09-17 ~13:40Z, image `20260827113527`, over Wi-Fi.
+2026-09-17 13:49Z, image `20260827113527`, over Wi-Fi. The second of two
+consecutive clean sessions; the first, at 13:40Z, was identical apart from the
+readback.
 
 ```
 panel 1620x2160 (vendor waveform engine)
   frame    sha256:0fb73b27198efb386d8d5dc906b190430e9ef465f7243b69e8b72cb6b0b08dd2
            (1620x2160, ink 318/1000)
   swap     1620x2160 at (0,0), waveform mode 3 Mono, full=1
-  timings  open 2019ms, present 2363ms (call latency, not settle time),
-           held 45s, clear 146ms
-  t+  0s enabled=disabled status=connected dpms=Off wake_lock=[paperclip-takeover]
-         rails=[VCOM=disabled@0.507V VGH2=off VGL=off VNEG1=off@6.000V
-                VNEG2=off@12.005V VNEG3=off@24.015V VPDD=off@3.000V
-                VPOS1=off@6.000V VPOS2=off@12.005V VPOS3=off@24.015V] panel=36.0C
-  t+ 10s ... panel=33.0C
-  t+ 20s ... panel=34.0C
-  t+ 30s ... panel=31.0C
-  t+ 40s ... panel=31.0C
-  presented without error, appearance unverified
+  timings  open 1736ms, present 2526ms (call latency, not settle time),
+           held 45s, clear 138ms
+  t+  0s enabled=enabled  status=connected dpms=On  wake_lock=[paperclip-takeover]
+         rails=[VCOM=enabled@0.507V VGH2=on VGL=on VNEG1=on@6.000V
+                VNEG2=on@12.005V VNEG3=on@24.015V VPDD=on@3.000V
+                VPOS1=on@6.000V VPOS2=on@12.005V VPOS3=on@24.015V] panel=36.0C
+  t+ 15s enabled=disabled status=connected dpms=Off wake_lock=[paperclip-takeover]
+         rails=[... all off ...] panel=31.0C
+  t+ 30s enabled=disabled status=connected dpms=Off wake_lock=[paperclip-takeover]
+         rails=[... all off ...] panel=31.0C
+  readback front sha256:0fb73b27...b0b08dd2 == sent
+  readback back  sha256:804c5351...9555117b != sent
+  readback aux   sha256:804c5351...9555117b != sent
+  engine holds the frame that was sent; presented without error,
+  appearance on glass unverified
 
 ...panel tft: C0F
 ...panel fpl: AAB0AU
@@ -38,36 +44,66 @@ temperature_hwmon: found temperature path: /sys/class/hwmon/hwmon8/temp1_input
 shutdown: waiting for updates to complete...
 shutdown: waiting for display to finish...
 
-preflight   active pid 1804, failed [], /home mounted, notebooks 59, NRestarts 0
-postflight  active pid 2430, failed [], /home mounted, notebooks 59, NRestarts 0
-  NRestarts 0 -> 0; main start 13:38:16 -> 13:40:02
-  /tmp/epframebuffer.lock names xochitl pid 2430 after 303ms
+preflight   active pid 2430, failed [], /home mounted, notebooks 59, NRestarts 0
+postflight  active pid 3405, failed [], /home mounted, notebooks 59, NRestarts 0
+  NRestarts 0 -> 0; main start 13:40:02 -> 13:49:35
+  /tmp/epframebuffer.lock names xochitl pid 3405 after 313ms
   stock is where it was found, and started once
 EXIT=0
 ```
 
-**The claim, at exactly its strength: presented without error, appearance
-unverified.** The engine loaded a panel-specific waveform table selected from
-this panel's own lot and TFT ids, drove the EPD rails, accepted a full-panel
-ARGB8888 frame and ran its ordered shutdown. Nothing in the process saw the
-glass. A wrong byte order would look identical from here (§17).
+Zero `another instance is already running` lines for the whole boot, across both
+sessions.
+
+### The rails came on for the update, and went off for the hold
+
+The `t+0s` sample lands inside the waveform: connector `enabled`, `dpms=On`, and
+every EPD rail on — VCOM enabled, VPOS/VNEG at 6, 12 and 24 V, VGH, VGL and VPDD
+on. That is the engine's own `pmic: setting rails to 6.0, 12.0, 24.0, -6.0,
+-12.0, -24.0` seen from sysfs rather than from its log line.
+
+By `t+15s` the connector is `disabled` and every rail is off, and it stays that
+way. That is what a correct e-ink hold looks like: the panel keeps the image
+with no power, and the rails are driven only while a waveform runs. Panel
+temperature falls 36C to 31C across the hold.
+
+This is the closest thing to positive evidence available without a camera: the
+high-voltage rails were genuinely driven for the duration of one update, at the
+moment a full-panel update was requested.
+
+### The readback, and which buffer the engine actually uses
+
+Asked for on the issue: digest what was sent, digest what the engine holds,
+compare, and report both. `paperclip_ep_readback` does that for all three
+planes, reading through `QImage::constBits()` so the measurement cannot detach
+the image and change what it is measuring.
+
+**`front` came back byte-identical to the frame that was sent.** `back` and
+`aux` both came back as `804c5351…`, which is the digest of an all-white
+1620x2160 ARGB8888 buffer — computed independently on the Mac, and exactly what
+`paperclip_ep_open` fills all three planes with. So the engine presents from
+`front`, the plane the caller already draws into, and the `UNVERIFIED` note that
+has sat in `paperclip_ep.cpp` since WWW-3 is now answered. ADR-0009 records it.
+
+**What the match supports.** The engine accepted our pixels and is holding them.
+That rules out the one failure otherwise invisible from inside the process — a
+silent fallback reporting success over a blank or substituted frame.
+
+**What it does not.** Anything about photons. The claim string reflects exactly
+this and weakens itself automatically if no plane matches:
+
+| | claim |
+|---|---|
+| no vendor engine | not presented: the frame went to a memory panel |
+| presented, no plane matches | presented without error, but no engine buffer holds the frame that was sent |
+| presented, `front` matches | engine holds the frame that was sent; presented without error, appearance on glass unverified |
 
 **The buffer was a real render of the Home shelf**, through the same `Screens`
 code `paperctl screenshot` and `paperctl preview` use. There is no fallback
 path: a screen that will not render fails the command, and a frame that
 rasterises to bare background refuses the takeover before Xochitl is stopped.
-Both processes rendered it independently and agreed on the digest, which is
-checked before the report is accepted.
-
-### Rails read `off` during the hold, and that is what it should say
-
-Every EPD rail reports `off` at every sample. That is not a panel that failed to
-light: e-ink holds an image with no power, and the rails are driven only while a
-waveform runs. The engine's own `pmic: setting rails to ...` line is from the
-present. The sampler reports what sysfs said and does not interpret it.
-
-Panel temperature fell 36C to 31C across the hold, which is the engine's own
-hwmon and the only thing here that moves.
+Both processes render it independently and the parent refuses a report whose
+digest disagrees with its own.
 
 ## The incident: `checkLockFile()` takes a lock nothing gives back
 
@@ -188,12 +224,15 @@ when the panel already shows a Paperclip screen.
 
 ## Still open
 
-- **Nothing here has seen the glass.** The framebuffer readback asked for on the
-  issue — digest what we sent, digest what the engine holds, compare — is not
-  built. `paperclip_ep_open` hands the engine our own `QImage`s
-  (`setBuffers(tuple(front, back), &aux)`), so a readback reads buffers we own
-  and whether the engine detaches them under Qt's copy-on-write is not something
-  a Mac can answer. It needs a bridge entry point and a device run.
+- **Nothing here has seen the glass.** The readback closes the gap between "the
+  API did not error" and "the engine holds our image", and that is as far as it
+  goes. Photons need a camera.
 - **`held` is reported from the plan, not measured.** With suspends stretching
-  `thread::sleep` that is the wrong number to print.
-- **Why the wakelock does not hold.** Above.
+  `thread::sleep` that is the wrong number to print — the 13:29Z session's
+  120-second hold took several wall-clock minutes and said `held 120s`. Measure
+  it against `SystemTime`, which does not stop across a suspend.
+- **Why the wakelock does not prevent autosleep.** Above. Until that is
+  understood, a hold longer than a minute or so is not reliable, and neither is
+  `DetachedWatchdog`'s deadline.
+- **`--hold` has no upper bound and no resume handling.** A session that
+  suspends mid-hold resumes with the bridge FPGA reprogrammed and no re-present.

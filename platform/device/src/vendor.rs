@@ -22,12 +22,12 @@ use std::ptr::NonNull;
 use paper_sdk::Size;
 
 use crate::error::{DeviceError, VendorStatus};
-use crate::panel::{Panel, PanelBuffer};
+use crate::panel::{Panel, PanelBuffer, Plane};
 use crate::waveform::{ContentType, GhostControl, PixelRect, Refresh, Waveform};
 
 /// The ABI version this crate was built against. Must match
 /// `PAPERCLIP_EP_ABI_VERSION` in `native/paperclip_ep.h`.
-const ABI_VERSION: u32 = 1;
+const ABI_VERSION: u32 = 2;
 
 #[repr(C)]
 struct RawHandle {
@@ -55,6 +55,7 @@ unsafe extern "C" {
         mode: i32,
         full: i32,
     ) -> i32;
+    fn paperclip_ep_readback(ep: *mut RawHandle, plane: i32, out: *mut u32, len: i32) -> i32;
     fn paperclip_ep_ghost_control(ep: *mut RawHandle, mode: i32) -> i32;
     fn paperclip_ep_clear(ep: *mut RawHandle) -> i32;
     fn paperclip_ep_last_error() -> *const c_char;
@@ -218,6 +219,27 @@ impl Panel for VendorPanel {
             )
         };
         check(status)
+    }
+
+    fn readback(&self, plane: Plane) -> Result<Vec<u32>, DeviceError> {
+        let len = self.stride * self.size.height as usize;
+        let wanted = i32::try_from(len).map_err(|_| {
+            DeviceError::unexpected("the panel is too large to read back in one call")
+        })?;
+        let mut pixels = vec![0u32; len];
+        let which = match plane {
+            Plane::Front => 0,
+            Plane::Back => 1,
+            Plane::Aux => 2,
+        };
+        // SAFETY: `self.handle` is live for as long as `self` is, and `pixels`
+        // is a live allocation of exactly `wanted` u32 that outlives the call.
+        // The bridge copies through Qt's const accessor and writes nothing
+        // beyond `wanted`, which it re-checks against the plane's own extent.
+        check(unsafe {
+            paperclip_ep_readback(self.handle.as_ptr(), which, pixels.as_mut_ptr(), wanted)
+        })?;
+        Ok(pixels)
     }
 
     fn ghost_control(&mut self, mode: GhostControl) -> Result<(), DeviceError> {

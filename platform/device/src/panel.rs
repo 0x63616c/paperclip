@@ -42,6 +42,36 @@ pub struct PanelBuffer<'a> {
     pub size: Size,
 }
 
+/// One of the three buffers the vendor engine was given.
+///
+/// `paperclip_ep_open` hands it `setBuffers(make_tuple(front, back), &aux)`.
+/// Which one it presents from is not documented and has never been established
+/// on hardware — the note has been in `native/paperclip_ep.cpp` since WWW-3.
+/// Being able to read all three is how that question gets answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Plane {
+    /// Where [`Panel::buffer`] draws.
+    Front,
+    /// The other half of the engine's pair.
+    Back,
+    /// The auxiliary buffer the engine was given a pointer to.
+    Aux,
+}
+
+impl Plane {
+    /// Every plane, in the order a report lists them.
+    pub const ALL: [Plane; 3] = [Plane::Front, Plane::Back, Plane::Aux];
+
+    /// The name used in reports.
+    pub fn name(self) -> &'static str {
+        match self {
+            Plane::Front => "front",
+            Plane::Back => "back",
+            Plane::Aux => "aux",
+        }
+    }
+}
+
 /// A surface the tablet can be made to show.
 pub trait Panel: fmt::Debug {
     /// The panel extent in pixels.
@@ -64,6 +94,16 @@ pub trait Panel: fmt::Debug {
 
     /// Sets the engine's ghost-suppression policy.
     fn ghost_control(&mut self, mode: GhostControl) -> Result<(), DeviceError>;
+
+    /// Copies a plane out, so what was sent can be compared with what the
+    /// engine is holding.
+    ///
+    /// This is **not** a picture of the panel. It is the buffer on this side of
+    /// the vendor boundary, and the strongest thing a match can support is
+    /// "the engine still has our pixels" — which does rule out the one failure
+    /// that is otherwise invisible from here, a silent fallback that reports
+    /// success over a blank or substituted frame (§17).
+    fn readback(&self, plane: Plane) -> Result<Vec<u32>, DeviceError>;
 
     /// Drives the whole panel white and waits for the waveform to settle.
     ///
@@ -233,6 +273,15 @@ impl Panel for MemoryPanel {
             refresh,
         });
         Ok(())
+    }
+
+    fn readback(&self, plane: Plane) -> Result<Vec<u32>, DeviceError> {
+        // One buffer, reported as all three. A memory panel has no engine to
+        // disagree with, so every plane is what was written — which makes the
+        // comparison in a report trivially true here and meaningfully false
+        // only on the device, where it is worth checking.
+        let _ = plane;
+        Ok(self.pixels.clone())
     }
 
     fn ghost_control(&mut self, mode: GhostControl) -> Result<(), DeviceError> {
