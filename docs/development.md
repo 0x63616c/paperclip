@@ -86,9 +86,10 @@ autosleep, and Wi-Fi does (WWW-20).
 cargo run -p paperctl -- preview --screen home
 cargo run -p paperctl -- preview --screen chess
 cargo run -p paperctl -- preview --screen settings
+cargo run -p paperctl -- preview --screen sudoku
 
-# Keys: h home · c chess · s settings · f flip the board · n clear selection
-#       · tab next screen · esc quit
+# Keys: h home · c chess · s settings · u sudoku · f flip the board
+#       · n clear selection · tab next screen · esc quit
 ```
 
 The window opens at a fraction of the real panel size — 1620 × 2160 portrait
@@ -325,6 +326,9 @@ platform/host       the supervisor: state machine, deadlines, units, recovery
 platform/updater    the platform update transaction and the removal path
 apps/home           the home screen
 apps/chess          the Chess screen
+apps/chess-rules    chess legality, game state and the save format
+apps/sudoku         the Sudoku screen, and the worked example of per-cell damage
+apps/sudoku-rules   sudoku generation, validation, solving and the save format
 apps/settings       the Settings screen: apps, storage, grants, catalog, platform, diagnostics
 tools/paperctl      the command line: stock, setup, upgrade, remove, packaging
 tools/fault-app     a session that misbehaves to order, for the harness

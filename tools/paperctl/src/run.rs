@@ -87,6 +87,9 @@ pub(crate) enum RunAppArg {
     Chess,
     /// Settings, over the real store this device has.
     Settings,
+    /// The sudoku app, whose per-cell damage is the reason this loop presents
+    /// regions rather than whole panels (WWW-6, WWW-39).
+    Sudoku,
 }
 
 impl RunAppArg {
@@ -95,6 +98,7 @@ impl RunAppArg {
             RunAppArg::Home => "home",
             RunAppArg::Chess => "chess",
             RunAppArg::Settings => "settings",
+            RunAppArg::Sudoku => "sudoku",
         }
     }
 }

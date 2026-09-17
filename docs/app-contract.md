@@ -133,6 +133,14 @@ regions out itself, because centralised damage tracking is the only version of
 this that stays right when an app gets it wrong. Claiming *less* than changed
 is the one harmful answer — on e-ink a stale rectangle stays on the glass.
 
+An app that claims regions has to build the claim where both the old and the
+new state exist, which is the press and not `damage()` — that is asked after
+the frame is already drawn. `apps/sudoku` is the worked example, and
+[ADR-0021](adr/0021-per-cell-damage-and-the-sudoku-app.md) states the rules it
+follows: `Full` for anything structural, `Full` for a draw with no claim behind
+it, `Full` rather than dropping rectangles past `MAX_DAMAGE_RECTS`, and
+everything drawn for a region kept inside the rectangle that claims it.
+
 Frames are issued one at a time. `Request::Redraw` messages that arrive while
 one is outstanding are coalesced into the next.
 

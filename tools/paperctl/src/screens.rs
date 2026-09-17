@@ -10,6 +10,8 @@ use paper_packages::inventory::{AppEntry, CatalogStatus, Inventory};
 use paper_sdk::{Action, PointerEvent, PointerPhase};
 use paper_sdk::{Canvas, SCREEN};
 use paper_settings::{PageLayout, PlaceholderHost, SettingsLayout, SettingsScreen};
+use paper_sudoku::{SudokuLayout, SudokuScreen};
+use paper_sudoku_rules::{Cell, Difficulty, Game as SudokuGame};
 
 use crate::error::CommandError;
 
@@ -23,6 +25,14 @@ const HOME_MANIFEST: &str = include_str!("../../../apps/home/paper.toml");
 const CHESS_MANIFEST: &str = include_str!("../../../apps/chess/paper.toml");
 const SETTINGS_MANIFEST: &str = include_str!("../../../apps/settings/paper.toml");
 const APP_STORE_MANIFEST: &str = include_str!("../../../apps/app-store/paper.toml");
+const SUDOKU_MANIFEST: &str = include_str!("../../../apps/sudoku/paper.toml");
+
+/// The seed the preview's Sudoku is generated from.
+///
+/// Fixed, and it has to be: generation is deterministic in its seed
+/// (`paper_sudoku_rules`), and a screen whose puzzle changed per run could not
+/// be frozen in the golden table below at all.
+const SUDOKU_SEED: u64 = 0x5061_7065_7263_6C69;
 
 /// Which screen is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,16 +45,19 @@ pub(crate) enum Screen {
     Settings,
     /// The App Store screen.
     AppStore,
+    /// The Sudoku screen.
+    Sudoku,
 }
 
 impl Screen {
     /// Every screen the preview can show, in cycling order.
     #[cfg(feature = "desktop")]
-    const ALL: [Screen; 4] = [
+    const ALL: [Screen; 5] = [
         Screen::Home,
         Screen::Chess,
         Screen::Settings,
         Screen::AppStore,
+        Screen::Sudoku,
     ];
 
     /// The name used for files and log lines.
@@ -54,6 +67,7 @@ impl Screen {
             Screen::Chess => "chess",
             Screen::Settings => "settings",
             Screen::AppStore => "app-store",
+            Screen::Sudoku => "sudoku",
         }
     }
 
@@ -75,7 +89,7 @@ impl Screen {
 /// screen that demonstrates nothing. The real screen is fed by
 /// `PackagesSource` against a real store — see `apps/app-store/tests/store.rs`,
 /// which drives exactly that path.
-fn preview_inventory(chess: &Manifest, app_store: &Manifest) -> Inventory {
+fn preview_inventory(chess: &Manifest, app_store: &Manifest, sudoku: &Manifest) -> Inventory {
     Inventory::fixture(
         vec![
             // Installed, and the catalog has moved on.
@@ -92,6 +106,15 @@ fn preview_inventory(chess: &Manifest, app_store: &Manifest) -> Inventory {
                 Some(app_store.version().clone()),
                 Some(app_store.version().clone()),
             ),
+            // In the catalog, not installed: the second app the install path
+            // is exercised with (WWW-39), and the row a person taps INSTALL
+            // on.
+            AppEntry::fixture(
+                sudoku.id().clone(),
+                sudoku.name().clone(),
+                None,
+                Some(sudoku.version().clone()),
+            ),
         ],
         Some(CatalogStatus {
             name: "calum-home".to_owned(),
@@ -99,6 +122,29 @@ fn preview_inventory(chess: &Manifest, app_store: &Manifest) -> Inventory {
             stale: false,
         }),
     )
+}
+
+/// The Sudoku the preview shows.
+///
+/// A generated puzzle with two digits entered and a third cell selected, so
+/// one screenshot carries all three states a cell can be in — a given, an
+/// entry, and the selection outline — and the golden frame below asserts on
+/// all three rather than on an untouched grid.
+///
+/// The entries come from the puzzle's own solution, so the fixture is a legal
+/// position rather than a guess that happens to fit.
+fn preview_sudoku() -> (SudokuGame, SudokuScreen) {
+    let mut game = SudokuGame::start(Difficulty::Medium, SUDOKU_SEED);
+    let mut screen = SudokuScreen::new(game.difficulty());
+    let solution = *game.puzzle().solution();
+    let open: Vec<Cell> = Cell::all().filter(|cell| !game.is_given(*cell)).collect();
+    for cell in open.iter().take(2) {
+        if let Some(digit) = solution.get(*cell) {
+            let _ = game.set(*cell, digit);
+        }
+    }
+    screen.selected = open.get(2).copied();
+    (game, screen)
 }
 
 /// Everything the preview draws, and the small amount of state behind it.
@@ -114,10 +160,13 @@ pub(crate) struct Screens {
     #[cfg(feature = "desktop")]
     settings_host: PlaceholderHost,
     app_store: AppStoreScreen,
+    sudoku: SudokuScreen,
+    sudoku_game: SudokuGame,
     shelf: Option<ShelfLayout>,
     board: Option<ChessLayout>,
     settings_layout: Option<SettingsLayout>,
     app_store_layout: Option<StoreLayout>,
+    sudoku_layout: Option<SudokuLayout>,
 }
 
 impl Screens {
@@ -153,8 +202,13 @@ impl Screens {
         let settings_host = PlaceholderHost::new();
         let settings = SettingsScreen::from_host(&settings_host);
         let app_store_manifest = parse_built_in("app-store", APP_STORE_MANIFEST)?;
-        let app_store =
-            AppStoreScreen::new(preview_inventory(&chess_manifest, &app_store_manifest));
+        let sudoku_manifest = parse_built_in("sudoku", SUDOKU_MANIFEST)?;
+        let app_store = AppStoreScreen::new(preview_inventory(
+            &chess_manifest,
+            &app_store_manifest,
+            &sudoku_manifest,
+        ));
+        let (sudoku_game, sudoku) = preview_sudoku();
 
         Ok(Self {
             current: Screen::Home,
@@ -165,10 +219,13 @@ impl Screens {
             #[cfg(feature = "desktop")]
             settings_host,
             app_store,
+            sudoku,
+            sudoku_game,
             shelf: None,
             board: None,
             settings_layout: None,
             app_store_layout: None,
+            sudoku_layout: None,
         })
     }
 
@@ -190,6 +247,13 @@ impl Screens {
             }
             Screen::AppStore => {
                 self.app_store_layout = Some(paper_app_store::render(canvas, &self.app_store))
+            }
+            Screen::Sudoku => {
+                self.sudoku_layout = Some(paper_sudoku::render(
+                    canvas,
+                    &self.sudoku,
+                    &self.sudoku_game,
+                ))
             }
         }
     }
@@ -291,6 +355,23 @@ impl Screens {
                     self.current = Screen::Home;
                 }
             }
+            Screen::Sudoku => {
+                let Some(layout) = self.sudoku_layout else {
+                    return;
+                };
+                // `SudokuScreen::press` is the real interaction logic, and it
+                // reports the damage it caused; a preview window repaints the
+                // whole canvas either way, so the claim is dropped here rather
+                // than pretended about.
+                if self
+                    .sudoku
+                    .press(&mut self.sudoku_game, &layout, &event)
+                    .action
+                    == Action::Home
+                {
+                    self.current = Screen::Home;
+                }
+            }
             Screen::AppStore => {
                 let (Some(layout), PointerPhase::Up) = (&self.app_store_layout, event.phase) else {
                     return;
@@ -325,6 +406,7 @@ impl Screens {
             'h' => self.current = Screen::Home,
             'c' => self.current = Screen::Chess,
             's' => self.current = Screen::Settings,
+            'u' => self.current = Screen::Sudoku,
             'f' => self.chess.flip(),
             'n' => self.chess.selected = None,
             '\t' | ' ' => self.current = self.current.next(),
@@ -380,14 +462,14 @@ mod golden {
     /// aarch64, which is the one direct check that the digest a device run
     /// reports and the digest a Mac run reports are the same number.
     ///
-    /// The other three are desktop readings only. Rendering uses `sin`, `cos`
+    /// The other four are desktop readings only. Rendering uses `sin`, `cos`
     /// and `powf`, whose results are the platform's libm rather than something
     /// IEEE 754 pins down, so a device run printing a different digest for
     /// Chess, Settings or the App Store is a question to investigate — which
     /// libm, and by how many pixels — and not by itself proof the render
     /// drifted. Home matching across both platforms is the reason to expect
     /// they agree, not a guarantee that they do.
-    const GOLDEN: [(Screen, &str, u32); 4] = [
+    const GOLDEN: [(Screen, &str, u32); 5] = [
         (
             Screen::Home,
             "1dff16794e0cc4188720d3d74eac62c536fcd4d4fb292d6337ac9871203bc786",
@@ -405,14 +487,19 @@ mod golden {
         ),
         (
             Screen::AppStore,
-            "5aaf7f60493c7f8bda53fe2e694fa27d9993fd31db11f5616a652f819a191023",
-            165,
+            "975863eb5b3f4f43979e63566cedea9ad3ccc01e193d9cedf7559cc0e038b541",
+            238,
+        ),
+        (
+            Screen::Sudoku,
+            "dc90f0dd00408f831b787ac55f404b7daf60da52e6c997659abc1f327c9fd395",
+            305,
         ),
     ];
 
-    /// Every mismatch in one run, not just the first: a change that moves all
-    /// four screens should print all four new digests, so the table can be
-    /// checked against four PNGs and updated once.
+    /// Every mismatch in one run, not just the first: a change that moves
+    /// every screen should print every new digest, so the table can be checked
+    /// against the PNGs and updated once.
     #[test]
     fn every_screen_renders_the_frame_it_is_frozen_at() {
         let mut screens = Screens::new().expect("the built-in screens build");

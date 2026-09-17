@@ -119,6 +119,7 @@ impl OpenArgs {
             ScreenArg::Chess => "chess",
             ScreenArg::Settings => "settings",
             ScreenArg::AppStore => "app-store",
+            ScreenArg::Sudoku => "sudoku",
             ScreenArg::All => "home",
         }
     }
@@ -201,6 +202,7 @@ fn provenance(screen: Screen) -> &'static str {
         Screen::Chess => "real render of the Chess board, paper_chess::render",
         Screen::Settings => "real render of Settings, paper_settings::render",
         Screen::AppStore => "real render of the App Store, paper_app_store::render",
+        Screen::Sudoku => "real render of the Sudoku grid, paper_sudoku::render",
     }
 }
 

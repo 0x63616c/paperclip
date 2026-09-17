@@ -23,6 +23,8 @@ apps = [
     "dep:paper-chess-rules",
     "dep:paper-home",
     "dep:paper-settings",
+    "dep:paper-sudoku",
+    "dep:paper-sudoku-rules",
 ]
 # The preview window, which drags in winit and softbuffer.
 desktop = ["apps", "paper-sdk/desktop"]
@@ -55,6 +57,8 @@ paper-packages = { workspace = true }
 paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
 paper-settings = { workspace = true, optional = true }
+paper-sudoku = { workspace = true, optional = true }
+paper-sudoku-rules = { workspace = true, optional = true }
 paper-updater = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }

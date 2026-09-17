@@ -1,8 +1,9 @@
 //! `paperctl dev` — the desktop dev loop (§14, §15).
 //!
-//! Runs a real app — [`paper_home::HomeApp`] or [`paper_chess::ChessApp`] —
-//! through the actual wire protocol [`paper_sdk::run`] speaks, in a real
-//! window, with isolated local storage that survives a restart. Watches this
+//! Runs a real app — [`paper_home::HomeApp`], [`paper_chess::ChessApp`] or
+//! [`paper_sudoku::SudokuApp`] — through the actual wire protocol
+//! [`paper_sdk::run`] speaks, in a real window, with isolated local storage
+//! that survives a restart. Watches this
 //! source tree; when it changes, rebuilds `paperctl` itself (which is what
 //! every app crate is linked into) and restarts into the freshly built
 //! binary — but only once the current session ends (the window closes, or
@@ -39,17 +40,19 @@ use crate::session::{self, SessionError};
 
 /// Source directories `paperctl dev` watches for a reason to rebuild.
 ///
-/// Everything the `apps` feature can reach: the two dev-runnable app crates,
-/// the rules core, the SDK and protocol underneath them, and `paperctl`
-/// itself. Not `apps/settings` or `apps/app-store` — neither is dev-runnable
-/// here (see [`DevError::UnknownApp`]) — but their source is not part of
-/// what a Home/Chess session actually executes, so leaving them out does not
-/// miss a rebuild those sessions need.
+/// Everything the `apps` feature can reach: the dev-runnable app crates, their
+/// rules cores, the SDK and protocol underneath them, and `paperctl` itself.
+/// Not `apps/settings` or `apps/app-store` — neither is dev-runnable here (see
+/// [`DevError::UnknownApp`]) — but their source is not part of what a session
+/// actually executes, so leaving them out does not miss a rebuild those
+/// sessions need.
 const WATCHED_DIRS: &[&str] = &[
     "tools/paperctl/src",
     "apps/home/src",
     "apps/chess/src",
     "apps/chess-rules/src",
+    "apps/sudoku/src",
+    "apps/sudoku-rules/src",
     "platform/sdk/src",
     "platform/protocol/src",
     "platform/packages/src",
@@ -98,6 +101,8 @@ pub(crate) enum DevAppArg {
     Home,
     /// The chess app, on the real rules core.
     Chess,
+    /// The sudoku app, on the real rules core.
+    Sudoku,
 }
 
 impl DevAppArg {
@@ -105,6 +110,7 @@ impl DevAppArg {
         match self {
             DevAppArg::Home => "home",
             DevAppArg::Chess => "chess",
+            DevAppArg::Sudoku => "sudoku",
         }
     }
 }

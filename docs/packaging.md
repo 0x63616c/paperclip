@@ -38,6 +38,12 @@ published unverifiable on any device that trusts the old one, which is why
 
 ## Publishing a release
 
+Two apps ship through the catalog rather than with the platform, and both
+follow this identically — Chess and Sudoku. Publishing Sudoku is the same five
+commands with a different source directory, which is the point of there being
+two of them (WWW-39): "install an app that is not Chess" is now a path with
+something in it.
+
 ```sh
 paperctl package apps/chess --out build/chess-0.2.0.paperpkg
 paperctl check build/chess-0.2.0.paperpkg          # opens it the way a device would
@@ -98,6 +104,13 @@ was published.
 
 `--root` is the store. Without it, `PAPERCLIP_ROOT`, then the device path
 `/home/root/.local/share/paperclip`. There is no current-directory fallback.
+
+`paperctl install` installs under `InstallPolicy::deny_all`, so an app it
+installs holds no capabilities — including `storage`. An app that saves (Chess,
+Sudoku) therefore resumes nothing when it is launched from a store installed
+this way, and both handle that by playing unsaved rather than failing. The
+grants an app actually needs are host policy, not a CLI flag, and there is no
+flag here to widen them on purpose.
 
 ```sh
 paperctl list --root /tmp/paperclip-store --catalog ~/catalogs/home \

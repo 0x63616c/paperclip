@@ -1,5 +1,5 @@
-//! The live half of a Home/Chess/Settings session: the loopback connection to
-//! the app thread, and where its published frames land.
+//! The live half of a dev or device session: the loopback connection to the
+//! app thread, and where its published frames land.
 //!
 //! Shared between `paperctl dev` (a window on the Mac) and `paperctl run` (the
 //! real panel on the device, WWW-6): both hand a real, unmodified
@@ -30,10 +30,12 @@ use paper_sdk::{
     App, Canvas, Context, Event, SCREEN, SaveError, Surface, SurfaceError, SurfaceProvider,
 };
 use paper_settings::{LiveHost, SettingsApp};
+use paper_sudoku::SudokuApp;
 
 const HOME_MANIFEST: &str = include_str!("../../../apps/home/paper.toml");
 const CHESS_MANIFEST: &str = include_str!("../../../apps/chess/paper.toml");
 const SETTINGS_MANIFEST: &str = include_str!("../../../apps/settings/paper.toml");
+const SUDOKU_MANIFEST: &str = include_str!("../../../apps/sudoku/paper.toml");
 
 /// How long a read on the loopback socket may block waiting for the app
 /// thread before this side gives up on it. See [`open_session`].
@@ -44,7 +46,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) enum SessionError {
     /// `app` is not one this loop knows how to run.
     #[error(
-        "`{app}` is not something this session can run \u{2014} try `home`, `chess` or `settings`"
+        "`{app}` is not something this session can run \u{2014} try `home`, `chess`, \
+         `settings` or `sudoku`"
     )]
     UnknownApp {
         /// What was asked for.
@@ -85,6 +88,7 @@ pub(crate) fn launch_target(id: &AppId) -> Option<&'static str> {
         "dev.calum.chess" => Some("chess"),
         "dev.calum.home" => Some("home"),
         "dev.calum.settings" => Some("settings"),
+        "dev.calum.sudoku" => Some("sudoku"),
         _ => None,
     }
 }
@@ -254,6 +258,8 @@ pub(crate) enum DevApp {
     /// Settings, over whichever [`paper_settings::SettingsHost`] the caller
     /// built — the real store for a session, a fixture for a test.
     Settings(Box<SettingsApp>),
+    /// Sudoku, on the real rules core.
+    Sudoku(Box<SudokuApp>),
 }
 
 impl DevApp {
@@ -264,6 +270,7 @@ impl DevApp {
             DevApp::Home(_) => "home",
             DevApp::Chess(_) => "chess",
             DevApp::Settings(_) => "settings",
+            DevApp::Sudoku(_) => "sudoku",
         }
     }
 
@@ -273,6 +280,7 @@ impl DevApp {
             DevApp::Home(_) => HOME_MANIFEST,
             DevApp::Chess(_) => CHESS_MANIFEST,
             DevApp::Settings(_) => SETTINGS_MANIFEST,
+            DevApp::Sudoku(_) => SUDOKU_MANIFEST,
         }
     }
 }
@@ -289,6 +297,7 @@ impl App for DevApp {
             DevApp::Home(app) => app.event(event, context),
             DevApp::Chess(app) => app.event(event, context),
             DevApp::Settings(app) => app.event(event, context),
+            DevApp::Sudoku(app) => app.event(event, context),
         }
     }
 
@@ -297,6 +306,7 @@ impl App for DevApp {
             DevApp::Home(app) => app.draw(canvas, context),
             DevApp::Chess(app) => app.draw(canvas, context),
             DevApp::Settings(app) => app.draw(canvas, context),
+            DevApp::Sudoku(app) => app.draw(canvas, context),
         }
     }
 
@@ -305,6 +315,7 @@ impl App for DevApp {
             DevApp::Home(app) => app.save(context),
             DevApp::Chess(app) => app.save(context),
             DevApp::Settings(app) => app.save(context),
+            DevApp::Sudoku(app) => app.save(context),
         }
     }
 
@@ -313,6 +324,7 @@ impl App for DevApp {
             DevApp::Home(app) => app.damage(),
             DevApp::Chess(app) => app.damage(),
             DevApp::Settings(app) => app.damage(),
+            DevApp::Sudoku(app) => app.damage(),
         }
     }
 }
@@ -340,6 +352,7 @@ pub(crate) fn open_session(
         "settings" => DevApp::Settings(Box::new(SettingsApp::new(LiveHost::new(
             Layout::from_environment(),
         )))),
+        "sudoku" => DevApp::Sudoku(Box::new(SudokuApp::new())),
         other => {
             return Err(SessionError::UnknownApp {
                 app: other.to_owned(),
@@ -556,11 +569,7 @@ mod tests {
     /// than the two ever drifting apart.
     #[test]
     fn open_session_leaves_the_hang_guard_armed_on_a_real_session() {
-        let root = std::env::temp_dir().join(format!(
-            "paperctl-session-test-{}-{}",
-            std::process::id(),
-            "open-session-leaves-the-hang-guard-armed"
-        ));
+        let root = session_root("open-session-leaves-the-hang-guard-armed");
         let session = super::open_session("home", &root, "TEST", "unit test").expect("opens");
 
         assert_eq!(session.read_timeout(), Some(READ_TIMEOUT));
@@ -569,5 +578,43 @@ mod tests {
             .shutdown(paper_protocol::ExitReason::ReturnToStock)
             .expect("a real Home session shuts down cleanly");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Every app slug this loop accepts, opened for real.
+    ///
+    /// `paperctl dev --app sudoku` and `paperctl run --app sudoku` both reach
+    /// the app through [`super::open_session`], so what would break — a
+    /// missing `DevApp` arm, a manifest that does not parse, storage
+    /// directories that are not created — breaks here rather than on the
+    /// panel with the display taken over.
+    #[test]
+    fn every_runnable_app_opens_a_real_session_and_draws_something() {
+        for slug in ["home", "chess", "settings", "sudoku"] {
+            let root = session_root(slug);
+            let session =
+                super::open_session(slug, &root, "TEST", "unit test").expect("the session opens");
+            assert!(
+                session.frame().ink_coverage() > 0.0,
+                "{slug}'s first frame is blank"
+            );
+            session
+                .shutdown(paper_protocol::ExitReason::ReturnToStock)
+                .expect("the session shuts down cleanly");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+
+        assert!(
+            super::open_session("solitaire", &session_root("unknown"), "TEST", "unit test")
+                .is_err(),
+            "an app this loop cannot run must be refused rather than substituted"
+        );
+    }
+
+    /// A scratch storage root of this test process's own.
+    fn session_root(what: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "paperctl-session-test-{}-{what}",
+            std::process::id()
+        ))
     }
 }

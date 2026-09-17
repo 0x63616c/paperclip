@@ -138,6 +138,8 @@ pub enum ScreenArg {
     Settings,
     /// The App Store screen.
     AppStore,
+    /// The Sudoku screen.
+    Sudoku,
     /// Every screen, one file each.
     All,
 }
@@ -150,11 +152,13 @@ impl ScreenArg {
             ScreenArg::Chess => vec![Screen::Chess],
             ScreenArg::Settings => vec![Screen::Settings],
             ScreenArg::AppStore => vec![Screen::AppStore],
+            ScreenArg::Sudoku => vec![Screen::Sudoku],
             ScreenArg::All => vec![
                 Screen::Home,
                 Screen::Chess,
                 Screen::Settings,
                 Screen::AppStore,
+                Screen::Sudoku,
             ],
         }
     }

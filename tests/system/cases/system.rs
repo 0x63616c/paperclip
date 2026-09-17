@@ -26,13 +26,14 @@ use paper_sdk::{
 use paper_settings::{PlaceholderHost, SettingsScreen};
 
 /// The manifests the apps really ship, read from the repository.
-const APP_MANIFESTS: [(&str, &str); 3] = [
+const APP_MANIFESTS: [(&str, &str); 4] = [
     ("home", include_str!("../../../apps/home/paper.toml")),
     ("chess", include_str!("../../../apps/chess/paper.toml")),
     (
         "settings",
         include_str!("../../../apps/settings/paper.toml"),
     ),
+    ("sudoku", include_str!("../../../apps/sudoku/paper.toml")),
 ];
 
 fn screen_canvas() -> Canvas {
