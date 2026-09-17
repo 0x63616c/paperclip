@@ -68,14 +68,15 @@ here should be read as evidence about them:
   every open gate.
 - E-ink refresh behaviour, ghosting, or perceived latency.
 - Pen pressure, tilt, palm rejection, or input latency.
-- The touch and pen coordinate transforms. Pen (11180 × 15340) and touch
-  (2064 × 2832) are the same space at a fixed 65/12 scale, and neither matches
-  the panel's aspect — the digitizer's active area is taller than the glass, so
-  the transform needs a measured offset. `paper_device::PointerTransform`
-  implements the pure-scale version WWW-3 was handed, and carries the offset
-  and a `mirror_y` flag as fields defaulted to zero and off, so the measured
-  correction from WWW-21 is a number to set rather than a type to redesign.
-  Nothing has yet tapped a rendered fiducial.
+- ~~The touch and pen coordinate transforms.~~ **Closed by prior art, not by
+  measurement (ADR-0008).** They are a hardware constant: touch scales by
+  1620/2064 and 2160/2832, pen by 1620/11180 and 2160/15340, with no axis swap
+  and no inversion. The claim that a measured offset was needed is withdrawn —
+  the aspect mismatch is absorbed by the two axes having different scale
+  factors. `paper_device::PointerTransform` already implements exactly this.
+  One item remains open: some firmware reportedly inverts Y on a mainline-kernel
+  input path, which costs a single tap on a top-left mark to rule out, deferred
+  to WWW-21.
 - Colour rendering.
 - Whether stock Xochitl can be reliably restored after a custom session.
   WWW-20 restored it repeatedly after short holds; that is not the same as
