@@ -1204,10 +1204,7 @@ mod tests {
         // than any single pixel but tiny compared to real screens (13%+).
         for y in 0..10 {
             for x in 0..10 {
-                almost_blank.fill_rect(
-                    Rect::new(x as f32, y as f32, 1.0, 1.0),
-                    palette::INK,
-                );
+                almost_blank.fill_rect(Rect::new(x as f32, y as f32, 1.0, 1.0), palette::INK);
             }
         }
         let digest = FrameDigest::of(&almost_blank).expect("digests");
