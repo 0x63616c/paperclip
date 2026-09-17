@@ -33,9 +33,13 @@
 //! advisory lock parsing, and — via `native/check-abi.sh` — that the C++
 //! declarations generate exactly the symbols `libqsgepaper.so` exports.
 //!
-//! **Not proven: anything about the glass.** No code in this repository has
-//! presented a pixel on the tablet. [`VendorPanel`] has never been compiled
-//! against the real library. A passing test here is not device qualification;
+//! **Not proven: anything about the glass.** WWW-3 superseded the first half of
+//! what used to be written here — [`VendorPanel`] has been compiled against the
+//! real library, has taken the display from stock three times and has driven
+//! the EPD rails through a panel-specific waveform table. What none of that
+//! established is whether the resulting *image* is correct: a wrong byte order
+//! or a wrong buffer looks identical from this side, and nothing in this crate
+//! has seen the panel. A passing test here is still not device qualification;
 //! see `docs/adr/0009-device-adapter-ffi-boundary.md` for the list of gates
 //! that remain open and what each one blocks.
 //!
@@ -47,6 +51,7 @@
 //! [`DisplayLocks`] — and holds no opinion about systemd.
 
 pub mod error;
+pub mod hold;
 pub mod input;
 pub mod panel;
 pub mod session;
@@ -58,6 +63,9 @@ pub mod waveform;
 pub mod vendor;
 
 pub use error::{DeviceError, VendorStatus};
+pub use hold::{
+    DEFAULT_HOLD, DisplayProbe, DisplaySample, FrameDigest, HoldPlan, PanelWork, present_and_hold,
+};
 pub use input::{
     ContactIds, InputNode, InputRole, PenDecoder, PointerTransform, RawEvent, TouchDecoder,
 };
@@ -66,6 +74,9 @@ pub use session::{DisplayLockHolder, DisplayLocks, RESUME_BRIDGE_DELAY, WakeLock
 pub use stock::{STOCK_UNIT, ServiceControl, StartBudget, Stock, StockHealth};
 pub use takeover::{Takeover, WAKELOCK_TAG, Watchdog};
 pub use waveform::{ContentType, GhostControl, PixelRect, Refresh, Waveform};
+
+#[cfg(target_os = "linux")]
+pub use hold::{HoldReport, RegistryCheck, open_and_hold};
 
 #[cfg(feature = "vendor-engine")]
 pub use vendor::VendorPanel;
@@ -89,7 +100,9 @@ pub fn open_panel() -> Result<Box<dyn Panel>, DeviceError> {
 
 /// Whether [`open_panel`] returns something that can reach the glass.
 ///
-/// `false` on every build in this repository so far.
+/// `false` on a Mac build, and on any build without `vendor-engine`. Callers
+/// that would do something irreversible on the strength of it — stopping
+/// Xochitl, say — must ask before they act, not after.
 pub const fn is_real_device() -> bool {
     cfg!(feature = "vendor-engine")
 }

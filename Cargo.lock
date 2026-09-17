@@ -1401,6 +1401,8 @@ dependencies = [
  "paper-home",
  "paper-protocol",
  "paper-sdk",
+ "sha2",
+ "tempfile",
  "thiserror 2.0.20",
 ]
 
@@ -1492,6 +1494,7 @@ name = "paper-system-tests"
 version = "0.1.0"
 dependencies = [
  "paper-chess",
+ "paper-device",
  "paper-home",
  "paper-packages",
  "paper-protocol",
@@ -1507,6 +1510,7 @@ dependencies = [
  "clap",
  "paper-app-store",
  "paper-chess",
+ "paper-device",
  "paper-home",
  "paper-host",
  "paper-packages",

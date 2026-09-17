@@ -9,8 +9,11 @@
 //! running on a Mac.
 
 use std::fs;
+use std::path::Path;
+use std::time::Duration;
 
 use paper_chess::{BoardLayout, ChessScreen, Square};
+use paper_device::{DisplayProbe, FrameDigest, HoldPlan, MemoryPanel, PixelRect};
 use paper_home::{HomeScreen, ShelfEntry, ShelfGlyph, SystemFact};
 use paper_packages::{
     Capability, InstallPolicy, InstalledApp, MANIFEST_FILE_NAME, Manifest, ManifestError,
@@ -47,6 +50,77 @@ fn home_screen() -> HomeScreen {
         pressed: None,
         status: "V0.1.0".to_owned(),
     }
+}
+
+/// What `paperctl open` would send to the panel, and what `paperctl
+/// screenshot` would write to a PNG, are one rendering — so the digest a
+/// device run reports can be compared with a desktop one.
+///
+/// This is the §9 claim ("the same UI code on both backends") made checkable.
+/// It says nothing about the glass; it says the bytes are not two different
+/// pictures.
+#[test]
+fn the_frame_a_hold_presents_is_the_same_rendering_the_screenshot_writes() {
+    let mut presented = screen_canvas();
+    paper_home::render(&mut presented, &home_screen());
+    let mut captured = screen_canvas();
+    paper_home::render(&mut captured, &home_screen());
+
+    let digest = FrameDigest::of(&presented).expect("digests");
+    assert_eq!(digest, FrameDigest::of(&captured).expect("digests"));
+    assert_eq!(digest.size(), SCREEN);
+    assert_eq!(digest.to_hex().len(), 64);
+    // The refusal `paperctl open` performs before it stops Xochitl: a shelf
+    // has ink, and an empty buffer is what a silent rendering failure looks
+    // like from the device side.
+    assert!(
+        digest.looks_drawn(),
+        "the shelf rendered as bare background"
+    );
+    assert!(digest.ink_per_mille() > 20, "{digest}");
+}
+
+/// A hold presents the shelf once, over the whole panel, and clears before it
+/// gives the display back.
+///
+/// Driven against a `MemoryPanel`, which proves the sequence and nothing about
+/// e-ink. The clear is the assertion that matters: WWW-20 photographed what
+/// skipping it leaves on a user's stock screen.
+#[test]
+fn a_hold_presents_the_shelf_once_and_always_clears_the_panel() {
+    let mut canvas = screen_canvas();
+    paper_home::render(&mut canvas, &home_screen());
+
+    let mut panel = MemoryPanel::new(SCREEN);
+    let plan = HoldPlan {
+        hold: Duration::from_secs(60),
+        sample_every: Duration::from_secs(30),
+        ..HoldPlan::first_light()
+    };
+    let mut slept = Duration::ZERO;
+    let work = paper_device::present_and_hold(
+        &mut panel,
+        &canvas,
+        &plan,
+        &DisplayProbe::rooted(Path::new("/nonexistent")),
+        false,
+        |duration| slept += duration,
+    )
+    .expect("presents");
+
+    assert_eq!(panel.swaps().len(), 1, "a first paint is one swap");
+    assert_eq!(panel.swaps()[0].rect, PixelRect::PANEL);
+    assert_eq!(
+        panel.clears(),
+        1,
+        "the panel was not cleared before release"
+    );
+    assert_eq!(slept, plan.hold, "the hold was cut short");
+    assert_eq!(
+        work.claim(),
+        "not presented: this build has no vendor engine, the frame went to memory",
+        "a memory run must not claim it reached the panel"
+    );
 }
 
 #[test]

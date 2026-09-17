@@ -358,17 +358,26 @@ mod linux {
             Ok((output.status.success(), text))
         }
 
+        /// Stock's main PID, or `None` when it has none.
+        ///
+        /// Separate from [`Self::health`] because a poll wants this and
+        /// nothing else: a health read shells out five times and counts the
+        /// notebook directory, which is the wrong thing to do four times a
+        /// second while waiting for Xochitl to reclaim the display lock.
+        pub fn main_pid(&self) -> Option<u32> {
+            self.run(&["show", "-p", "MainPID", "--value", STOCK_UNIT])
+                .ok()
+                .and_then(|(_, text)| text.parse().ok())
+                .filter(|pid| *pid != 0)
+        }
+
         /// Reads everything a health comparison needs.
         pub fn health(&self) -> StockHealth {
             let active = self
                 .run(&["is-active", STOCK_UNIT])
                 .map(|(_, text)| text == "active")
                 .unwrap_or(false);
-            let pid = self
-                .run(&["show", "-p", "MainPID", "--value", STOCK_UNIT])
-                .ok()
-                .and_then(|(_, text)| text.parse().ok())
-                .filter(|pid| *pid != 0);
+            let pid = self.main_pid();
             let failed_units = self
                 .run(&["--failed", "--no-legend", "--plain"])
                 .map(|(_, text)| {

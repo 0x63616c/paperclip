@@ -22,12 +22,19 @@ vendor-engine = ["dep:cc"]
 [dependencies]
 paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
+# Only for the frame digest a hold reports: "the morning run presented the same
+# bytes as last night" is checkable, "it looked the same" is not. Same
+# algorithm and spelling as every other digest in the repository (§12).
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 # The takeover example draws a real screen rather than a test pattern: §9 wants
 # the same UI code on both backends, and a rectangle would not prove that.
 paper-home = { workspace = true }
+# A fake sysfs tree, so the hold's display probe is tested against real files
+# rather than a trait nobody else implements.
+tempfile = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
