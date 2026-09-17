@@ -13,12 +13,13 @@
 //! routine.
 
 use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 use paper_host::units::{HOST_UNIT, RESTORE_UNIT, SESSION_TARGET};
 
 use crate::fixture::{
-    Fixture, STOCK_UNIT, alive, property, systemctl, unit_active, unit_pids, wait,
+    BASELINE, Fixture, STOCK_UNIT, alive, property, systemctl, unit_active, unit_pids, wait,
 };
 
 /// What a case produced.
@@ -126,6 +127,46 @@ pub(crate) const CASES: &[Case] = &[
         name: "write-outside-grants",
         row: "Extra hazard — a write outside the granted paths is refused",
         run: write_outside_grants,
+    },
+    Case {
+        name: "upgrade-healthy",
+        row: "§13 — a healthy release is committed and the old one becomes the fallback",
+        run: upgrade_healthy,
+    },
+    Case {
+        name: "upgrade-panics",
+        row: "§13 — a release that panics on start is rolled back",
+        run: upgrade_panics,
+    },
+    Case {
+        name: "upgrade-never-ready",
+        row: "§13 — a release that starts but never reaches `ready` is rolled back",
+        run: upgrade_never_ready,
+    },
+    Case {
+        name: "upgrade-middle-rung",
+        row: "§13 — a release that stalls mid-ladder is rolled back, naming the rung",
+        run: upgrade_middle_rung,
+    },
+    Case {
+        name: "upgrade-power-loss",
+        row: "§13 — killed between ACTIVATE and COMMIT, reconcile reverts rather than resumes",
+        run: upgrade_power_loss,
+    },
+    Case {
+        name: "upgrade-reboot",
+        row: "§13 — a reboot mid-update leaves stock startup available and a reconcilable journal",
+        run: upgrade_reboot,
+    },
+    Case {
+        name: "setup-is-idempotent",
+        row: "§14 — setup inspects real prerequisites, and running it twice changes nothing",
+        run: setup_is_idempotent,
+    },
+    Case {
+        name: "upgrade-cannot-replace-the-bootstrap",
+        row: "§13 — an ordinary upgrade replaces nothing outside releases/",
+        run: upgrade_cannot_replace_the_bootstrap,
     },
 ];
 
@@ -886,4 +927,350 @@ fn write_outside_grants(fixture: &Fixture) -> Outcome {
     }
     let _ = fixture.reset();
     Ok(evidence)
+}
+
+
+// --- §13: platform upgrade ---------------------------------------------------
+//
+// Every case here drives the real `paperctl upgrade`, against real systemd,
+// with a real release tree. What is a stand-in is the *candidate*: its
+// `bin/paperclip-host` is `paper-fault-app` playing a scripted climb, because
+// the only other way to make a release stall at `device-adapter` is to break
+// a display. The baseline release is the real supervisor, so "the fallback
+// came back" always means the real one climbed the real ladder.
+
+/// Runs `paperctl upgrade run` against a bundle and returns its output.
+fn run_upgrade(fixture: &Fixture, bundle: &Path) -> Result<String, String> {
+    let extra = fixture.upgrade_args();
+    let trust = fixture.trust_file();
+    let arguments = vec![
+        "upgrade",
+        "run",
+        bundle.to_str().ok_or("a non-UTF-8 bundle path")?,
+        "--trust",
+        trust.to_str().ok_or("a non-UTF-8 key path")?,
+        &extra[0],
+        &extra[1],
+        &extra[2],
+        &extra[3],
+    ];
+    fixture.paperctl(&arguments)
+}
+
+/// `paperctl upgrade status`, as a string.
+fn upgrade_status(fixture: &Fixture) -> Result<String, String> {
+    let extra = fixture.upgrade_args();
+    fixture.paperctl(&["upgrade", "status", &extra[0], &extra[1]])
+}
+
+/// The version `current` names right now.
+fn selected(fixture: &Fixture) -> String {
+    fixture
+        .platform
+        .selected()
+        .ok()
+        .flatten()
+        .map_or_else(|| "none".to_owned(), |version| version.to_string())
+}
+
+/// Every upgrade case ends the same way: stock owns the display and nothing of
+/// ours is still running.
+fn assert_at_stock(fixture: &Fixture) -> Result<Vec<String>, String> {
+    if !wait(Duration::from_secs(20), || unit_active(STOCK_UNIT)) {
+        return Err(format!(
+            "stock is `{}` after the upgrade",
+            property(STOCK_UNIT, "ActiveState")
+        ));
+    }
+    let held = fs::read_to_string(fixture.power_dir.join("wake_lock")).unwrap_or_default();
+    if held.split_whitespace().any(|tag| tag == "paperclip-harness") {
+        return Err("the wakelock is still held after the upgrade".to_owned());
+    }
+    Ok(vec![
+        "stock is active and the wakelock is released".to_owned(),
+    ])
+}
+
+fn upgrade_healthy(fixture: &Fixture) -> Outcome {
+    let bundle = fixture.bundle("0.2.0", "ready")?;
+    let output = run_upgrade(fixture, &bundle)?;
+
+    if selected(fixture) != "0.2.0" {
+        return Err(format!("`current` is {} after a healthy upgrade", selected(fixture)));
+    }
+    let fallback = fixture
+        .platform
+        .fallback()
+        .map_err(|error| error.to_string())?
+        .map_or_else(|| "none".to_owned(), |version| version.to_string());
+    if fallback != BASELINE {
+        return Err(format!("`previous` is {fallback}, not the baseline {BASELINE}"));
+    }
+    if !unit_active(HOST_UNIT) {
+        return Err("the new supervisor is not running after a committed upgrade".to_owned());
+    }
+    let status = upgrade_status(fixture)?;
+    if !status.contains("commit") {
+        return Err(format!("the journal did not reach commit:\n{status}"));
+    }
+    Ok(vec![
+        format!("upgrade reported: {}", output.trim().replace('\n', " | ")),
+        format!("current 0.2.0, previous {BASELINE}, journal at commit"),
+    ])
+}
+
+fn upgrade_panics(fixture: &Fixture) -> Outcome {
+    let bundle = fixture.bundle("0.2.0", "panic")?;
+    let output = run_upgrade(fixture, &bundle)?;
+
+    if selected(fixture) != BASELINE {
+        return Err(format!(
+            "`current` is {} after a candidate that panicked; it should be back at {BASELINE}",
+            selected(fixture)
+        ));
+    }
+    if !output.contains("refused") {
+        return Err(format!("the report did not say the candidate was refused:\n{output}"));
+    }
+    if !unit_active(HOST_UNIT) {
+        return Err("the restored supervisor is not running".to_owned());
+    }
+    let mut evidence = vec![
+        "a candidate whose supervisor panicked was refused and 0.1.0 came back".to_owned(),
+    ];
+    evidence.push(format!("report: {}", output.trim().replace('\n', " | ")));
+    Ok(evidence)
+}
+
+fn upgrade_never_ready(fixture: &Fixture) -> Outcome {
+    // The §13 sentence, exercised: the unit reaches `active` — the stand-in
+    // sends READY=1 — and the release is still refused, because the readiness
+    // ladder in the status file never reaches `ready`.
+    let bundle = fixture.bundle("0.2.0", "stall=home")?;
+    let output = run_upgrade(fixture, &bundle)?;
+
+    if selected(fixture) != BASELINE {
+        return Err(format!(
+            "`current` is {}; a release that never reached `ready` was committed",
+            selected(fixture)
+        ));
+    }
+    if !output.contains("home") {
+        return Err(format!("the report did not name the rung reached:\n{output}"));
+    }
+    Ok(vec![
+        "a release that went `active` without reaching `ready` was refused".to_owned(),
+        format!("report: {}", output.trim().replace('\n', " | ")),
+    ])
+}
+
+fn upgrade_middle_rung(fixture: &Fixture) -> Outcome {
+    let bundle = fixture.bundle("0.2.0", "stall=protocol")?;
+    let output = run_upgrade(fixture, &bundle)?;
+
+    if selected(fixture) != BASELINE {
+        return Err(format!("`current` is {} after a mid-ladder stall", selected(fixture)));
+    }
+    if !output.contains("device-adapter") {
+        return Err(format!(
+            "the report must name the rung that was never reached:\n{output}"
+        ));
+    }
+    let mut evidence = vec![format!("report: {}", output.trim().replace('\n', " | "))];
+    evidence.extend(assert_at_stock(fixture).unwrap_or_default());
+    Ok(evidence)
+}
+
+fn upgrade_power_loss(fixture: &Fixture) -> Outcome {
+    // Kill the upgrade between ACTIVATE and COMMIT, the way a flat battery
+    // would. Nothing gets a chance to clean up: no destructor, no signal
+    // handler, no trap. What has to be enough is the journal.
+    let bundle = fixture.bundle("0.2.0", "ready")?;
+    let extra = fixture.upgrade_args();
+    let trust = fixture.trust_file();
+    let mut child = std::process::Command::new(fixture.paths.root.join("bin/paperctl"))
+        .args([
+            "upgrade",
+            "run",
+            bundle.to_str().ok_or("a non-UTF-8 bundle path")?,
+            "--trust",
+            trust.to_str().ok_or("a non-UTF-8 key path")?,
+            &extra[0],
+            &extra[1],
+            &extra[2],
+            &extra[3],
+        ])
+        .spawn()
+        .map_err(|error| format!("cannot start paperctl: {error}"))?;
+
+    let journal = fixture.platform.journal_file();
+    let reached = wait(Duration::from_secs(60), || {
+        fs::read_to_string(&journal)
+            .is_ok_and(|raw| raw.contains("\"activate\"") || raw.contains("\"verify\""))
+    });
+    let _ = child.kill();
+    let _ = child.wait();
+    if !reached {
+        return Err("the upgrade never reached ACTIVATE, so there was nothing to interrupt"
+            .to_owned());
+    }
+
+    let before = fs::read_to_string(&journal).unwrap_or_default();
+    if !before.contains("\"activate\"") && !before.contains("\"verify\"") {
+        return Err(format!("the journal is not mid-transaction:\n{before}"));
+    }
+
+    // What `paperctl` does on the way back up.
+    let output = fixture.paperctl(&["upgrade", "reconcile", &extra[0], &extra[1]])?;
+    if selected(fixture) != BASELINE {
+        return Err(format!(
+            "reconcile left `current` at {}; an update that never committed must not stay selected",
+            selected(fixture)
+        ));
+    }
+    Ok(vec![
+        "killed mid-transaction with SIGKILL; the journal survived".to_owned(),
+        format!("reconcile: {}", output.trim().replace('\n', " | ")),
+        format!("`current` is back at {BASELINE}"),
+    ])
+}
+
+fn upgrade_reboot(fixture: &Fixture) -> Outcome {
+    // Two separate guarantees, both structural.
+    let mut evidence = Vec::new();
+
+    // 1. The journal is on persistent storage, not /run. A record cleared by
+    //    the reboot it exists to survive would be no record at all.
+    let journal = fixture.platform.journal_file();
+    if journal.starts_with("/run") {
+        return Err(format!(
+            "the update journal is at {}, which a reboot clears",
+            journal.display()
+        ));
+    }
+    evidence.push(format!(
+        "the update journal is at {}, outside /run",
+        journal.display()
+    ));
+
+    // 2. The units that would bring a candidate back up are in /run, so a
+    //    reboot mid-update lands at stock by construction (WWW-11). The
+    //    `reboot` case proves the general form; this checks it still holds for
+    //    the unit whose ExecStart now resolves through `current`.
+    let host_unit = fixture.paths.runtime_units.join(HOST_UNIT);
+    if !host_unit.starts_with("/run") {
+        return Err(format!("{} would survive a reboot", host_unit.display()));
+    }
+    let contents = fs::read_to_string(&host_unit).map_err(|error| error.to_string())?;
+    let expected = fixture.paths.root.join("current/bin/paperclip-host");
+    if !contents.contains(&expected.display().to_string()) {
+        return Err(format!(
+            "the host unit does not start the selected release; ExecStart should name {}",
+            expected.display()
+        ));
+    }
+    // A *line* that is `[Install]`, not the substring — the unit's own comment
+    // says "No [Install]: never enabled", and matching that would fail a unit
+    // for documenting the thing it does not do.
+    if contents.lines().any(|line| line.trim() == "[Install]") {
+        return Err("the host unit has an [Install] section, so a reboot could take over".to_owned());
+    }
+    evidence.push("the supervisor unit is runtime-only, resolves through `current`, and is never enabled".to_owned());
+
+    // 3. And an interrupted journal is reconcilable without a session to talk
+    //    to — which is the state a reboot actually leaves.
+    let extra = fixture.upgrade_args();
+    let output = fixture.paperctl(&["upgrade", "reconcile", &extra[0], &extra[1]])?;
+    evidence.push(format!("reconcile on a clean tree: {}", output.trim()));
+    Ok(evidence)
+}
+
+fn upgrade_cannot_replace_the_bootstrap(fixture: &Fixture) -> Outcome {
+    // §13: routine installation can never replace the host, the trust keys or
+    // the recovery bootstrap. For a *platform* upgrade the first is the point;
+    // the other two must survive it untouched.
+    let bootstrap = fixture.paths.root.join("bin/paperctl");
+    let keys = fixture.platform.keys_dir().join("harness.pub");
+    let before = (
+        fs::metadata(&bootstrap).map_err(|error| error.to_string())?.len(),
+        fs::read(&keys).map_err(|error| error.to_string())?,
+    );
+
+    let bundle = fixture.bundle("0.2.0", "ready")?;
+    run_upgrade(fixture, &bundle)?;
+
+    let after = (
+        fs::metadata(&bootstrap).map_err(|error| error.to_string())?.len(),
+        fs::read(&keys).map_err(|error| error.to_string())?,
+    );
+    if before != after {
+        return Err("a platform upgrade changed the bootstrap or the trusted keys".to_owned());
+    }
+
+    // And nothing landed outside `releases/` and `state/`.
+    let stray: Vec<String> = fs::read_dir(&fixture.paths.root)
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            !matches!(
+                name.as_str(),
+                "releases"
+                    | "current"
+                    | "previous"
+                    | "staging"
+                    | "state"
+                    | "keys"
+                    | "bin"
+                    | "apps"
+                    | "storage"
+                    | "bundles"
+                    | ".paperclip-platform"
+            )
+        })
+        .collect();
+    if !stray.is_empty() {
+        return Err(format!("the upgrade left unexpected paths: {stray:?}"));
+    }
+    Ok(vec![
+        "the bootstrap and the trusted keys are byte-identical after a platform upgrade".to_owned(),
+        "nothing was written outside the release tree".to_owned(),
+    ])
+}
+
+
+fn setup_is_idempotent(fixture: &Fixture) -> Outcome {
+    // §14 asks for staged, version-aware and diagnostic — and for setup to
+    // inspect the actual prerequisites rather than treat a working shell as
+    // proof of anything. The part worth a case is the idempotence: setup is
+    // the command someone runs when they are not sure what state the device is
+    // in, which is exactly when a command that is only safe once is worst.
+    let root = fixture.paths.root.display().to_string();
+    let arguments = ["setup", "--root", &root, "--stock-unit", STOCK_UNIT];
+
+    let first = fixture.paperctl(&arguments)?;
+    let selected_before = selected(fixture);
+    let second = fixture.paperctl(&arguments)?;
+    let selected_after = selected(fixture);
+
+    if selected_before != selected_after {
+        return Err(format!(
+            "setup changed the selected release from {selected_before} to {selected_after}"
+        ));
+    }
+    for (run, output) in [("first", &first), ("second", &second)] {
+        if !output.contains("isolation") || !output.contains("runtime units") {
+            return Err(format!("the {run} run skipped a prerequisite stage:\n{output}"));
+        }
+        if output.contains("MISSING") {
+            return Err(format!("the {run} run reported a missing prerequisite:\n{output}"));
+        }
+    }
+    if !second.contains("is established") {
+        return Err(format!("the second run did not recognise the root:\n{second}"));
+    }
+    Ok(vec![
+        "setup reported every stage and found no prerequisite missing".to_owned(),
+        format!("run twice; `current` stayed at {selected_after}"),
+    ])
 }

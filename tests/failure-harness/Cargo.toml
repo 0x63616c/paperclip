@@ -21,7 +21,14 @@ path = "src/main.rs"
 
 [dependencies]
 paper-host = { workspace = true }
-paper-packages = { workspace = true }
+# `publishing` on both: the harness has to be able to *make* a signed platform
+# bundle, because the WWW-8 cases are about what happens to a release that is
+# staged and activated. A bundle it could only verify would be a bundle it
+# could not produce a failing one of.
+paper-packages = { workspace = true, features = ["publishing"] }
+paper-updater = { workspace = true, features = ["publishing"] }
+paper-protocol = { workspace = true }
+semver = { workspace = true }
 
 [lints]
 workspace = true

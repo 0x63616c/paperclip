@@ -13,7 +13,7 @@
 
 use std::fs;
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -64,6 +64,12 @@ fn main() -> ExitCode {
     ready();
 
     match mode.as_str() {
+        // `run` is what `paperclip-host.service` invokes. A release whose
+        // `bin/paperclip-host` is this binary is a platform release that can
+        // be made to come up wrongly on purpose (§13) — the only way to test
+        // "the candidate stalled at `device-adapter`" without breaking a
+        // display.
+        "run" => fake_host(&arguments),
         "healthy" => loop_forever(&mut progress, ticks),
         "hang" => {
             // Tick a few times so the supervisor sees a session that genuinely
@@ -175,6 +181,76 @@ fn main() -> ExitCode {
             eprintln!("paper-fault-app: unknown mode `{other}`");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Stands in for `paperclip-host`, climbing the readiness ladder as far as a
+/// script beside the executable says to.
+///
+/// The script is `<release>/ladder`, read from the directory *above* the one
+/// holding this binary — so it travels inside the release directory and each
+/// staged release behaves the way its own bundle said it would. Reading it
+/// from a fixed path instead would mean the candidate and the fallback could
+/// not misbehave differently, which is exactly the case a rollback test needs.
+///
+/// One line:
+///
+/// ```text
+/// ready              climb to `ready` and stay up
+/// stall=<rung>       climb to `<rung>` and stay up, never reaching `ready`
+/// panic              climb to `control`, then panic
+/// ```
+fn fake_host(arguments: &[String]) -> ExitCode {
+    let Some(state) = flag(arguments, "--state").map(PathBuf::from) else {
+        eprintln!("paper-fault-app run: expected --state");
+        return ExitCode::FAILURE;
+    };
+    let script = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().and_then(|bin| bin.parent()).map(Path::to_path_buf))
+        .map(|release| release.join("ladder"))
+        .and_then(|path| fs::read_to_string(path).ok())
+        .unwrap_or_else(|| "ready".to_owned());
+    let script = script.trim().to_owned();
+
+    let _ = fs::create_dir_all(&state);
+    let status = state.join("status");
+    let write = |rung: &str, note: &str| {
+        let _ = fs::write(
+            &status,
+            format!(
+                "state=stock\nforeground=stock\nmay_relaunch=true\ndiagnosis=\n\
+                 ready={rung}\nready_note={note}\nprotocol=1.0\n"
+            ),
+        );
+    };
+
+    let stop_at = script.strip_prefix("stall=").unwrap_or(match script.as_str() {
+        "panic" => "control",
+        _ => "ready",
+    });
+
+    // Climb, publishing each rung, exactly as the real supervisor does.
+    let ladder = ["process", "control", "protocol", "device-adapter", "home", "ready"];
+    let limit = ladder.iter().position(|rung| *rung == stop_at).unwrap_or(0);
+    for rung in &ladder[..=limit] {
+        write(rung, "");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if limit + 1 < ladder.len() {
+        write(ladder[limit], &format!("scripted stall below `{}`", ladder[limit + 1]));
+    }
+
+    // `READY=1` whatever the ladder said. §13's point is precisely that these
+    // are different claims: the unit is active and can be asked, and the
+    // status file says whether it is healthy.
+    ready();
+
+    if script == "panic" {
+        panic!("paper-fault-app: deliberate panic during startup");
+    }
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
     }
 }
 

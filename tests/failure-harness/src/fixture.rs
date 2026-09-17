@@ -7,7 +7,12 @@
 //!   start, which is not something to arrange on a device whose `OnFailure=`
 //!   lands on a serial console;
 //! * **the sysfs wakelock files** — the VM has no `/sys/power/wake_lock`;
-//! * **the apps** — `paper-fault-app` in place of Home and Chess.
+//! * **the apps** — `paper-fault-app` in place of Home and Chess;
+//! * **the candidate platform releases** — `paper-fault-app` in place of
+//!   `paperclip-host` inside a staged release, so a release can be made to
+//!   stall on a chosen readiness rung. The *baseline* release is the real
+//!   supervisor, so the healthy side of every upgrade case is the real thing
+//!   climbing the real ladder.
 //!
 //! Everything else is real: real systemd, real cgroups, real signals, the real
 //! generated units, and the real supervisor binary. The units in particular are
@@ -26,13 +31,24 @@ use paper_host::units::{
     APP_UNIT, HOST_UNIT, RESTORE_UNIT, SESSION_TARGET, SessionGrants, SessionPaths, SessionSpec,
     UnitSet,
 };
+use paper_packages::signing::{Domain, SecretKey};
 use paper_packages::{Capability, InstallPolicy, InstalledApp, Manifest};
+use paper_updater::bundle;
+use paper_updater::layout::PlatformLayout;
+use semver::Version;
 
 /// The stand-in for `xochitl.service`.
 pub(crate) const STOCK_UNIT: &str = "paperclip-harness-stock.service";
 
 /// The unprivileged user sessions run as, created by the harness.
 pub(crate) const SESSION_USER: &str = "paperclip";
+
+/// The release the fixture installs as the known-good baseline.
+///
+/// Its `bin/paperclip-host` is the *real* supervisor, so "the fallback came
+/// back" in an upgrade case means the real supervisor climbed the real ladder
+/// — not that a stand-in said it had.
+pub(crate) const BASELINE: &str = "0.1.0";
 
 /// Where the fixture puts things.
 #[derive(Debug, Clone)]
@@ -49,6 +65,8 @@ pub(crate) struct Fixture {
     pub(crate) bin_dir: PathBuf,
     /// What this machine actually enforces.
     pub(crate) facilities: Facilities,
+    /// The platform release tree, for the WWW-8 upgrade cases.
+    pub(crate) platform: PlatformLayout,
 }
 
 impl Fixture {
@@ -68,17 +86,20 @@ impl Fixture {
             state: PathBuf::from("/run/paperclip-harness"),
             storage: PathBuf::from("/opt/paperclip-harness/storage"),
         };
+        let platform = PlatformLayout::new(&paths.root);
         let fixture = Self {
             paths,
             locks_dir: PathBuf::from("/tmp/paperclip-harness"),
             power_dir: PathBuf::from("/run/paperclip-harness/power"),
             bin_dir: bin_dir.to_path_buf(),
             facilities,
+            platform,
         };
 
         fixture.make_user()?;
         fixture.make_directories()?;
         fixture.install_binaries()?;
+        fixture.install_platform()?;
         fixture.write_config()?;
         fixture.install_units()?;
         fixture.stock_should_start()?;
@@ -110,6 +131,11 @@ impl Fixture {
         let _ = fs::remove_file(self.locks_dir.join("epd.lock"));
         let _ = fs::write(self.power_dir.join("wake_lock"), "");
         let _ = fs::write(self.power_dir.join("wake_unlock"), "");
+        let _ = fs::remove_file(self.paths.state.join("stop"));
+        // The upgrade cases move `current`, write a journal and leave extra
+        // releases behind. A case that inherited any of that would be graded
+        // against its predecessor's platform.
+        self.restore_baseline()?;
         self.stock_should_start()?;
         systemctl(&["start", STOCK_UNIT])?;
         if !wait(Duration::from_secs(10), || unit_active(STOCK_UNIT)) {
@@ -306,6 +332,7 @@ impl Fixture {
             &self.power_dir,
             &self.paths.root.join("bin"),
             &self.paths.root.join("apps"),
+            &self.paths.root.join("bundles"),
         ] {
             fs::create_dir_all(directory)
                 .map_err(|error| format!("{}: {error}", directory.display()))?;
@@ -318,6 +345,199 @@ impl Fixture {
         fs::set_permissions(&self.locks_dir, fs::Permissions::from_mode(0o1777))
             .map_err(|error| error.to_string())?;
         Ok(())
+    }
+
+    /// Establishes the platform release tree and installs the baseline
+    /// release, whose supervisor is the real one.
+    fn install_platform(&self) -> Result<(), String> {
+        self.platform
+            .ensure()
+            .map_err(|error| format!("platform root: {error}"))?;
+        let secret = SecretKey::generate().map_err(|error| error.to_string())?;
+        fs::write(
+            self.platform.keys_dir().join("harness.key"),
+            secret.to_armoured(),
+        )
+        .map_err(|error| error.to_string())?;
+        fs::write(
+            self.platform.keys_dir().join("harness.pub"),
+            secret.public_key().to_armoured(),
+        )
+        .map_err(|error| error.to_string())?;
+        self.stage_release(BASELINE, None)?;
+        self.restore_baseline()
+    }
+
+    /// The signing key the fixture publishes bundles with.
+    pub(crate) fn key(&self) -> SecretKey {
+        fs::read_to_string(self.platform.keys_dir().join("harness.key"))
+            .expect("the harness key was written at build time")
+            .trim()
+            .parse()
+            .expect("the harness key round-trips")
+    }
+
+    /// The public key file `paperctl upgrade` is pointed at.
+    pub(crate) fn trust_file(&self) -> PathBuf {
+        self.platform.keys_dir().join("harness.pub")
+    }
+
+    /// Writes a release directory. `ladder` picks the stand-in supervisor's
+    /// behaviour; `None` installs the real one.
+    fn stage_release(&self, version: &str, ladder: Option<&str>) -> Result<(), String> {
+        let release = self
+            .platform
+            .release_dir(&Version::parse(version).map_err(|error| error.to_string())?);
+        let bin = release.join("bin");
+        fs::create_dir_all(&bin).map_err(|error| error.to_string())?;
+
+        let host = match ladder {
+            None => self.bin_dir.join("paperclip-host"),
+            Some(_) => self.bin_dir.join("paper-fault-app"),
+        };
+        copy_executable(&host, &bin.join("paperclip-host"))?;
+        // Home, the App Store and Settings ship with the platform (§13 plus
+        // this project's own decision). Real ELF binaries, because the
+        // supervisor's `home` rung reads the header of the one it is given.
+        for name in ["home", "app-store", "settings"] {
+            copy_executable(&self.bin_dir.join("paper-fault-app"), &bin.join(name))?;
+        }
+        let extras: &[&str] = if let Some(ladder) = ladder {
+            fs::write(release.join("ladder"), format!("{ladder}\n"))
+                .map_err(|error| error.to_string())?;
+            &["ladder"]
+        } else {
+            &[]
+        };
+
+        // A release directory is not a release without its signed manifest.
+        // Placing the binaries and stopping there is what the harness did
+        // first, and the upgrade cases correctly refused to reason about a
+        // release whose state version nobody had declared.
+        let manifest = bundle::describe(&release, &description(version, extras)?)
+            .map_err(|error| error.to_string())?;
+        let document = manifest.to_document();
+        let signature = self.key().sign(Domain::PLATFORM, document.as_bytes());
+        fs::write(
+            release.join(paper_updater::manifest::MANIFEST_FILE_NAME),
+            &document,
+        )
+        .map_err(|error| error.to_string())?;
+        fs::write(
+            release.join(paper_updater::manifest::SIGNATURE_FILE_NAME),
+            signature.to_armoured(),
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Points `current` back at the baseline and removes everything an upgrade
+    /// case left behind.
+    fn restore_baseline(&self) -> Result<(), String> {
+        let baseline = Version::parse(BASELINE).map_err(|error| error.to_string())?;
+        if !self.platform.release_dir(&baseline).is_dir() {
+            self.stage_release(BASELINE, None)?;
+        }
+        self.platform
+            .select(&self.platform.current(), &baseline)
+            .map_err(|error| format!("selecting the baseline: {error}"))?;
+        let _ = self.platform.deselect(&self.platform.previous());
+        let _ = fs::remove_file(self.platform.journal_file());
+        for version in self.platform.installed().unwrap_or_default() {
+            if version != baseline {
+                let _ = fs::remove_dir_all(self.platform.release_dir(&version));
+            }
+        }
+        let _ = fs::remove_dir_all(self.platform.staging_dir());
+        let _ = fs::create_dir_all(self.platform.staging_dir());
+        Ok(())
+    }
+
+    /// Builds a signed bundle for `version` whose supervisor behaves as
+    /// `ladder` says.
+    ///
+    /// # Errors
+    ///
+    /// Any failure to assemble, sign or write the bundle.
+    pub(crate) fn bundle(&self, version: &str, ladder: &str) -> Result<PathBuf, String> {
+        let source = self
+            .paths
+            .root
+            .join("bundles")
+            .join(format!("src-{version}-{ladder}"));
+        let _ = fs::remove_dir_all(&source);
+        fs::create_dir_all(source.join("bin")).map_err(|error| error.to_string())?;
+        let host = if ladder == "real" {
+            self.bin_dir.join("paperclip-host")
+        } else {
+            self.bin_dir.join("paper-fault-app")
+        };
+        copy_executable(&host, &source.join("bin/paperclip-host"))?;
+        for name in ["home", "app-store", "settings"] {
+            copy_executable(
+                &self.bin_dir.join("paper-fault-app"),
+                &source.join("bin").join(name),
+            )?;
+        }
+        let extras: &[&str] = if ladder == "real" {
+            &[]
+        } else {
+            fs::write(source.join("ladder"), format!("{ladder}\n"))
+                .map_err(|error| error.to_string())?;
+            &["ladder"]
+        };
+
+        let manifest = bundle::describe(&source, &description(version, extras)?)
+            .map_err(|error| error.to_string())?;
+        let document = manifest.to_document();
+        let secret = self.key();
+        let signature = secret.sign(Domain::PLATFORM, document.as_bytes());
+        let path = self
+            .paths
+            .root
+            .join("bundles")
+            .join(format!("paperclip-{version}-{ladder}.tar.gz"));
+        let file = fs::File::create(&path).map_err(|error| error.to_string())?;
+        bundle::build(&source, &manifest, document.as_bytes(), &signature, file)
+            .map_err(|error| error.to_string())?;
+        Ok(path)
+    }
+
+    /// Runs `paperctl` with `arguments` and returns its output.
+    ///
+    /// The real command line, not the library: an upgrade case that called
+    /// into `paper_updater` directly would be testing a code path nobody runs.
+    ///
+    /// # Errors
+    ///
+    /// If it could not be run. A non-zero exit is returned as an error
+    /// carrying both streams, because several cases expect one.
+    pub(crate) fn paperctl(&self, arguments: &[&str]) -> Result<String, String> {
+        let output = Command::new(self.paths.root.join("bin/paperctl"))
+            .args(arguments)
+            .output()
+            .map_err(|error| format!("paperctl {}: {error}", arguments.join(" ")))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        if output.status.success() {
+            Ok(stdout)
+        } else {
+            Err(format!(
+                "paperctl {} exited {}: {stdout}{stderr}",
+                arguments.join(" "),
+                output.status
+            ))
+        }
+    }
+
+    /// The arguments every upgrade command needs.
+    pub(crate) fn upgrade_args(&self) -> [String; 4] {
+        [
+            "--root".to_owned(),
+            self.paths.root.display().to_string(),
+            "--state".to_owned(),
+            self.paths.state.display().to_string(),
+        ]
     }
 
     fn install_binaries(&self) -> Result<(), String> {
@@ -422,6 +642,35 @@ impl Fixture {
         systemctl(&["daemon-reload"])?;
         Ok(())
     }
+}
+
+/// The fixture's release description: protocol `CURRENT`, state version 1, and
+/// whatever extras the caller ships.
+fn description<'a>(
+    version: &str,
+    extras: &'a [&'a str],
+) -> Result<bundle::Description<'a>, String> {
+    Ok(bundle::Description {
+        version: Version::parse(version).map_err(|error| error.to_string())?,
+        protocol: paper_protocol::CURRENT,
+        published: 0,
+        state_version: 1,
+        rollback_to_state: 1,
+        notes: String::new(),
+        extras,
+    })
+}
+
+/// Copies a binary and makes it executable.
+///
+/// Unlinks first: copying over a binary a process from the previous case is
+/// still exiting from gives `ETXTBSY`, and removing the name leaves that
+/// process holding an inode nobody else can see.
+fn copy_executable(from: &Path, to: &Path) -> Result<(), String> {
+    let _ = fs::remove_file(to);
+    fs::copy(from, to)
+        .map_err(|error| format!("copy {} -> {}: {error}", from.display(), to.display()))?;
+    fs::set_permissions(to, fs::Permissions::from_mode(0o755)).map_err(|error| error.to_string())
 }
 
 fn installed_app() -> InstalledApp {
