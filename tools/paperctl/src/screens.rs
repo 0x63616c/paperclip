@@ -181,6 +181,10 @@ impl Screens {
                 };
                 let hit = shelf.hit_test(event.at);
                 match event.phase {
+                    // A hovering pen has not pressed anything. Highlighting a
+                    // tile under it would have the shelf respond to the pen
+                    // being near the glass, which is not what a tap is.
+                    PointerPhase::Hover => {}
                     PointerPhase::Down | PointerPhase::Moved => self.home.pressed = hit,
                     PointerPhase::Cancelled => self.home.pressed = None,
                     PointerPhase::Up => {

@@ -5,8 +5,11 @@
 //!
 //! - [`transform`] — digitizer coordinates to panel coordinates. Pure
 //!   arithmetic, fully tested.
-//! - [`evdev`] — kernel event bytes to contact events. A state machine, fully
-//!   tested against synthesised frames.
+//! - [`evdev`] — kernel event bytes to [`PointerEvent`](paper_sdk::PointerEvent)s.
+//!   A state machine, fully tested against synthesised frames. It emits the
+//!   SDK's own event type: WWW-5 widened that type to carry everything this
+//!   hardware reports, so there is no device-specific event struct left to
+//!   translate out of.
 //! - [`nodes`] — which device node is which. The classification is tested; the
 //!   two ioctls that feed it are Linux-only and are not.
 
@@ -14,7 +17,7 @@ pub mod evdev;
 pub mod nodes;
 pub mod transform;
 
-pub use evdev::{ContactEvent, MAX_TOUCH_SLOTS, PenDecoder, RawEvent, Tool, TouchDecoder};
+pub use evdev::{ContactIds, MAX_TOUCH_SLOTS, PenDecoder, RawEvent, TouchDecoder};
 pub use nodes::{
     Capabilities, InputNode, InputRole, Resolution, classify, enumerate, resolve, sole,
 };

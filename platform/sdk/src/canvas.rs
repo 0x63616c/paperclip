@@ -10,8 +10,8 @@ use tiny_skia::{
 
 use crate::color::{Color, palette};
 use crate::display::DisplayMapping;
-use crate::geometry::{Point, Rect, Size};
 use crate::text::{self, TextStyle};
+use paper_protocol::{Point, Rect, Size};
 
 /// A CPU-rasterised drawing surface in canvas space.
 ///
@@ -459,8 +459,8 @@ mod tests {
     use super::Canvas;
     use crate::color::palette;
     use crate::display::DisplayMapping;
-    use crate::geometry::{Point, Rect, Size};
     use crate::text::TextStyle;
+    use paper_protocol::{Point, Rect, Size};
 
     fn canvas(width: u32, height: u32) -> Canvas {
         Canvas::new(Size::new(width, height)).expect("canvas allocates")

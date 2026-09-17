@@ -20,6 +20,7 @@ default = []
 vendor-engine = ["dep:cc"]
 
 [dependencies]
+paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
 thiserror = { workspace = true }
 

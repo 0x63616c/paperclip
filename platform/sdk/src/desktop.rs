@@ -24,8 +24,8 @@ use winit::window::{Window, WindowId};
 
 use crate::canvas::Canvas;
 use crate::display::DisplayMapping;
-use crate::geometry::{Point, Size};
-use crate::input::{Pointer, PointerEvent, PointerPhase};
+use paper_protocol::{ContactId, Pointer, PointerEvent, PointerPhase};
+use paper_protocol::{Point, Size};
 
 /// What the preview hands back to the caller.
 #[derive(Debug)]
@@ -166,7 +166,7 @@ pub fn run(
         graphics: None,
         cursor: PhysicalPosition::new(0.0, 0.0),
         pressed: false,
-        contact: None,
+        contact: MouseContact::default(),
         captured: false,
         failure: None,
     };
@@ -218,9 +218,9 @@ struct Preview<H> {
     graphics: Option<Graphics>,
     cursor: PhysicalPosition<f64>,
     pressed: bool,
-    /// Where the outstanding contact was last seen, in canvas space. `Some`
+    /// The outstanding mouse contact, if the button is down. `Some`
     /// means an app is holding a press that has to be ended somehow.
-    contact: Option<Point>,
+    contact: MouseContact,
     captured: bool,
     failure: Option<PreviewError>,
 }
@@ -339,6 +339,52 @@ impl<H: FnMut(PreviewEvent<'_>)> Preview<H> {
     }
 }
 
+/// The one mouse contact the preview can have at a time.
+///
+/// The device allocates a fresh [`ContactId`] per press and never reuses one;
+/// the preview does the same, so an app cannot be written against a preview
+/// that happens to reuse ids and then break on the tablet.
+#[derive(Debug)]
+pub(crate) struct MouseContact {
+    /// Where the outstanding contact was last seen, in canvas space.
+    last_seen: Option<Point>,
+    /// Its id, while it lasts.
+    id: Option<ContactId>,
+    /// The next id to hand out.
+    next: ContactId,
+}
+
+// Written out rather than derived: `ContactId` has no `Default`, on purpose.
+// An id is something a session hands out, and a type that can conjure one from
+// nothing is a type someone will conjure one from.
+impl Default for MouseContact {
+    fn default() -> Self {
+        Self {
+            last_seen: None,
+            id: None,
+            next: ContactId::FIRST,
+        }
+    }
+}
+
+impl MouseContact {
+    fn begin(&mut self) -> ContactId {
+        let id = self.next;
+        self.next = id.next();
+        self.id = Some(id);
+        id
+    }
+
+    /// The current contact's id, starting one if the button went down without
+    /// the preview having seen the press — which a window manager can cause.
+    fn current(&mut self) -> ContactId {
+        match self.id {
+            Some(id) => id,
+            None => self.begin(),
+        }
+    }
+}
+
 /// Turns a mapped position and a phase into the event the app should see,
 /// tracking the outstanding contact in `contact`.
 ///
@@ -350,21 +396,40 @@ impl<H: FnMut(PreviewEvent<'_>)> Preview<H> {
 /// outstanding contact leaving the canvas is reported as
 /// [`PointerPhase::Cancelled`] at the last place it was seen.
 fn resolve_pointer(
-    contact: &mut Option<Point>,
+    contact: &mut MouseContact,
     mapped: Option<Point>,
     phase: PointerPhase,
 ) -> Option<PointerEvent> {
     match (mapped, phase) {
+        (Some(at), PointerPhase::Down) => {
+            contact.last_seen = Some(at);
+            let id = contact.begin();
+            Some(PointerEvent::new(at, phase, Pointer::Mouse, id))
+        }
         (Some(at), phase) => {
-            *contact = matches!(phase, PointerPhase::Down | PointerPhase::Moved).then_some(at);
-            Some(PointerEvent::new(at, phase, Pointer::Mouse))
+            let id = contact.current();
+            if phase.is_contact() {
+                contact.last_seen = Some(at);
+            } else {
+                contact.last_seen = None;
+                contact.id = None;
+            }
+            Some(PointerEvent::new(at, phase, Pointer::Mouse, id))
         }
         // A press that begins in a letterbox bar belongs to nothing, and
         // there is no earlier position to attribute it to either.
         (None, PointerPhase::Down) => None,
-        (None, _) => contact
-            .take()
-            .map(|at| PointerEvent::new(at, PointerPhase::Cancelled, Pointer::Mouse)),
+        (None, _) => {
+            let at = contact.last_seen.take()?;
+            let id = contact.current();
+            contact.id = None;
+            Some(PointerEvent::new(
+                at,
+                PointerPhase::Cancelled,
+                Pointer::Mouse,
+                id,
+            ))
+        }
     }
 }
 
@@ -462,29 +527,30 @@ impl<H: FnMut(PreviewEvent<'_>)> ApplicationHandler for Preview<H> {
 
 #[cfg(test)]
 mod tests {
+    use super::MouseContact;
     use super::resolve_pointer;
-    use crate::geometry::Point;
-    use crate::input::PointerPhase;
+    use paper_protocol::Point;
+    use paper_protocol::PointerPhase;
 
     #[test]
     fn events_on_the_canvas_pass_through_unchanged() {
-        let mut contact = None;
+        let mut contact = MouseContact::default();
         let at = Point::new(100.0, 200.0);
         let event = resolve_pointer(&mut contact, Some(at), PointerPhase::Down).expect("delivered");
         assert_eq!(event.phase, PointerPhase::Down);
         assert_eq!(event.at, at);
-        assert_eq!(contact, Some(at));
+        assert_eq!(contact.last_seen, Some(at));
 
         let event = resolve_pointer(&mut contact, Some(at), PointerPhase::Up).expect("delivered");
         assert_eq!(event.phase, PointerPhase::Up);
-        assert_eq!(contact, None);
+        assert_eq!(contact.last_seen, None);
     }
 
     #[test]
     fn a_press_that_begins_in_the_letterbox_reaches_nothing() {
-        let mut contact = None;
+        let mut contact = MouseContact::default();
         assert!(resolve_pointer(&mut contact, None, PointerPhase::Down).is_none());
-        assert_eq!(contact, None);
+        assert_eq!(contact.last_seen, None);
         // And the release that follows it invents nothing either.
         assert!(resolve_pointer(&mut contact, None, PointerPhase::Up).is_none());
     }
@@ -494,7 +560,7 @@ mod tests {
         // Press a tile, drag into the letterbox bar, release there. Without
         // the cancel the app never hears the contact end and draws the tile
         // as held for the rest of the session.
-        let mut contact = None;
+        let mut contact = MouseContact::default();
         let at = Point::new(400.0, 900.0);
         resolve_pointer(&mut contact, Some(at), PointerPhase::Down).expect("press delivered");
 
@@ -502,12 +568,12 @@ mod tests {
             resolve_pointer(&mut contact, None, PointerPhase::Up).expect("cancel delivered");
         assert_eq!(event.phase, PointerPhase::Cancelled);
         assert_eq!(event.at, at, "cancelled where the contact was last seen");
-        assert_eq!(contact, None);
+        assert_eq!(contact.last_seen, None);
     }
 
     #[test]
     fn a_drag_off_the_canvas_cancels_once_and_not_again() {
-        let mut contact = None;
+        let mut contact = MouseContact::default();
         let at = Point::new(10.0, 10.0);
         resolve_pointer(&mut contact, Some(at), PointerPhase::Down).expect("press delivered");
         assert_eq!(

@@ -1,13 +1,18 @@
 //! Points, sizes and rectangles in canvas space.
 //!
 //! Canvas space is `f32` pixels with the origin top-left, `y` growing down,
-//! and a fixed extent of [`SCREEN`](crate::SCREEN). Physical window pixels are
-//! a different space and are converted only through
-//! [`DisplayMapping`](crate::DisplayMapping) — mixing the two silently is the
-//! bug this separation exists to prevent.
+//! and a fixed extent of `paper_sdk::SCREEN`. Physical window pixels are a
+//! different space and are converted only through `paper_sdk::DisplayMapping`
+//! — mixing the two silently is the bug this separation exists to prevent.
+//!
+//! These types live in the protocol crate rather than the SDK because they are
+//! on the wire: a [`PointerEvent`](crate::PointerEvent) carries a [`Point`]
+//! and a [`SurfaceDescriptor`](crate::SurfaceDescriptor) carries a [`Size`].
+//! `paper_sdk` re-exports all three, so app code is unaffected by where they
+//! are defined.
 
 /// A position in canvas space.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Point {
     /// Distance from the left edge.
     pub x: f32,
@@ -31,7 +36,7 @@ impl Point {
 }
 
 /// An integer pixel extent — a canvas, a window, a framebuffer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Size {
     /// Extent along `x`.
     pub width: u32,
@@ -61,7 +66,7 @@ impl Size {
 }
 
 /// An axis-aligned rectangle in canvas space.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rect {
     /// Left edge.
     pub x: f32,

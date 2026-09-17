@@ -6,7 +6,11 @@
 //! this module turns bytes into events, which is the part that can be tested
 //! on a Mac against captured traces.
 
-use paper_sdk::{Pointer, PointerEvent, PointerPhase};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use paper_protocol::{PEN_PRESSURE_FULL_SCALE, PEN_TILT_FULL_SCALE};
+use paper_sdk::{ContactId, Pointer, PointerEvent, PointerPhase, Pressure, Tilt};
 
 use super::transform::PointerTransform;
 
@@ -85,47 +89,39 @@ impl RawEvent {
     }
 }
 
-/// Which physical implement produced a contact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Tool {
-    /// A finger on the touchscreen.
-    Finger,
-    /// The stylus, nib down.
-    Pen,
-    /// The stylus, reversed. `BTN_TOOL_RUBBER`.
-    Eraser,
+/// Hands out [`ContactId`]s that are never reused.
+///
+/// One allocator serves both decoders, because a contact id is unique across a
+/// whole session and the pen and the touchscreen are two nodes of one session.
+/// Giving each decoder its own counter would have a finger and the pen share
+/// an id, which is exactly the collision the ids exist to prevent.
+///
+/// Cheap to clone and safe to share: the two nodes are read independently, and
+/// a decoder that needed a lock for this would be a decoder holding one on the
+/// input path.
+#[derive(Debug, Clone)]
+pub struct ContactIds {
+    next: Arc<AtomicU64>,
 }
 
-impl Tool {
-    /// The SDK pointer kind this tool presents as.
-    pub const fn pointer(self) -> Pointer {
-        match self {
-            Self::Finger => Pointer::Touch,
-            Self::Pen | Self::Eraser => Pointer::Pen,
-        }
+impl Default for ContactIds {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-/// A decoded contact event, richer than the SDK carries today.
-///
-/// [`paper_sdk::PointerEvent`] is `#[non_exhaustive]` and deliberately narrow
-/// until WWW-5 designs the input contract. Rather than pre-empt that, the
-/// device adapter reports what the hardware actually said and keeps the SDK
-/// event inside as the part that is already agreed. When WWW-5 widens
-/// `PointerEvent`, the extra fields here fold into it and this struct
-/// shrinks — no call site above the adapter changes.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ContactEvent {
-    /// The event in panel coordinates.
-    pub pointer: PointerEvent,
-    /// Which of the ten touch slots, or `0` for the pen.
-    pub slot: u8,
-    /// What made the contact.
-    pub tool: Tool,
-    /// Pen pressure, 0–4096. `None` for touch, which does not report it.
-    pub pressure: Option<i32>,
-    /// Pen tilt in hundredths of a degree, ±9000. `None` for touch.
-    pub tilt: Option<(i32, i32)>,
+impl ContactIds {
+    /// A fresh allocator, starting at [`ContactId::FIRST`].
+    pub fn new() -> Self {
+        Self {
+            next: Arc::new(AtomicU64::new(ContactId::FIRST.get())),
+        }
+    }
+
+    /// The next id, never one already handed out.
+    pub fn allocate(&self) -> ContactId {
+        ContactId::new(self.next.fetch_add(1, Ordering::Relaxed))
+    }
 }
 
 /// Turns touchscreen reports into contact events.
@@ -136,6 +132,7 @@ pub struct ContactEvent {
 #[derive(Debug)]
 pub struct TouchDecoder {
     transform: PointerTransform,
+    ids: ContactIds,
     slots: [Slot; MAX_TOUCH_SLOTS],
     current: usize,
 }
@@ -143,6 +140,12 @@ pub struct TouchDecoder {
 #[derive(Debug, Clone, Copy, Default)]
 struct Slot {
     tracking: Option<i32>,
+    /// The id this contact was given when it began.
+    ///
+    /// Not the kernel's tracking id: that one is reused the moment a finger
+    /// lifts, so two fingers swapping within a frame would look like one
+    /// finger teleporting.
+    contact: Option<ContactId>,
     x: i32,
     y: i32,
     down: bool,
@@ -151,17 +154,19 @@ struct Slot {
 }
 
 impl TouchDecoder {
-    /// A decoder using `transform` to reach panel coordinates.
-    pub fn new(transform: PointerTransform) -> Self {
+    /// A decoder using `transform` to reach panel coordinates, drawing contact
+    /// ids from `ids`.
+    pub fn new(transform: PointerTransform, ids: ContactIds) -> Self {
         Self {
             transform,
+            ids,
             slots: [Slot::default(); MAX_TOUCH_SLOTS],
             current: 0,
         }
     }
 
     /// Feeds one raw event, returning whatever frame it completed.
-    pub fn feed(&mut self, event: RawEvent) -> Vec<ContactEvent> {
+    pub fn feed(&mut self, event: RawEvent) -> Vec<PointerEvent> {
         match (event.kind, event.code) {
             (EV_SYN, SYN_REPORT) => return self.flush(),
             // The kernel's input buffer overflowed and events were lost. Every
@@ -186,6 +191,9 @@ impl TouchDecoder {
                     }
                     slot.tracking = None;
                 } else {
+                    if slot.tracking.is_none() {
+                        slot.contact = Some(self.ids.allocate());
+                    }
                     slot.tracking = Some(event.value);
                     slot.dirty = true;
                 }
@@ -205,7 +213,7 @@ impl TouchDecoder {
         Vec::new()
     }
 
-    fn flush(&mut self) -> Vec<ContactEvent> {
+    fn flush(&mut self) -> Vec<PointerEvent> {
         let mut out = Vec::new();
         for index in 0..MAX_TOUCH_SLOTS {
             let slot = self.slots[index];
@@ -226,13 +234,11 @@ impl TouchDecoder {
                 continue;
             };
 
-            out.push(ContactEvent {
-                pointer: PointerEvent::new(at, phase, Pointer::Touch),
-                slot: index as u8,
-                tool: Tool::Finger,
-                pressure: None,
-                tilt: None,
-            });
+            // A slot that was dirtied without a tracking id is a kernel frame
+            // we cannot attribute; give it an id rather than drop the contact.
+            let contact = slot.contact.unwrap_or_else(|| self.ids.allocate());
+            self.slots[index].contact = Some(contact);
+            out.push(PointerEvent::new(at, phase, Pointer::Touch, contact));
 
             let slot = &mut self.slots[index];
             slot.dirty = false;
@@ -245,22 +251,18 @@ impl TouchDecoder {
         out
     }
 
-    fn resync(&mut self) -> Vec<ContactEvent> {
+    fn resync(&mut self) -> Vec<PointerEvent> {
         let mut out = Vec::new();
         for index in 0..MAX_TOUCH_SLOTS {
             let slot = self.slots[index];
             if slot.down {
-                out.push(ContactEvent {
-                    pointer: PointerEvent::new(
-                        self.transform.map(slot.x, slot.y),
-                        PointerPhase::Cancelled,
-                        Pointer::Touch,
-                    ),
-                    slot: index as u8,
-                    tool: Tool::Finger,
-                    pressure: None,
-                    tilt: None,
-                });
+                let contact = slot.contact.unwrap_or_else(|| self.ids.allocate());
+                out.push(PointerEvent::new(
+                    self.transform.map(slot.x, slot.y),
+                    PointerPhase::Cancelled,
+                    Pointer::Touch,
+                    contact,
+                ));
             }
             self.slots[index] = Slot::default();
         }
@@ -269,44 +271,64 @@ impl TouchDecoder {
     }
 }
 
-/// Turns pen reports into contact events.
+/// Turns pen reports into pointer events.
 ///
-/// Hovering is silently dropped. The pen reports `ABS_DISTANCE` and a tool
-/// button well before it touches the glass, and [`PointerPhase`] has no phase
-/// that means "near". Inventing one here would put a hover contract in the
-/// device adapter that WWW-5 has not agreed; dropping it loses nothing v1
-/// needs.
+/// Hovering is reported now that there is a phase for it.
+/// [`PointerPhase::Hover`] means the digitizer can see the pen and the pen is
+/// not touching the glass — the state `BTN_TOOL_PEN` (or `BTN_TOOL_RUBBER`)
+/// set with `BTN_TOUCH` clear. An earlier version of this decoder dropped
+/// those frames because the SDK had no phase for them; WWW-5 added one.
+///
+/// What is still dropped is `ABS_DISTANCE`, the *number*. The axis exists and
+/// the pen reports it, but the range those counts span was never established,
+/// so there is no honest way to normalize it and an invented scale would be a
+/// measurement nobody took. The phase carries what is known; a distance
+/// arrives when something measures the axis.
 #[derive(Debug)]
 pub struct PenDecoder {
     transform: PointerTransform,
+    ids: ContactIds,
     x: i32,
     y: i32,
     pressure: i32,
     tilt: (i32, i32),
-    tool: Tool,
+    tool: Pointer,
+    /// The digitizer can see the pen: a tool button is set.
+    in_range: bool,
     touching: bool,
     down: bool,
     dirty: bool,
+    /// The id the current hover-or-press run is using.
+    ///
+    /// One id spans the hover that precedes a stroke and the stroke itself, so
+    /// an app previewing a nib position and then drawing with it sees one
+    /// contact rather than two. Lifting starts a new id for the hover that
+    /// follows, because the next press is a different contact.
+    contact: Option<ContactId>,
 }
 
 impl PenDecoder {
-    /// A decoder using `transform` to reach panel coordinates.
-    pub fn new(transform: PointerTransform) -> Self {
+    /// A decoder using `transform` to reach panel coordinates, drawing contact
+    /// ids from `ids`.
+    pub fn new(transform: PointerTransform, ids: ContactIds) -> Self {
         Self {
             transform,
+            ids,
             x: 0,
             y: 0,
             pressure: 0,
             tilt: (0, 0),
-            tool: Tool::Pen,
+            tool: Pointer::Pen,
+            in_range: false,
             touching: false,
             down: false,
             dirty: false,
+            contact: None,
         }
     }
 
     /// Feeds one raw event, returning whatever frame it completed.
-    pub fn feed(&mut self, event: RawEvent) -> Vec<ContactEvent> {
+    pub fn feed(&mut self, event: RawEvent) -> Vec<PointerEvent> {
         match (event.kind, event.code) {
             (EV_SYN, SYN_REPORT) => return self.flush(),
             (EV_SYN, SYN_DROPPED) => return self.resync(),
@@ -321,60 +343,101 @@ impl PenDecoder {
             (EV_ABS, ABS_PRESSURE) => self.pressure = event.value,
             (EV_ABS, ABS_TILT_X) => self.tilt.0 = event.value,
             (EV_ABS, ABS_TILT_Y) => self.tilt.1 = event.value,
-            // Hover distance is read and ignored: see the type comment.
+            // The axis is read and discarded: see the type comment.
             (EV_ABS, ABS_DISTANCE) => {}
             (EV_KEY, BTN_TOUCH) => {
                 self.touching = event.value != 0;
                 self.dirty = true;
             }
-            (EV_KEY, BTN_TOOL_PEN) if event.value != 0 => self.tool = Tool::Pen,
-            (EV_KEY, BTN_TOOL_RUBBER) if event.value != 0 => self.tool = Tool::Eraser,
+            (EV_KEY, BTN_TOOL_PEN) => {
+                self.in_range = event.value != 0;
+                if self.in_range {
+                    self.tool = Pointer::Pen;
+                }
+                self.dirty = true;
+            }
+            (EV_KEY, BTN_TOOL_RUBBER) => {
+                self.in_range = event.value != 0;
+                if self.in_range {
+                    self.tool = Pointer::Eraser;
+                }
+                self.dirty = true;
+            }
             _ => {}
         }
         Vec::new()
     }
 
-    fn flush(&mut self) -> Vec<ContactEvent> {
+    /// The event this frame completed, positioned and with its axes attached.
+    fn event(&mut self, phase: PointerPhase) -> PointerEvent {
+        let contact = match self.contact {
+            Some(contact) => contact,
+            None => {
+                let contact = self.ids.allocate();
+                self.contact = Some(contact);
+                contact
+            }
+        };
+        let at = self.transform.map(self.x, self.y);
+        let event = PointerEvent::new(at, phase, self.tool, contact);
+        // A hovering pen is not pressing, so its pressure reading is not a
+        // measurement of anything. Reporting the last stroke's value would be
+        // inventing one.
+        if phase == PointerPhase::Hover {
+            return event.with_tilt(Tilt::from_hundredths(
+                self.tilt.0,
+                self.tilt.1,
+                PEN_TILT_FULL_SCALE,
+            ));
+        }
+        event
+            .with_pressure(Pressure::from_raw(self.pressure, PEN_PRESSURE_FULL_SCALE))
+            .with_tilt(Tilt::from_hundredths(
+                self.tilt.0,
+                self.tilt.1,
+                PEN_TILT_FULL_SCALE,
+            ))
+    }
+
+    fn flush(&mut self) -> Vec<PointerEvent> {
         if !self.dirty {
             return Vec::new();
         }
         self.dirty = false;
 
-        let phase = match (self.down, self.touching) {
-            (false, true) => PointerPhase::Down,
-            (true, true) => PointerPhase::Moved,
-            (true, false) => PointerPhase::Up,
-            (false, false) => return Vec::new(),
+        let phase = match (self.down, self.touching, self.in_range) {
+            (false, true, _) => PointerPhase::Down,
+            (true, true, _) => PointerPhase::Moved,
+            (true, false, _) => PointerPhase::Up,
+            (false, false, true) => PointerPhase::Hover,
+            // Out of range and not touching: nothing to report, and any run
+            // that was in progress is over.
+            (false, false, false) => {
+                self.contact = None;
+                return Vec::new();
+            }
         };
         self.down = self.touching;
 
-        vec![ContactEvent {
-            pointer: PointerEvent::new(self.transform.map(self.x, self.y), phase, Pointer::Pen),
-            slot: 0,
-            tool: self.tool,
-            pressure: Some(self.pressure),
-            tilt: Some(self.tilt),
-        }]
+        let event = self.event(phase);
+        if phase == PointerPhase::Up {
+            // The hover that follows a lift belongs to the next press.
+            self.contact = None;
+        }
+        vec![event]
     }
 
-    fn resync(&mut self) -> Vec<ContactEvent> {
+    fn resync(&mut self) -> Vec<PointerEvent> {
         self.dirty = false;
         self.touching = false;
         if !self.down {
+            self.contact = None;
             return Vec::new();
         }
         self.down = false;
-        vec![ContactEvent {
-            pointer: PointerEvent::new(
-                self.transform.map(self.x, self.y),
-                PointerPhase::Cancelled,
-                Pointer::Pen,
-            ),
-            slot: 0,
-            tool: self.tool,
-            pressure: Some(self.pressure),
-            tilt: Some(self.tilt),
-        }]
+        let event = self.event(PointerPhase::Cancelled);
+        self.contact = None;
+        vec![event]
     }
 }
 
@@ -382,11 +445,12 @@ impl PenDecoder {
 mod tests {
     use super::{
         ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_PRESSURE,
-        ABS_TILT_X, ABS_X, ABS_Y, BTN_TOOL_RUBBER, BTN_TOUCH, EV_ABS, EV_KEY, EV_SYN, EVENT_BYTES,
-        PenDecoder, RawEvent, SYN_DROPPED, SYN_REPORT, Tool, TouchDecoder,
+        ABS_TILT_X, ABS_X, ABS_Y, BTN_TOOL_PEN, BTN_TOOL_RUBBER, BTN_TOUCH, ContactIds, EV_ABS,
+        EV_KEY, EV_SYN, EVENT_BYTES, PenDecoder, RawEvent, SYN_DROPPED, SYN_REPORT, TouchDecoder,
     };
     use crate::input::transform::PointerTransform;
     use paper_sdk::{Pointer, PointerPhase};
+    use std::collections::HashSet;
 
     fn event(kind: u16, code: u16, value: i32) -> RawEvent {
         RawEvent { kind, code, value }
@@ -397,14 +461,14 @@ mod tests {
     }
 
     fn touch() -> TouchDecoder {
-        TouchDecoder::new(PointerTransform::touch())
+        TouchDecoder::new(PointerTransform::touch(), ContactIds::new())
     }
 
     fn pen() -> PenDecoder {
-        PenDecoder::new(PointerTransform::pen())
+        PenDecoder::new(PointerTransform::pen(), ContactIds::new())
     }
 
-    fn feed_all(decoder: &mut TouchDecoder, events: &[RawEvent]) -> Vec<super::ContactEvent> {
+    fn feed_all(decoder: &mut TouchDecoder, events: &[RawEvent]) -> Vec<paper_sdk::PointerEvent> {
         events.iter().flat_map(|e| decoder.feed(*e)).collect()
     }
 
@@ -451,18 +515,10 @@ mod tests {
 
         let frame = decoder.feed(syn());
         assert_eq!(frame.len(), 1);
-        assert_eq!(frame[0].pointer.phase, PointerPhase::Down);
-        assert_eq!(frame[0].pointer.pointer, Pointer::Touch);
-        assert!(
-            (frame[0].pointer.at.x - 810.0).abs() < 0.01,
-            "{:?}",
-            frame[0]
-        );
-        assert!(
-            (frame[0].pointer.at.y - 1080.0).abs() < 0.01,
-            "{:?}",
-            frame[0]
-        );
+        assert_eq!(frame[0].phase, PointerPhase::Down);
+        assert_eq!(frame[0].pointer, Pointer::Touch);
+        assert!((frame[0].at.x - 810.0).abs() < 0.01, "{:?}", frame[0]);
+        assert!((frame[0].at.y - 1080.0).abs() < 0.01, "{:?}", frame[0]);
     }
 
     #[test]
@@ -478,15 +534,15 @@ mod tests {
                 syn(),
             ],
         );
-        assert_eq!(down[0].pointer.phase, PointerPhase::Down);
+        assert_eq!(down[0].phase, PointerPhase::Down);
 
         let up = feed_all(
             &mut decoder,
             &[event(EV_ABS, ABS_MT_TRACKING_ID, -1), syn()],
         );
         assert_eq!(up.len(), 1);
-        assert_eq!(up[0].pointer.phase, PointerPhase::Up);
-        assert!(up[0].pointer.is_tap());
+        assert_eq!(up[0].phase, PointerPhase::Up);
+        assert!(up[0].is_tap());
 
         // The slot is finished. A stray SYN must not resurrect it.
         assert!(decoder.feed(syn()).is_empty());
@@ -510,8 +566,8 @@ mod tests {
             &[event(EV_ABS, ABS_MT_POSITION_X, 140), syn()],
         );
         assert_eq!(moved.len(), 1);
-        assert_eq!(moved[0].pointer.phase, PointerPhase::Moved);
-        assert!(!moved[0].pointer.is_tap());
+        assert_eq!(moved[0].phase, PointerPhase::Moved);
+        assert!(!moved[0].is_tap());
     }
 
     #[test]
@@ -532,10 +588,11 @@ mod tests {
             ],
         );
         assert_eq!(frame.len(), 2);
-        assert_eq!(frame[0].slot, 0);
-        assert_eq!(frame[1].slot, 1);
-        assert!(frame[1].pointer.at.x > frame[0].pointer.at.x);
-        assert!(frame.iter().all(|e| e.pointer.phase == PointerPhase::Down));
+        // Two fingers down at once are two different contacts, and the ids
+        // that say so are what an app keys its per-finger state on.
+        assert_ne!(frame[0].contact, frame[1].contact);
+        assert!(frame[1].at.x > frame[0].at.x);
+        assert!(frame.iter().all(|e| e.phase == PointerPhase::Down));
     }
 
     #[test]
@@ -564,8 +621,7 @@ mod tests {
             ],
         );
         assert_eq!(frame.len(), 1);
-        assert_eq!(frame[0].slot, 0);
-        assert_eq!(frame[0].pointer.phase, PointerPhase::Up);
+        assert_eq!(frame[0].phase, PointerPhase::Up);
     }
 
     #[test]
@@ -588,12 +644,8 @@ mod tests {
 
         let cancelled = decoder.feed(event(EV_SYN, SYN_DROPPED, 0));
         assert_eq!(cancelled.len(), 2);
-        assert!(
-            cancelled
-                .iter()
-                .all(|e| e.pointer.phase == PointerPhase::Cancelled)
-        );
-        assert!(cancelled.iter().all(|e| !e.pointer.is_tap()));
+        assert!(cancelled.iter().all(|e| e.phase == PointerPhase::Cancelled));
+        assert!(cancelled.iter().all(|e| !e.is_tap()));
         // Nothing survives the resync.
         assert!(decoder.feed(syn()).is_empty());
     }
@@ -612,7 +664,6 @@ mod tests {
             ],
         );
         assert_eq!(frame.len(), 1);
-        assert!((frame[0].slot as usize) < super::MAX_TOUCH_SLOTS);
 
         let mut decoder = touch();
         assert!(decoder.feed(event(EV_ABS, ABS_MT_SLOT, -4)).is_empty());
@@ -633,18 +684,105 @@ mod tests {
         let frame: Vec<_> = events.iter().flat_map(|e| decoder.feed(*e)).collect();
 
         assert_eq!(frame.len(), 1);
-        assert_eq!(frame[0].tool, Tool::Eraser);
-        assert_eq!(frame[0].tool.pointer(), Pointer::Pen);
-        assert_eq!(frame[0].pressure, Some(2048));
-        assert_eq!(frame[0].tilt, Some((-3000, 0)));
-        assert_eq!(frame[0].pointer.phase, PointerPhase::Down);
-        assert!((frame[0].pointer.at.x - 810.0).abs() < 0.01);
+        // The eraser is the pen, reversed — one device, a tool-type switch.
+        assert_eq!(frame[0].pointer, Pointer::Eraser);
+        assert!(frame[0].pointer.is_stylus());
+        // Normalized, not raw: 2048 of 4096 is half pressure, -3000
+        // hundredths is -30 degrees.
+        assert!((frame[0].pressure.expect("pen reports pressure").get() - 0.5).abs() < 1e-6);
+        let tilt = frame[0].tilt.expect("pen reports tilt");
+        assert!((tilt.x_degrees + 30.0).abs() < 1e-6);
+        assert_eq!(tilt.y_degrees, 0.0);
+        assert_eq!(frame[0].phase, PointerPhase::Down);
+        assert!((frame[0].at.x - 810.0).abs() < 0.01);
     }
 
+    /// A finger reports no pressure, so a touch event carries none. The rule
+    /// the whole input model rests on, checked where it would be easiest to
+    /// break: the decoder that knows the pen reports one.
     #[test]
-    fn hovering_produces_nothing_at_all() {
+    fn touch_carries_no_invented_pressure_or_tilt() {
+        let mut decoder = touch();
+        let frame = feed_all(
+            &mut decoder,
+            &[
+                event(EV_ABS, ABS_MT_TRACKING_ID, 4),
+                event(EV_ABS, ABS_MT_POSITION_X, 100),
+                event(EV_ABS, ABS_MT_POSITION_Y, 100),
+                syn(),
+            ],
+        );
+        assert_eq!(frame.len(), 1);
+        assert_eq!(frame[0].pressure, None);
+        assert_eq!(frame[0].tilt, None);
+        assert_eq!(frame[0].pointer, Pointer::Touch);
+    }
+
+    /// A tracking id the kernel reuses must not look like the same finger. The
+    /// contact ids the decoder hands out are allocated, never echoed.
+    #[test]
+    fn a_reused_kernel_tracking_id_is_a_new_contact() {
+        let mut decoder = touch();
+        let first = feed_all(
+            &mut decoder,
+            &[
+                event(EV_ABS, ABS_MT_TRACKING_ID, 7),
+                event(EV_ABS, ABS_MT_POSITION_X, 100),
+                event(EV_ABS, ABS_MT_POSITION_Y, 100),
+                syn(),
+                event(EV_ABS, ABS_MT_TRACKING_ID, -1),
+                syn(),
+            ],
+        );
+        let second = feed_all(
+            &mut decoder,
+            &[
+                event(EV_ABS, ABS_MT_TRACKING_ID, 7),
+                event(EV_ABS, ABS_MT_POSITION_X, 200),
+                event(EV_ABS, ABS_MT_POSITION_Y, 200),
+                syn(),
+            ],
+        );
+        assert_ne!(first[0].contact, second[0].contact);
+    }
+
+    /// Every contact in a session gets its own id, across both nodes, because
+    /// they share one allocator.
+    #[test]
+    fn the_pen_and_the_touchscreen_never_share_a_contact_id() {
+        let ids = ContactIds::new();
+        let mut fingers = TouchDecoder::new(PointerTransform::touch(), ids.clone());
+        let mut nib = PenDecoder::new(PointerTransform::pen(), ids);
+
+        let mut seen = HashSet::new();
+        for raw in [
+            event(EV_ABS, ABS_MT_TRACKING_ID, 1),
+            event(EV_ABS, ABS_MT_POSITION_X, 10),
+            event(EV_ABS, ABS_MT_POSITION_Y, 10),
+            syn(),
+        ] {
+            seen.extend(fingers.feed(raw).into_iter().map(|e| e.contact));
+        }
+        for raw in [
+            event(EV_KEY, BTN_TOOL_PEN, 1),
+            event(EV_ABS, ABS_X, 10),
+            event(EV_ABS, ABS_Y, 10),
+            event(EV_KEY, BTN_TOUCH, 1),
+            syn(),
+        ] {
+            seen.extend(nib.feed(raw).into_iter().map(|e| e.contact));
+        }
+        assert_eq!(seen.len(), 2, "{seen:?}");
+    }
+
+    /// A pen the digitizer can see but that is not touching is a hover, and
+    /// the hover carries no pressure — a pen in the air is not pressing, and
+    /// reporting the last stroke's reading would be inventing one.
+    #[test]
+    fn a_pen_in_range_hovers() {
         let mut decoder = pen();
         let frame: Vec<_> = [
+            event(EV_KEY, BTN_TOOL_PEN, 1),
             event(EV_ABS, ABS_X, 100),
             event(EV_ABS, ABS_Y, 100),
             event(EV_ABS, super::ABS_DISTANCE, 40),
@@ -653,7 +791,58 @@ mod tests {
         .iter()
         .flat_map(|e| decoder.feed(*e))
         .collect();
+        assert_eq!(frame.len(), 1, "{frame:?}");
+        assert_eq!(frame[0].phase, PointerPhase::Hover);
+        assert_eq!(frame[0].pressure, None);
+        assert!(!frame[0].phase.is_contact());
+    }
+
+    /// A pen nowhere near the glass says nothing. Position without a tool
+    /// button is not a hover — it is the last place the pen was.
+    #[test]
+    fn a_pen_out_of_range_produces_nothing_at_all() {
+        let mut decoder = pen();
+        let frame: Vec<_> = [event(EV_ABS, ABS_X, 100), event(EV_ABS, ABS_Y, 100), syn()]
+            .iter()
+            .flat_map(|e| decoder.feed(*e))
+            .collect();
         assert!(frame.is_empty(), "{frame:?}");
+    }
+
+    /// The hover that precedes a stroke is the same contact as the stroke, so
+    /// an app previewing a nib position and then drawing sees one contact.
+    /// The hover after a lift is a different one, because the next press is.
+    #[test]
+    fn a_hover_and_the_stroke_it_becomes_are_one_contact() {
+        let mut decoder = pen();
+        let mut events = Vec::new();
+        for raw in [
+            event(EV_KEY, BTN_TOOL_PEN, 1),
+            event(EV_ABS, ABS_X, 100),
+            event(EV_ABS, ABS_Y, 100),
+            syn(),
+            event(EV_KEY, BTN_TOUCH, 1),
+            syn(),
+            event(EV_KEY, BTN_TOUCH, 0),
+            syn(),
+            event(EV_ABS, ABS_X, 120),
+            syn(),
+        ] {
+            events.extend(decoder.feed(raw));
+        }
+        let phases: Vec<_> = events.iter().map(|e| e.phase).collect();
+        assert_eq!(
+            phases,
+            vec![
+                PointerPhase::Hover,
+                PointerPhase::Down,
+                PointerPhase::Up,
+                PointerPhase::Hover
+            ]
+        );
+        assert_eq!(events[0].contact, events[1].contact);
+        assert_eq!(events[1].contact, events[2].contact);
+        assert_ne!(events[2].contact, events[3].contact);
     }
 
     #[test]
@@ -672,7 +861,7 @@ mod tests {
             vec![syn()],
         ] {
             for raw in batch {
-                phases.extend(decoder.feed(raw).into_iter().map(|e| e.pointer.phase));
+                phases.extend(decoder.feed(raw).into_iter().map(|e| e.phase));
             }
         }
         assert_eq!(
@@ -694,7 +883,7 @@ mod tests {
         }
         let cancelled = decoder.feed(event(EV_SYN, SYN_DROPPED, 0));
         assert_eq!(cancelled.len(), 1);
-        assert_eq!(cancelled[0].pointer.phase, PointerPhase::Cancelled);
+        assert_eq!(cancelled[0].phase, PointerPhase::Cancelled);
         // And with nothing in progress it says nothing.
         assert!(decoder.feed(event(EV_SYN, SYN_DROPPED, 0)).is_empty());
     }

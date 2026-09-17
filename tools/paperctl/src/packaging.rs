@@ -7,7 +7,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
-use paper_packages::Manifest;
+use paper_packages::{MANIFEST_FILE_NAME, Manifest, ObjectKind, PackageCheck};
 use paper_packages::archive::{self, ARCHIVE_EXTENSION, ArchiveLimits};
 use paper_packages::publish::Publisher;
 use paper_packages::signing::{PublicKey, SecretKey, TrustedKeys};
@@ -78,7 +78,7 @@ pub(crate) struct PublishArgs {
 /// Verify a catalog, or a single package.
 #[derive(Debug, Args)]
 pub(crate) struct CheckArgs {
-    /// A catalog directory, or a `.paperpkg` file.
+    /// A catalog directory, a package source directory, or a `.paperpkg` file.
     target: PathBuf,
     /// The public key a catalog must be signed with.
     #[arg(long)]
@@ -224,6 +224,15 @@ pub(crate) fn check(args: &CheckArgs) -> Result<(), CommandError> {
     if args.target.is_file() {
         return check_package(&args.target);
     }
+    // A directory with a `paper.toml` in it is a package source, not a
+    // catalog. Checking one is the package-time layer of the app contract
+    // (§8), and it answers a different question from the two below: "could
+    // this run", rather than "who vouched for these bytes". A source tree has
+    // nobody vouching for it yet, which is why it is checked before it is
+    // packaged rather than after.
+    if args.target.join(MANIFEST_FILE_NAME).is_file() {
+        return check_source(&args.target);
+    }
     let path = args.trust.clone().ok_or(CommandError::TrustRequired)?;
     let mut keys = TrustedKeys::none();
     keys.trust(read_text(&path)?.parse::<PublicKey>()?);
@@ -237,6 +246,50 @@ pub(crate) fn check(args: &CheckArgs) -> Result<(), CommandError> {
     if report.verified.is_empty() {
         println!("verified   nothing; the catalog is empty");
     }
+    Ok(())
+}
+
+/// Runs the package-time conformance layer over a package source directory.
+///
+/// Everything decidable before anything runs it: the manifest, the protocol it
+/// asks for, its payload, its sizes, and the entrypoint's ELF header — the
+/// only check that distinguishes a program from a shell script, and the one
+/// that catches a binary packaged from the Mac's own `cargo build` instead of
+/// the cross-compiled one.
+///
+/// It says nothing about authenticity and has no way to. The bytes a signature
+/// covers are the archive's, which is what the other two branches of `check`
+/// are about.
+fn check_source(root: &Path) -> Result<(), CommandError> {
+    let check = PackageCheck::run(root).map_err(|source| CommandError::PackageSource {
+        path: root.to_path_buf(),
+        source: Box::new(source),
+    })?;
+
+    let manifest = check.manifest();
+    println!("source     {}", root.display());
+    println!("id         {}", manifest.id());
+    println!("name       {}", manifest.name());
+    println!("version    {}", manifest.version());
+    println!(
+        "protocol   {} (platform speaks {})",
+        manifest.protocol(),
+        paper_protocol::CURRENT
+    );
+    println!("entrypoint {}", manifest.entrypoint());
+    println!(
+        "target     aarch64 ELF, {}",
+        match check.target().kind {
+            ObjectKind::Executable => "fixed-position executable",
+            ObjectKind::SharedObject => "position-independent executable",
+            // `ObjectKind` is `#[non_exhaustive]`; a kind this build has no
+            // name for is still one `require_device_entrypoint` accepted.
+            _ => "executable",
+        }
+    );
+    println!("assets     {}", manifest.assets().len());
+    println!("size       {} bytes", check.total_bytes());
+    println!("signature  none \u{2014} a source tree is not a published thing; `paperctl publish` signs the archive");
     Ok(())
 }
 

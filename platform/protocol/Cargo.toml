@@ -1,6 +1,6 @@
 [package]
 name = "paper-protocol"
-description = "Version identifiers for the contract between the Paperclip platform and installed apps."
+description = "The Paperclip host/app contract: vocabulary, message set, framing and lifecycle rules."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,9 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+semver = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

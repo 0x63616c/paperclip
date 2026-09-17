@@ -1,6 +1,6 @@
 //! Mapping the fixed canvas onto whatever surface is presenting it.
 
-use crate::geometry::{Point, Rect, Size};
+use paper_protocol::{Point, Rect, Size};
 
 /// The screen every Paperclip app draws for: 1620 × 2160, portrait.
 ///
@@ -128,7 +128,7 @@ impl DisplayMapping {
 #[cfg(test)]
 mod tests {
     use super::{DisplayMapping, SCREEN};
-    use crate::geometry::{Point, Size};
+    use paper_protocol::{Point, Size};
 
     #[test]
     fn pillarboxes_a_portrait_canvas_in_a_landscape_window() {

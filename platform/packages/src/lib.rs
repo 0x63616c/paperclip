@@ -38,8 +38,10 @@
 //! name and there is no second one to keep in step.
 
 pub mod archive;
+mod binary;
 mod capability;
 pub mod catalog;
+mod check;
 mod digest;
 mod error;
 mod id;
@@ -53,9 +55,16 @@ pub mod release;
 pub mod signing;
 pub mod store;
 
+pub use binary::{
+    BinaryError, ExecutableTarget, MACHINE_AARCH64, ObjectKind, inspect_entrypoint,
+    require_device_entrypoint,
+};
 pub use capability::{Capability, GrantedCapabilities, InstallPolicy, InstalledApp};
+pub use check::{
+    CheckError, MAX_ASSET_BYTES, MAX_ENTRYPOINT_BYTES, MAX_PACKAGE_BYTES, PackageCheck,
+};
 pub use digest::{Digest, DigestError, MeasuredReader};
 pub use error::{IdError, ManifestError, NameError, PathError, PayloadError};
 pub use id::{AppId, DisplayName};
 pub use manifest::{MANIFEST_FILE_NAME, MAX_ASSETS, MAX_MANIFEST_BYTES, Manifest};
-pub use path::RelativePath;
+pub use paper_protocol::RelativePath;

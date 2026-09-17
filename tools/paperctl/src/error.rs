@@ -8,7 +8,7 @@ use paper_packages::catalog::CatalogError;
 use paper_packages::install::InstallError;
 use paper_packages::signing::SignatureError;
 use paper_packages::store::StoreError;
-use paper_packages::{ManifestError, PayloadError};
+use paper_packages::{CheckError, ManifestError, PayloadError};
 
 /// A command failure, phrased for someone at a terminal.
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +37,20 @@ pub(crate) enum CommandError {
         /// Why.
         #[source]
         source: ManifestError,
+    },
+
+    /// A package source directory did not pass the package-time checks.
+    ///
+    /// Boxed because `CheckError` is the largest thing this enum can hold, and
+    /// every `Result<(), CommandError>` in the binary would otherwise be that
+    /// big on the success path too.
+    #[error("the package source at {path} did not pass `paperctl check`")]
+    PackageSource {
+        /// Which package directory.
+        path: PathBuf,
+        /// Why.
+        #[source]
+        source: Box<CheckError>,
     },
 
     /// A package payload did not match its manifest.

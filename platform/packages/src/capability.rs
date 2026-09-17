@@ -13,63 +13,19 @@
 //!   the host's own policy and never by package content.
 //! - The only way to pair a manifest with capabilities is
 //!   [`InstalledApp::install`], which requires a policy to be present.
+//!
+//! [`Capability`] itself is a protocol type, re-exported here. A host reports
+//! granted capabilities to an app in its [`Hello`](paper_protocol::Hello), so
+//! both sides have to spell them the same way. Naming a capability has never
+//! been the same thing as holding one; this module owns the holding.
+
+pub use paper_protocol::Capability;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 
-use crate::id::AppId;
+use paper_protocol::AppId;
+
 use crate::manifest::Manifest;
-
-/// Something an installed app may be permitted to do.
-///
-/// Small and closed on purpose. A capability that nothing in the platform
-/// checks is a comment pretending to be a type, so this list grows only when
-/// the host gains the enforcement point that goes with it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum Capability {
-    /// Read and write the app's own private storage directory.
-    Storage,
-    /// Reach the local network. Not granted by default, even on a personal device.
-    Network,
-    /// Take part in explicit cross-app sharing (§4): receive or offer content
-    /// when the user initiates the exchange.
-    Sharing,
-    /// Install, update and roll back packages (§12).
-    ///
-    /// The App Store holds this and nothing else does. It is what makes the
-    /// App Store a *client* of package management rather than its owner: the
-    /// enforcement point is
-    /// [`PackageManager::on_behalf_of`](crate::install::PackageManager::on_behalf_of),
-    /// which refuses to hand an installer to an app that was not granted this.
-    Packages,
-}
-
-impl Capability {
-    /// Every capability the platform currently knows how to enforce.
-    pub const ALL: [Capability; 4] = [
-        Capability::Storage,
-        Capability::Network,
-        Capability::Sharing,
-        Capability::Packages,
-    ];
-
-    /// The stable name used in host policy files and `paperctl` output.
-    pub fn name(self) -> &'static str {
-        match self {
-            Capability::Storage => "storage",
-            Capability::Network => "network",
-            Capability::Sharing => "sharing",
-            Capability::Packages => "packages",
-        }
-    }
-}
-
-impl fmt::Display for Capability {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
 
 /// What an installed app actually holds.
 ///

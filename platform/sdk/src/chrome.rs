@@ -6,8 +6,8 @@
 
 use crate::canvas::Canvas;
 use crate::color::palette;
-use crate::geometry::{Point, Rect};
 use crate::text::{TextStyle, measure_text};
+use paper_protocol::{Point, Rect};
 
 /// Height of the bar at the top of every screen.
 pub const STATUS_BAR_HEIGHT: f32 = 132.0;

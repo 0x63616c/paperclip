@@ -3,11 +3,18 @@
 //! Every variant names the field it is about and what was wrong with it, so a
 //! `paperctl` user reading one message knows which line of `paper.toml` to
 //! edit. Nothing here is stringly typed except the offending values themselves.
+//!
+//! [`IdError`] and [`PathError`] are not defined here: the app id and the
+//! relative path are protocol types, so their failures are too. They are
+//! re-exported so a caller matching on a manifest error chain still finds
+//! everything in one place.
 
 use std::io;
 use std::path::PathBuf;
 
 use paper_protocol::ProtocolVersion;
+
+pub use paper_protocol::{IdError, PathError};
 
 /// Why a `paper.toml` could not be turned into a [`Manifest`](crate::Manifest).
 #[derive(Debug, thiserror::Error)]
@@ -150,44 +157,6 @@ pub enum ManifestError {
     },
 }
 
-/// Why a string is not a valid [`AppId`](crate::AppId).
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum IdError {
-    /// An app id must be at least `vendor.app`.
-    #[error("needs at least two dot-separated segments, e.g. `dev.calum.chess`")]
-    TooFewSegments,
-    /// An empty segment, from a leading, trailing or doubled dot.
-    #[error("has an empty segment")]
-    EmptySegment,
-    /// A segment started with something other than an ASCII lowercase letter.
-    #[error("segment `{segment}` must start with a lowercase letter")]
-    SegmentStart {
-        /// The offending segment.
-        segment: String,
-    },
-    /// A segment contained a character outside `[a-z0-9-]`.
-    #[error("segment `{segment}` may only contain lowercase letters, digits and `-`")]
-    SegmentCharacter {
-        /// The offending segment.
-        segment: String,
-    },
-    /// A segment ended with `-`.
-    #[error("segment `{segment}` may not end with `-`")]
-    SegmentEnd {
-        /// The offending segment.
-        segment: String,
-    },
-    /// The whole id exceeded [`AppId::MAX_LEN`](crate::AppId::MAX_LEN).
-    #[error("is {len} characters, over the {max} character limit")]
-    TooLong {
-        /// Actual length.
-        len: usize,
-        /// Permitted length.
-        max: usize,
-    },
-}
-
 /// Why a string is not a valid [`DisplayName`](crate::DisplayName).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -206,41 +175,6 @@ pub enum NameError {
     /// Contains a control character, which no shelf label should.
     #[error("contains a control character")]
     ControlCharacter,
-}
-
-/// Why a string is not a safe package-relative path.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum PathError {
-    /// The path was empty.
-    #[error("is empty")]
-    Empty,
-    /// The path was rooted at `/`.
-    #[error("is absolute")]
-    Absolute,
-    /// The path contained a Windows drive prefix or a backslash separator.
-    #[error("uses a `\\` separator or a drive prefix")]
-    NotPosix,
-    /// The path contained `..`, which would escape the package directory.
-    #[error("contains `..` and would escape the package")]
-    ParentEscape,
-    /// The path contained a `.` component or a doubled separator.
-    #[error("contains an empty or `.` component")]
-    EmptyComponent,
-    /// The path began with `~`, which a shell would expand elsewhere.
-    #[error("starts with `~`")]
-    HomeExpansion,
-    /// The path contained a NUL byte.
-    #[error("contains a NUL byte")]
-    Nul,
-    /// The path exceeded [`RelativePath::MAX_LEN`](crate::RelativePath::MAX_LEN).
-    #[error("is {len} characters, over the {max} character limit")]
-    TooLong {
-        /// Actual length.
-        len: usize,
-        /// Permitted length.
-        max: usize,
-    },
 }
 
 /// Why a package payload directory does not match its manifest.

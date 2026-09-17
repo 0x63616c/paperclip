@@ -4,14 +4,13 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use paper_protocol::ProtocolVersion;
+use paper_protocol::{AppId, ProtocolVersion, RelativePath};
 use semver::Version;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 
 use crate::error::{ManifestError, PayloadError};
-use crate::id::{AppId, DisplayName};
-use crate::path::RelativePath;
+use crate::id::DisplayName;
 
 /// The manifest file name, at the root of every package.
 pub const MANIFEST_FILE_NAME: &str = "paper.toml";

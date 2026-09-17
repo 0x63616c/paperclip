@@ -16,7 +16,9 @@ use paper_packages::{
     Capability, InstallPolicy, InstalledApp, MANIFEST_FILE_NAME, Manifest, ManifestError,
 };
 use paper_sdk::chrome::MIN_TOUCH_TARGET;
-use paper_sdk::{Canvas, DisplayMapping, Point, Pointer, PointerEvent, PointerPhase, SCREEN, Size};
+use paper_sdk::{
+    Canvas, ContactId, DisplayMapping, Point, Pointer, PointerEvent, PointerPhase, SCREEN, Size,
+};
 use paper_settings::{PlaceholderHost, SettingsScreen};
 
 /// The manifests the apps really ship, read from the repository.
@@ -93,7 +95,7 @@ fn the_two_screens_are_not_the_same_picture() {
 fn press_square(window: Size, physical: Point, layout: BoardLayout) -> Option<Square> {
     let mapping = DisplayMapping::fit(SCREEN, window);
     let at = mapping.to_canvas(physical)?;
-    let event = PointerEvent::new(at, PointerPhase::Up, Pointer::Mouse);
+    let event = PointerEvent::new(at, PointerPhase::Up, Pointer::Mouse, ContactId::FIRST);
     layout.square_at(event.at)
 }
 

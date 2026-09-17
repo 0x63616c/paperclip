@@ -59,7 +59,7 @@ pub mod vendor;
 
 pub use error::{DeviceError, VendorStatus};
 pub use input::{
-    ContactEvent, InputNode, InputRole, PenDecoder, PointerTransform, RawEvent, Tool, TouchDecoder,
+    ContactIds, InputNode, InputRole, PenDecoder, PointerTransform, RawEvent, TouchDecoder,
 };
 pub use panel::{MemoryPanel, Panel, PanelBuffer, Swap, present};
 pub use session::{DisplayLockHolder, DisplayLocks, RESUME_BRIDGE_DELAY, WakeLock};

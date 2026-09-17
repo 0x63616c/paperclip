@@ -17,10 +17,15 @@ default = ["desktop"]
 desktop = ["dep:winit", "dep:softbuffer"]
 
 [dependencies]
+paper-protocol = { workspace = true }
+semver = { workspace = true }
 thiserror = { workspace = true }
 tiny-skia = { workspace = true }
 softbuffer = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

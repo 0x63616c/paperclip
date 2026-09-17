@@ -1,165 +1,76 @@
-//! Version identifiers for the contract between the platform host and the apps
-//! it runs.
+//! The contract between the Paperclip host and the apps it runs (§8).
 //!
-//! This crate deliberately contains no wire types yet. The app lifecycle,
-//! input and rendering messages are Stage 6 work (§18 item 5); what Stage 1
-//! needs is a stable way for a `paper.toml` manifest to say which contract it
-//! was built against, and a stable rule for deciding whether the host can
-//! honour it.
+//! This crate is the whole app-facing contract in one place: the vocabulary
+//! both sides speak ([`AppId`], [`Capability`], [`Point`], [`PointerEvent`]),
+//! the message set they exchange ([`HostMessage`], [`AppMessage`]), the
+//! framing that carries it ([`codec`]), the rules about what may be said when
+//! ([`Session`]), and every limit any of that is bounded by ([`limits`]).
+//!
+//! ## This crate is the contract; `paper_sdk` is a convenience
+//!
+//! An app links `paper_sdk` because writing a frame loop by hand is tedious,
+//! not because the SDK is what holds it to anything. **The SDK is a statically
+//! linked library inside the app's own process, so it is not a security
+//! boundary and cannot be one.** Every rule that actually binds an app is
+//! enforced on the far side of the socket, by a host that assumes the app is
+//! hostile: the framing limits in [`codec`], the lifecycle rules in
+//! [`Session`], and the OS restrictions the supervisor applies to the process
+//! (WWW-4).
+//!
+//! That is why the enforcing code lives here rather than in the SDK, and why
+//! the tests for it drive raw bytes rather than SDK calls. See
+//! `docs/app-contract.md`.
+//!
+//! ## The four layers
+//!
+//! | Layer | Enforced by | Catches |
+//! |---|---|---|
+//! | Compile-time | `paper_sdk`'s types | An app that does not implement the interface |
+//! | Package-time | `paperctl check`, `paper_packages` | A package that could not run if it were installed |
+//! | Launch-time | [`Session`] and [`codec`], in the host | A binary that starts and then misbehaves |
+//! | Runtime | The supervisor's OS restrictions and deadlines | An app that ignores all of the above |
+//!
+//! Each layer assumes the one before it was skipped.
+//!
+//! ## Versioning
+//!
+//! [`CURRENT`] is what this build speaks. An app's SemVer and the protocol
+//! version are independent: Chess 3.0.0 and Chess 0.1.0 may both speak
+//! protocol `1.0`, and a protocol bump is not an app release. Compatibility is
+//! one-directional — [`ProtocolVersion::can_run`] — and an unsupported version
+//! is refused explicitly at both package time and launch time rather than
+//! being negotiated down.
 
-use std::fmt;
-use std::str::FromStr;
+pub mod capability;
+pub mod codec;
+pub mod geometry;
+pub mod id;
+pub mod input;
+pub mod lifecycle;
+pub mod limits;
+pub mod message;
+pub mod path;
+pub mod session;
+pub mod version;
 
-/// The app protocol version this build of the platform speaks.
-///
-/// Stays at `1.0` until the first message is actually defined; bumping it
-/// before there is a wire format to bump would be theatre.
-pub const CURRENT: ProtocolVersion = ProtocolVersion::new(1, 0);
-
-/// A `major.minor` version of the platform/app protocol.
-///
-/// Patch numbers are intentionally absent: a protocol either changed shape or
-/// it did not, and a version that cannot change behaviour is not worth
-/// carrying in a manifest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ProtocolVersion {
-    major: u16,
-    minor: u16,
-}
-
-impl ProtocolVersion {
-    /// Builds a version from its parts.
-    pub const fn new(major: u16, minor: u16) -> Self {
-        Self { major, minor }
-    }
-
-    /// Breaking-change counter. Different major means incompatible, full stop.
-    pub const fn major(self) -> u16 {
-        self.major
-    }
-
-    /// Additive-change counter within a major.
-    pub const fn minor(self) -> u16 {
-        self.minor
-    }
-
-    /// Whether a host speaking `self` can run an app built against `app`.
-    ///
-    /// The rule is one-directional on purpose: a host may be newer than the
-    /// app it runs, never older. An app that needs `1.3` will not start on a
-    /// `1.1` host, because the messages it expects do not exist there.
-    pub const fn can_run(self, app: ProtocolVersion) -> bool {
-        self.major == app.major && self.minor >= app.minor
-    }
-}
-
-impl fmt::Display for ProtocolVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}", self.major, self.minor)
-    }
-}
-
-/// Why a `major.minor` string could not be read as a [`ProtocolVersion`].
-///
-/// `#[non_exhaustive]` because this is re-exported as the `source` of
-/// `ManifestError::Protocol`, so it is part of a public error chain that other
-/// crates match on.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum ParseError {
-    /// The string was not exactly two dot-separated parts.
-    #[error("expected `major.minor`, got `{0}`")]
-    Shape(String),
-    /// A part was not a number that fits in `u16`.
-    #[error("`{part}` in `{input}` is not a version number")]
-    NotANumber {
-        /// The offending part, as written.
-        part: String,
-        /// The whole string it came from.
-        input: String,
-    },
-}
-
-impl FromStr for ProtocolVersion {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (major, minor) = s
-            .split_once('.')
-            .ok_or_else(|| ParseError::Shape(s.to_owned()))?;
-        if minor.contains('.') {
-            return Err(ParseError::Shape(s.to_owned()));
-        }
-        let parse = |part: &str| {
-            part.parse::<u16>().map_err(|_| ParseError::NotANumber {
-                part: part.to_owned(),
-                input: s.to_owned(),
-            })
-        };
-        Ok(Self::new(parse(major)?, parse(minor)?))
-    }
-}
-
-impl serde::Serialize for ProtocolVersion {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for ProtocolVersion {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(deserializer)?;
-        raw.parse().map_err(serde::de::Error::custom)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{CURRENT, ParseError, ProtocolVersion};
-
-    #[test]
-    fn parses_major_minor() {
-        assert_eq!(
-            "2.7".parse::<ProtocolVersion>().unwrap(),
-            ProtocolVersion::new(2, 7)
-        );
-    }
-
-    #[test]
-    fn rejects_semver_shaped_input() {
-        assert!(matches!(
-            "1.0.0".parse::<ProtocolVersion>(),
-            Err(ParseError::Shape(_))
-        ));
-        assert!(matches!(
-            "1".parse::<ProtocolVersion>(),
-            Err(ParseError::Shape(_))
-        ));
-    }
-
-    #[test]
-    fn rejects_non_numeric_parts() {
-        assert!(matches!(
-            "1.x".parse::<ProtocolVersion>(),
-            Err(ParseError::NotANumber { .. })
-        ));
-    }
-
-    #[test]
-    fn host_runs_equal_or_older_minor_only() {
-        let host = ProtocolVersion::new(1, 2);
-        assert!(host.can_run(ProtocolVersion::new(1, 0)));
-        assert!(host.can_run(ProtocolVersion::new(1, 2)));
-        assert!(!host.can_run(ProtocolVersion::new(1, 3)));
-        assert!(!host.can_run(ProtocolVersion::new(2, 0)));
-        assert!(!host.can_run(ProtocolVersion::new(0, 9)));
-    }
-
-    #[test]
-    fn current_round_trips_through_its_own_text_form() {
-        assert_eq!(
-            CURRENT.to_string().parse::<ProtocolVersion>().unwrap(),
-            CURRENT
-        );
-    }
-}
+pub use capability::Capability;
+pub use codec::CodecError;
+pub use geometry::{Point, Rect, Size};
+pub use id::{AppId, IdError};
+pub use input::{
+    ContactId, PEN_PRESSURE_FULL_SCALE, PEN_TILT_FULL_SCALE, Pointer, PointerEvent, PointerPhase,
+    Pressure, Tilt,
+};
+pub use lifecycle::{Action, ExitReason, LaunchReason, LifecycleEvent, Request};
+pub use limits::{
+    EXIT_DEADLINE, FRAME_DEADLINE, MAX_DAMAGE_RECTS, MAX_DIAGNOSTIC_BYTES, MAX_MESSAGE_BYTES,
+    MAX_SHARED_GRANTS, MIN_EXIT_DEADLINE, READY_DEADLINE,
+};
+pub use message::{
+    AppMessage, AppPaths, Damage, Diagnostic, DiagnosticLevel, DiagnosticRecord, DrawReason,
+    DrawRequest, FrameDone, FrameId, Hello, HostMessage, PixelFormat, Ready, Saved, SessionId,
+    SessionIdError, ShareAccess, SharedGrant, SurfaceDescriptor,
+};
+pub use path::{PathError, RelativePath};
+pub use session::{HostFault, Session, State, Violation};
+pub use version::{CURRENT, ParseError, ProtocolVersion};
