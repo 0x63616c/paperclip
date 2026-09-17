@@ -162,6 +162,17 @@ pub struct StockHealth {
     pub home_mounted: bool,
     /// How many notebook directories exist. Must not decrease.
     pub notebooks: Option<usize>,
+    /// systemd's `NRestarts` for the unit.
+    ///
+    /// **The field whose absence let a broken release path report success.**
+    /// A session that ends with Xochitl `active` and no failed units can still
+    /// have crashed it twice on the way there: systemd's `Restart=` retries,
+    /// and once a later start succeeds the unit is active and nothing is
+    /// listed as failed. Only this counter shows it.
+    pub n_restarts: Option<u32>,
+    /// `ExecMainStartTimestamp`. Two sessions apart it should differ; within
+    /// one restore it should be stable, because stock should start once.
+    pub main_start: Option<String>,
 }
 
 impl StockHealth {
@@ -185,12 +196,54 @@ impl StockHealth {
         {
             found.push(format!("notebook count fell from {before} to {after}"));
         }
+        // A restore that needed systemd to retry is not a restore that worked.
+        // Each retry is a Xochitl core dump and a step towards the start limit,
+        // and past that limit the tablet drops to an emergency shell.
+        if let (Some(before), Some(after)) = (before.n_restarts, self.n_restarts)
+            && after > before
+        {
+            found.push(format!(
+                "xochitl restarted {} time(s) during this session (NRestarts {before} -> {after}); \
+                 each one is a crash, and {START_LIMIT_BURST} within {}s reaches OnFailure and a \
+                 serial-console emergency shell",
+                after - before,
+                START_LIMIT_WINDOW.as_secs()
+            ));
+        }
         found
     }
 
     /// Whether this is a healthy tablet to walk away from.
     pub fn is_healthy(&self) -> bool {
         self.active && self.home_mounted && self.failed_units.is_empty()
+    }
+
+    /// How many more Xochitl failures this boot window can absorb before
+    /// `OnFailure=` sends the tablet to an emergency shell.
+    pub fn restarts_remaining(&self) -> Option<u32> {
+        self.n_restarts
+            .map(|used| START_LIMIT_BURST.saturating_sub(used))
+    }
+
+    /// Whether a takeover may begin at all.
+    ///
+    /// Refuses within two of the limit. The start budget counts *our* starts;
+    /// this counts systemd's, and the incident that motivated it consumed two
+    /// restarts we never asked for.
+    pub fn allows_takeover(&self) -> Result<(), DeviceError> {
+        let Some(remaining) = self.restarts_remaining() else {
+            return Ok(());
+        };
+        if remaining <= 2 {
+            return Err(DeviceError::unexpected(format!(
+                "xochitl has {} of {START_LIMIT_BURST} restarts left in this window. \
+                 Refusing to take the display: two more failures reach OnFailure and a \
+                 serial-console emergency shell. Wait {}s for the window to clear, or reboot.",
+                remaining,
+                START_LIMIT_WINDOW.as_secs()
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -333,6 +386,21 @@ mod linux {
             let notebooks = std::fs::read_dir("/home/root/.local/share/remarkable/xochitl")
                 .map(|entries| entries.count())
                 .ok();
+            let n_restarts = self
+                .run(&["show", "-p", "NRestarts", "--value", STOCK_UNIT])
+                .ok()
+                .and_then(|(_, text)| text.parse().ok());
+            let main_start = self
+                .run(&[
+                    "show",
+                    "-p",
+                    "ExecMainStartTimestamp",
+                    "--value",
+                    STOCK_UNIT,
+                ])
+                .ok()
+                .map(|(_, text)| text)
+                .filter(|text| !text.is_empty());
 
             StockHealth {
                 active,
@@ -340,6 +408,8 @@ mod linux {
                 failed_units,
                 home_mounted,
                 notebooks,
+                n_restarts,
+                main_start,
             }
         }
     }
@@ -410,6 +480,8 @@ mod tests {
             failed_units: Vec::new(),
             home_mounted: true,
             notebooks: Some(notebooks),
+            n_restarts: Some(0),
+            main_start: Some("Wed 2026-09-17 04:00:00 UTC".to_owned()),
         }
     }
 
@@ -506,6 +578,61 @@ mod tests {
         after.failed_units = vec!["something-else.service".to_owned()];
         assert!(after.regressions_from(&before)[0].contains("something-else.service"));
         assert!(!after.is_healthy());
+    }
+
+    #[test]
+    fn a_restart_during_the_session_is_a_regression_even_though_stock_ends_active() {
+        // The 04:05 incident in one assertion. Xochitl ended `active` with no
+        // failed units, because the third start worked — and the session had
+        // core-dumped it twice on the way there. `is_healthy` cannot see that;
+        // only the counter can.
+        let before = health(true, 54);
+        let mut after = health(true, 54);
+        after.n_restarts = Some(2);
+
+        assert!(
+            after.is_healthy(),
+            "this is exactly why is_healthy is not enough"
+        );
+        let regressions = after.regressions_from(&before);
+        assert_eq!(regressions.len(), 1);
+        assert!(
+            regressions[0].contains("restarted 2 time(s)"),
+            "{regressions:?}"
+        );
+        assert!(
+            regressions[0].contains("emergency shell"),
+            "{regressions:?}"
+        );
+    }
+
+    #[test]
+    fn a_takeover_is_refused_when_too_few_restarts_remain() {
+        let mut health = health(true, 54);
+
+        health.n_restarts = Some(0);
+        assert_eq!(health.restarts_remaining(), Some(4));
+        health.allows_takeover().expect("plenty of room");
+
+        health.n_restarts = Some(1);
+        health.allows_takeover().expect("three left is still room");
+
+        // Two used, two left: one more failed release could reach the limit.
+        health.n_restarts = Some(2);
+        let error = health.allows_takeover().expect_err("refuses");
+        assert!(error.to_string().contains("emergency shell"), "{error}");
+
+        health.n_restarts = Some(4);
+        assert_eq!(health.restarts_remaining(), Some(0));
+        health.allows_takeover().expect_err("refuses");
+    }
+
+    #[test]
+    fn a_device_that_does_not_report_restarts_is_not_blocked_by_the_guard() {
+        let mut health = health(true, 54);
+        health.n_restarts = None;
+        assert_eq!(health.restarts_remaining(), None);
+        health.allows_takeover().expect("unknown is not a refusal");
     }
 
     #[test]

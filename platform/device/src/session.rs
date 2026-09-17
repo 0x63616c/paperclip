@@ -395,3 +395,105 @@ mod tests {
         assert!(!Path::new(&lock).exists(), "nothing was written");
     }
 }
+
+/// The vendor lock files as they were before a takeover, so they can be put
+/// back exactly.
+///
+/// ## Why this type exists
+///
+/// Because leaving it out cost two Xochitl core dumps.
+///
+/// A takeover claims `/tmp/epframebuffer.lock` by writing its own PID there —
+/// correctly, since DRM master alone is not display ownership on this device.
+/// The first release path did not put it back. Xochitl restarted, read a
+/// foreign PID from a process that was *still alive* (ours, finishing its
+/// postflight), concluded another instance owned the panel, failed SWTCON
+/// initialisation and aborted. systemd's `Restart=` tried twice more before
+/// the third start succeeded:
+///
+/// ```text
+/// 04:05:58  another instance is already running
+/// 04:05:58  Failed to initialize SWTCON.
+/// 04:05:58  Main process exited, code=dumped, status=6/ABRT
+/// 04:05:58  Scheduled restart job, restart counter is at 1.
+/// ```
+///
+/// `NRestarts=2` against a `StartLimitBurst` of 4, with an `OnFailure=` that
+/// leads to a serial-console emergency shell. Two more and the tablet would
+/// have looked dead to its owner.
+///
+/// Note that this cannot be fixed by waiting for our process to exit: the
+/// release path *is* our process, and it has to start Xochitl before it can
+/// exit. The lock has to be put back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VendorLockState {
+    /// `/tmp/epframebuffer.lock`'s contents before takeover, or `None` if it
+    /// did not exist.
+    pub registry: Option<String>,
+    /// Whether `/tmp/epd.lock` existed before takeover.
+    pub epd_present: bool,
+    registry_path: PathBuf,
+    epd_path: PathBuf,
+}
+
+impl VendorLockState {
+    /// Records the real lock paths as they are now.
+    pub fn capture() -> Result<Self, DeviceError> {
+        Self::capture_at(Path::new(EPFRAMEBUFFER_LOCK), Path::new(EPD_LOCK))
+    }
+
+    /// Records explicit paths, so the restore is testable without a tablet.
+    pub fn capture_at(registry: &Path, epd: &Path) -> Result<Self, DeviceError> {
+        let contents = match fs::read_to_string(registry) {
+            Ok(contents) => Some(contents),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => None,
+            Err(source) => return Err(DeviceError::io("read", registry, source)),
+        };
+        Ok(Self {
+            registry: contents,
+            epd_present: epd.exists(),
+            registry_path: registry.to_path_buf(),
+            epd_path: epd.to_path_buf(),
+        })
+    }
+
+    /// Puts the locks back exactly as they were found.
+    ///
+    /// Present before → the original bytes are written back. Absent before →
+    /// removed. Either way Xochitl sees what it saw last time it started, and
+    /// never a PID belonging to us.
+    ///
+    /// Idempotent, and safe to call from a failure path.
+    pub fn restore(&self) -> Result<(), DeviceError> {
+        match &self.registry {
+            Some(contents) => fs::write(&self.registry_path, contents)
+                .map_err(|source| DeviceError::io("write to", &self.registry_path, source))?,
+            None => match fs::remove_file(&self.registry_path) {
+                Ok(()) => {}
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(DeviceError::io("remove", &self.registry_path, source));
+                }
+            },
+        }
+
+        // `/tmp/epd.lock` is a zero-length `flock` target owned by root, and its
+        // *presence* is normal — the lock is the file descriptor, not the file.
+        // Removing a root-owned file stock expects would be worse than leaving
+        // it, so this only reports a disagreement rather than acting on one.
+        if self.epd_present && !self.epd_path.exists() {
+            return Err(DeviceError::unexpected(format!(
+                "{} existed before the takeover and does not now",
+                self.epd_path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Whether the registry currently names a different holder than it did
+    /// before the takeover — i.e. whether the panel still looks claimed.
+    pub fn is_clear(&self) -> bool {
+        let current = fs::read_to_string(&self.registry_path).ok();
+        current == self.registry
+    }
+}

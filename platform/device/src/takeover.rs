@@ -6,9 +6,17 @@
 //!
 //! | | Acquire | Release |
 //! |---|---|---|
-//! | 1 | check the start budget | clear the panel (the caller, before dropping it) |
-//! | 2 | take the wakelock | restore stock |
-//! | 3 | stop stock cleanly | release the wakelock |
+//! | 1 | arm the watchdog | clear the panel (the caller, before dropping it) |
+//! | 2 | record the vendor lock state | **put the vendor locks back** |
+//! | 3 | check the start budget | wait until the panel is genuinely free |
+//! | 4 | take the wakelock | restore stock |
+//! | 5 | stop stock cleanly | release the wakelock |
+//!
+//! Step 2 of the release is not optional and its absence is not survivable.
+//! Leaving our PID in `/tmp/epframebuffer.lock` made Xochitl abort twice on
+//! restart — see [`VendorLockState`] for the journal. It has to happen
+//! *before* stock is started, because a restarting Xochitl reads that file
+//! immediately.
 //!
 //! Budget first, because a refusal must leave the tablet untouched. Wakelock
 //! before the stop, because the window where stock is down and nothing holds a
@@ -39,10 +47,12 @@
 //! explicitly on the normal path and let the destructor be the net.
 
 use std::fmt;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+
+use std::thread;
 
 use crate::error::DeviceError;
-use crate::session::WakeLock;
+use crate::session::{VendorLockState, WakeLock};
 use crate::stock::{ServiceControl, Stock};
 
 /// The wakelock tag a takeover holds, matching `lib-stock.sh`.
@@ -54,6 +64,10 @@ pub const WAKELOCK_TAG: &str = "paperclip-takeover";
 /// hazard — it would start Xochitl underneath a running session, which is two
 /// processes contending for the panel.
 pub const DEFAULT_WATCHDOG: Duration = Duration::from_secs(300);
+
+/// How long to wait for the panel to look unclaimed before starting stock
+/// anyway and reporting that it was not confirmed.
+pub const PANEL_FREE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Something that can arm an out-of-process restore.
 ///
@@ -88,6 +102,7 @@ pub struct Takeover<S: ServiceControl, W: Watchdog> {
     stock: Stock<S>,
     wake: Option<WakeLock>,
     watchdog: W,
+    locks: VendorLockState,
     released: bool,
 }
 
@@ -102,6 +117,7 @@ impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
         mut stock: Stock<S>,
         wake: WakeLock,
         mut watchdog: W,
+        locks: VendorLockState,
         budget: Duration,
         now: SystemTime,
     ) -> Result<Self, (DeviceError, WakeLock)> {
@@ -118,6 +134,7 @@ impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
             stock,
             wake: Some(wake),
             watchdog,
+            locks,
             released: false,
         })
     }
@@ -130,6 +147,24 @@ impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
     /// Access to stock, for reading health mid-session.
     pub fn stock_mut(&mut self) -> &mut Stock<S> {
         &mut self.stock
+    }
+
+    /// Polls until the vendor registry no longer names a holder we introduced.
+    ///
+    /// Bounded, and returns whether it got there rather than failing: the
+    /// caller still has to bring stock back either way, and a tablet with no
+    /// Xochitl is worse than one that had to retry.
+    fn wait_for_free_panel(&self) -> bool {
+        let deadline = Instant::now() + PANEL_FREE_TIMEOUT;
+        loop {
+            if self.locks.is_clear() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// Gives the display back and reports whether it worked.
@@ -147,9 +182,43 @@ impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
         }
         self.released = true;
 
-        // Stock first, then the wakelock: a suspend is harmless once Xochitl is
-        // running and harmful while it is not.
-        let restored = self.stock.restore(now);
+        // The locks go back BEFORE stock is started. A restarting Xochitl reads
+        // /tmp/epframebuffer.lock immediately; finding our PID there — from a
+        // process that is necessarily still alive, because it is this one — is
+        // what made it abort twice. Nothing about "wait for our process to
+        // exit" can fix that, since the release path cannot exit before it
+        // starts stock. Putting the file back is the whole fix.
+        let locks_restored = self.locks.restore();
+
+        // Then wait for the panel to actually look free, bounded. A fixed sleep
+        // would be either too short on a slow release or wasted time on a fast
+        // one, and this has a real answer to poll for.
+        let freed = if locks_restored.is_ok() {
+            self.wait_for_free_panel()
+        } else {
+            false
+        };
+
+        // Only now is it safe to bring stock back.
+        let restored = if freed {
+            self.stock.restore(now)
+        } else {
+            // Start anyway — a tablet with no Xochitl is worse than one that
+            // may have to retry — but never claim this went well.
+            let attempted = self.stock.restore(now);
+            let reason = locks_restored
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "the vendor lock still names a foreign holder".to_owned());
+            return match attempted {
+                Ok(()) => Err(DeviceError::unexpected(format!(
+                    "stock was started, but the panel was not confirmed free first: {reason}. \
+                     Check `systemctl show -p NRestarts xochitl.service` before taking the \
+                     display again."
+                ))),
+                Err(error) => Err(error),
+            };
+        };
 
         // The wakelock is released whatever the restore did. Leaking one blocks
         // suspend until the next reboot and drains the battery silently, and a
@@ -259,7 +328,7 @@ mod linux {
 mod tests {
     use super::{DEFAULT_WATCHDOG, NoWatchdog, Takeover, Watchdog};
     use crate::error::DeviceError;
-    use crate::session::WakeLock;
+    use crate::session::{VendorLockState, WakeLock};
     use crate::stock::{ServiceControl, StartBudget, Stock};
     use std::cell::RefCell;
     use std::fs;
@@ -369,6 +438,30 @@ mod tests {
         StartBudget::at(&dir.join("starts"))
     }
 
+    /// Lock state over scratch files. `registry` is what the vendor registry
+    /// held before the takeover, mirroring `/tmp/epframebuffer.lock`.
+    fn locks(dir: &std::path::Path, registry: Option<&str>) -> VendorLockState {
+        let registry_path = dir.join("epframebuffer.lock");
+        let epd_path = dir.join("epd.lock");
+        fs::write(&epd_path, "").expect("creates the epd lock");
+        match registry {
+            Some(contents) => fs::write(&registry_path, contents).expect("seeds the registry"),
+            None => {
+                let _ = fs::remove_file(&registry_path);
+            }
+        }
+        VendorLockState::capture_at(&registry_path, &epd_path).expect("captures")
+    }
+
+    /// What a takeover does to the registry: claims it with its own PID.
+    fn claim(dir: &std::path::Path, pid: u32) {
+        fs::write(
+            dir.join("epframebuffer.lock"),
+            format!("{pid}\npaperclip\nimx8mm-ferrari\nmachine\nboot\n"),
+        )
+        .expect("claims the registry");
+    }
+
     #[test]
     fn a_session_stops_stock_and_restores_it_in_the_right_order() {
         let dir = scratch("order");
@@ -379,6 +472,7 @@ mod tests {
             stock,
             wakelock(&dir),
             FakeWatchdog::new(&log),
+            locks(&dir, Some("before\n")),
             DEFAULT_WATCHDOG,
             SystemTime::now(),
         )
@@ -412,6 +506,7 @@ mod tests {
                 stock,
                 wakelock(&dir),
                 FakeWatchdog::new(&log),
+                locks(&dir, Some("before\n")),
                 DEFAULT_WATCHDOG,
                 SystemTime::now(),
             )
@@ -441,6 +536,7 @@ mod tests {
                 stock,
                 wakelock(&dir),
                 FakeWatchdog::new(&inner),
+                locks(&dir, Some("before\n")),
                 DEFAULT_WATCHDOG,
                 SystemTime::now(),
             )
@@ -471,6 +567,7 @@ mod tests {
             stock,
             wakelock(&dir),
             FakeWatchdog::new(&log),
+            locks(&dir, Some("before\n")),
             DEFAULT_WATCHDOG,
             now,
         )
@@ -492,6 +589,7 @@ mod tests {
             Stock::new(service, budget(&dir)),
             wakelock(&dir),
             FakeWatchdog::new(&log),
+            locks(&dir, Some("before\n")),
             DEFAULT_WATCHDOG,
             SystemTime::now(),
         )
@@ -515,6 +613,7 @@ mod tests {
             Stock::new(service, budget(&dir)),
             wakelock(&dir),
             FakeWatchdog::new(&log),
+            locks(&dir, Some("before\n")),
             DEFAULT_WATCHDOG,
             SystemTime::now(),
         )
@@ -549,6 +648,7 @@ mod tests {
             Stock::new(service, budget(&dir)),
             wakelock(&dir),
             FakeWatchdog::new(&log),
+            locks(&dir, Some("before\n")),
             DEFAULT_WATCHDOG,
             SystemTime::now(),
         )
@@ -569,6 +669,107 @@ mod tests {
     }
 
     #[test]
+    fn the_vendor_lock_is_put_back_before_stock_is_started() {
+        // The regression test for the 04:05 incident. Xochitl aborted twice
+        // because the registry still held our PID when it restarted, so the
+        // ordering here is the assertion: the registry must read what it read
+        // before the takeover *by the time* `start` happens.
+        let dir = scratch("lockorder");
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let registry = dir.join("epframebuffer.lock");
+        let state = locks(
+            &dir,
+            Some("35366\nxochitl\nimx8mm-ferrari\nmachine\nboot\n"),
+        );
+
+        // A service whose `start` records what the registry held at that moment.
+        #[derive(Debug)]
+        struct WatchingService {
+            inner: FakeService,
+            registry: PathBuf,
+            seen_at_start: Rc<RefCell<Option<String>>>,
+        }
+        impl ServiceControl for WatchingService {
+            fn is_active(&mut self) -> Result<bool, DeviceError> {
+                self.inner.is_active()
+            }
+            fn stop(&mut self) -> Result<(), DeviceError> {
+                self.inner.stop()
+            }
+            fn reset_failed(&mut self) -> Result<(), DeviceError> {
+                self.inner.reset_failed()
+            }
+            fn start(&mut self) -> Result<(), DeviceError> {
+                *self.seen_at_start.borrow_mut() = fs::read_to_string(&self.registry).ok();
+                self.inner.start()
+            }
+            fn wait_active(&mut self, timeout: Duration) -> Result<bool, DeviceError> {
+                self.inner.wait_active(timeout)
+            }
+        }
+
+        let seen = Rc::new(RefCell::new(None));
+        let service = WatchingService {
+            inner: FakeService::new(&log),
+            registry: registry.clone(),
+            seen_at_start: Rc::clone(&seen),
+        };
+
+        let session = Takeover::acquire(
+            Stock::new(service, budget(&dir)),
+            wakelock(&dir),
+            FakeWatchdog::new(&log),
+            state,
+            DEFAULT_WATCHDOG,
+            SystemTime::now(),
+        )
+        .map_err(|(error, _)| error)
+        .expect("takes the display");
+
+        // The vendor engine claims the panel, exactly as it does on device.
+        claim(&dir, std::process::id());
+        assert_ne!(
+            fs::read_to_string(&registry).expect("claimed"),
+            "35366\nxochitl\nimx8mm-ferrari\nmachine\nboot\n"
+        );
+
+        session.release(SystemTime::now()).expect("restores");
+
+        assert_eq!(
+            seen.borrow().as_deref(),
+            Some("35366\nxochitl\nimx8mm-ferrari\nmachine\nboot\n"),
+            "xochitl must not see our PID in the registry when it starts"
+        );
+    }
+
+    #[test]
+    fn a_registry_that_was_absent_before_is_removed_rather_than_left_behind() {
+        let dir = scratch("lockabsent");
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let registry = dir.join("epframebuffer.lock");
+        let state = locks(&dir, None);
+
+        let session = Takeover::acquire(
+            Stock::new(FakeService::new(&log), budget(&dir)),
+            wakelock(&dir),
+            FakeWatchdog::new(&log),
+            state,
+            DEFAULT_WATCHDOG,
+            SystemTime::now(),
+        )
+        .map_err(|(error, _)| error)
+        .expect("takes the display");
+
+        claim(&dir, std::process::id());
+        session.release(SystemTime::now()).expect("restores");
+
+        assert!(
+            !registry.exists(),
+            "a lock we introduced must not survive us"
+        );
+    }
+
+    #[test]
     fn releasing_twice_is_harmless() {
         let dir = scratch("twice");
         let log = Rc::new(RefCell::new(Vec::new()));
@@ -576,6 +777,7 @@ mod tests {
             Stock::new(FakeService::new(&log), budget(&dir)),
             wakelock(&dir),
             NoWatchdog,
+            locks(&dir, Some("before\n")),
             DEFAULT_WATCHDOG,
             SystemTime::now(),
         )
@@ -598,6 +800,7 @@ mod tests {
             Stock::new(service, budget(&dir)),
             wakelock(&dir),
             FakeWatchdog::new(&log),
+            locks(&dir, Some("before\n")),
             DEFAULT_WATCHDOG,
             SystemTime::now(),
         )

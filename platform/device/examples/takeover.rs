@@ -17,6 +17,7 @@
 use std::time::{Duration, Instant, SystemTime};
 
 use paper_device::panel::{Panel, present};
+use paper_device::session::VendorLockState;
 use paper_device::stock::{StartBudget, Stock, Systemctl};
 use paper_device::takeover::{DetachedWatchdog, Takeover, WAKELOCK_TAG};
 use paper_device::vendor::VendorPanel;
@@ -48,6 +49,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !before.is_healthy() {
         return Err("stock is not healthy before the session; refusing to take the display".into());
     }
+    // Two separate budgets, because they count different things. `StartBudget`
+    // counts starts *we* asked for; this counts systemd's own `Restart=`
+    // retries, which is what a crashed Xochitl produces. The incident that
+    // motivated this consumed two restarts nobody asked for.
+    before.allows_takeover()?;
+    println!(
+        "  restarts remaining before OnFailure: {:?}",
+        before.restarts_remaining()
+    );
+
+    // Recorded before anything is claimed, so the release can put the vendor
+    // locks back exactly as Xochitl left them.
+    let locks = VendorLockState::capture()?;
+    println!(
+        "  vendor registry before takeover: {}",
+        if locks.registry.is_some() {
+            "present"
+        } else {
+            "absent"
+        }
+    );
 
     // Wakelock before the display, always. On charge the tablet holds
     // `udev.charger` and will not suspend anyway, but relying on that is how a
@@ -56,10 +78,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("wakelock held: {}", wake.tag());
 
     let stock = Stock::new(Systemctl, StartBudget::shared());
-    let mut session = match Takeover::acquire(
+    let session = match Takeover::acquire(
         stock,
         wake,
         DetachedWatchdog::new(),
+        locks,
         SESSION_BUDGET,
         SystemTime::now(),
     ) {
@@ -84,9 +107,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let after = probe.health();
     println!("postflight: {after:?}");
+    // The check that was missing. Stock ending `active` with nothing failed is
+    // not evidence of a clean release: systemd retries, and a third start that
+    // works hides two core dumps behind it.
+    println!(
+        "  NRestarts {:?} -> {:?}; main start {:?} -> {:?}",
+        before.n_restarts, after.n_restarts, before.main_start, after.main_start
+    );
     let regressions = after.regressions_from(&before);
     if regressions.is_empty() {
-        println!("VERIFIED: stock is where it was found");
+        println!("VERIFIED: stock is where it was found, and started once");
     } else {
         return Err(format!("stock regressed: {regressions:?}").into());
     }

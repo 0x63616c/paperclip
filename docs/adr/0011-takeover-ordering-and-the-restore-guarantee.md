@@ -1,6 +1,13 @@
 # ADR-0011 — Takeover ordering, and what actually guarantees the restore
 
-**Status:** accepted for the shape, **never run on the tablet** (Stage 3, WWW-3).
+**Status:** accepted, **amended after a hardware incident** (Stage 3, WWW-3).
+
+> **Amendment, 2026-09-17.** The release order below originally ended at
+> "restore stock", and that was wrong in a way that hurt: it left our PID in
+> `/tmp/epframebuffer.lock`, Xochitl read it on restart, and aborted twice.
+> `NRestarts=2` of a permitted 4. The table now has a step 2 that puts the
+> vendor locks back **before** stock is started, and the "what guarantees the
+> restore" section has been rewritten — the original three layers did not.
 
 ## Context
 
@@ -31,9 +38,11 @@ One type, `paper_device::Takeover`, owns the order:
 | | Acquire | Release |
 |---|---|---|
 | 1 | arm the watchdog | clear the panel |
-| 2 | check the start budget | restore stock |
-| 3 | take the wakelock | release the wakelock |
-| 4 | stop stock cleanly | disarm the watchdog |
+| 2 | record the vendor lock state | **put the vendor locks back** |
+| 3 | check the start budget | wait until the panel is genuinely free |
+| 4 | take the wakelock | restore stock |
+| 5 | stop stock cleanly | release the wakelock |
+| 6 | | disarm the watchdog |
 
 The watchdog is armed **first**, before anything can go wrong, so even a failure
 inside the stop is covered by something outside this process. The budget is
@@ -69,9 +78,51 @@ tablet to stock (ADR-0008). Further attempts past that point are more likely to
 strand the device than to rescue it, and a human holding it has options this
 process does not.
 
+## The lock step, and why it is where it is
+
+A takeover claims `/tmp/epframebuffer.lock` by writing its own PID — correctly,
+since DRM master alone is not display ownership here. Releasing without putting
+that file back produced this, at 04:05 on 2026-09-17:
+
+```text
+04:05:57  Started reMarkable main application.
+04:05:58  another instance is already running
+04:05:58  Failed to initialize SWTCON.
+04:05:58  Main process exited, code=dumped, status=6/ABRT
+04:05:58  Scheduled restart job, restart counter is at 1.
+          [second abort, then a third start that succeeded]
+```
+
+Calum was asked for his passcode. `NRestarts=2` against a `StartLimitBurst` of
+4 with an `OnFailure=` that leads to a serial-console emergency shell — two
+more and the tablet looks dead to its owner.
+
+**It cannot be fixed by waiting for our process to exit.** The release path
+*is* our process, and it has to start Xochitl before it can exit, so the PID in
+that file is necessarily live at the moment Xochitl reads it. The file has to
+be put back, and put back before the start.
+
+`VendorLockState` records the registry's contents at preflight and restores
+exactly that — the original bytes if it existed, removal if it did not. Then
+the release polls, bounded, until the registry reads what it read before, and
+only then starts stock. If it never gets there, stock is started anyway — a
+tablet with no Xochitl is worse than one that had to retry — but the release
+returns an error rather than reporting success.
+
+`/tmp/epd.lock` is a zero-length `flock` target owned by root; its presence is
+normal and the lock is the descriptor, not the file. Its state is recorded and
+a disagreement is reported, but it is not deleted: removing a root-owned file
+stock expects would be worse than leaving it.
+
 ## What guarantees the restore
 
-Three layers, because no one of them covers everything:
+Four layers. The original three did not, which is the correction this ADR
+carries:
+
+0. **Putting the vendor locks back, before stock starts.** Listed first
+   because it is the one whose absence caused a real incident, and because no
+   later layer substitutes for it — the watchdog would have started a Xochitl
+   that aborted just the same.
 
 1. **`Drop`** — the ordinary path, and a panic unwind. A test panics inside a
    held session and asserts stock comes back, because a bug in screen code must
@@ -86,10 +137,26 @@ Three layers, because no one of them covers everything:
 `Drop` cannot report a failed restore, so `release()` exists to be called
 explicitly and the destructor is the net, not the plan.
 
+## Verifying the restore, not just performing it
+
+`StockHealth` gained `n_restarts` and `main_start`, because the check that
+passed during the incident was not wrong so much as blind: Xochitl ended
+`active` with `systemctl --failed` empty, since the *third* start worked.
+`is_healthy()` still returns true for that state — deliberately, and there is a
+test asserting it does — so the comparison now reads systemd's `NRestarts` and
+treats any increase across a session as a regression.
+
+There is also a new precondition. `StartBudget` counts starts *we* asked for;
+it could not have prevented this, because these were systemd's own `Restart=`
+retries. `StockHealth::allows_takeover()` refuses to begin within two restarts
+of the limit, reading systemd's counter rather than ours.
+
 ## What is proven
 
 On the Mac, against a fake `ServiceControl` that records every systemd call in
-order: the acquire and release sequences; restore on drop; **restore after a
+order — including a service that captures what the registry held at the moment
+`start` was called, so the *ordering* of the lock restore is asserted rather
+than assumed. Both lock tests were confirmed to fail with the restore removed: the acquire and release sequences; restore on drop; **restore after a
 panic**; a spent budget refusing before stock is touched; a failed stop leaving
 stock running and handing the wakelock back to the caller; exactly one guarded
 retry; a hopeless restore reporting failure, releasing the wakelock anyway, and

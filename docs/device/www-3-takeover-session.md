@@ -98,6 +98,26 @@ look identical from this side.
 Also untouched: input during a session, ghosting, memory and CPU, and behaviour
 across a real suspend (the tablet was on charge, so it never suspended).
 
+## Correction, 2026-09-17: this session was not as clean as it reported
+
+The three round trips above were real, and the report of them was wrong in one
+respect. `VERIFIED: stock is where it was found` was produced by a health check
+that did not read systemd's `NRestarts`.
+
+At 04:05 Xochitl **aborted twice** on restart before a third start succeeded,
+because the release path left our PID in `/tmp/epframebuffer.lock`. Calum saw
+the clear sequence and was then asked for his passcode. `NRestarts=2` of a
+permitted 4.
+
+Stock ended `active` with no failed units, which is why the check passed and
+why it was insufficient: systemd retries, and a successful third start hides
+two core dumps behind it. The fix and the regression tests are in ADR-0011;
+`StockHealth` now reads `NRestarts` and treats any increase as a regression,
+and a takeover is refused within two restarts of the limit.
+
+The timings and the engine evidence above stand. The verification claim did
+not.
+
 ## Start budget
 
 Three sessions consumed three of `xochitl.service`'s four starts in ten
