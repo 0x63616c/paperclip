@@ -43,11 +43,9 @@ policy directly. Every read and every write goes through
 snapshot each of installed apps, storage usage, grants, catalog status,
 platform facts and diagnostics) and three write methods — `rollback`,
 `uninstall`, `revoke_grant` — which are exactly the Host transactions this app
-is scoped to. This is the one module this pass introduces that a real Host
-client should replace; nothing above it (`nav`, `pages`, `confirm`, `screen`)
-should need to change shape when that happens. Until then,
-`host::PlaceholderHost` is fixture data for the desktop preview and the test
-suite — not device evidence, not a Host implementation.
+is scoped to. `host::PlaceholderHost` is fixture data for the desktop preview
+and this crate's own tests — not device evidence. `host::LiveHost` (added in
+the second pass, below) is the implementation backed by a real store.
 
 ## What Settings is granted, and what it deliberately is not
 
@@ -73,15 +71,17 @@ What that leaves, stated plainly:
 - Settings needs **more than an ordinary app**: read access to every
   installed app's manifest and storage footprint, and to the platform's
   grant table, that an ordinary app is never given about anyone but itself.
-  As of this pass, nothing in the landed `paper-packages`/`paper-host` surface
-  models that access either — `PackageManager` exposes `install`, `rollback`
-  and `recover`, scoped to one app at a time, and no `uninstall` yet exists
-  anywhere in the Host layer. Defining the shape of a cross-app,
-  read-plus-administer surface (and whether `uninstall` belongs on
-  `PackageManager` at all) is follow-up work, not invented here.
+  `PackageManager` exposes `install`, `rollback` and `recover`, scoped to one
+  app at a time; `LiveHost` (below) reads across every app through
+  `Inventory::survey` and `Layout`'s own directory accessors instead of a
+  dedicated cross-app grant, because nothing needs to authorize Settings
+  specifically to call functions that already take a `Layout` by value.
+  What genuinely does not exist yet — no `uninstall` transaction anywhere in
+  the Host layer, no persisted or enumerable grant store behind
+  `InstallPolicy` — is recorded in the second pass below, not invented here.
 - Settings needs **built on the SDK like any other app** — no special access
-  to Qt, systemd, SSH or Xochitl. Nothing in `apps/settings` uses `unsafe`,
-  touches `platform/device`, or shells out.
+  to Qt, systemd, SSH or Xochitl. Nothing in `apps/settings` uses `unsafe` or
+  touches `platform/device`.
 
 ## Consequences
 
@@ -94,15 +94,72 @@ What that leaves, stated plainly:
 - `tests/system` now validates the settings manifest alongside home's and
   chess's (id distinctness, no self-granted capability, runnable protocol),
   and checks the settings screen renders at the real panel geometry.
-- A real `SettingsHost` implementation, and the shape of the cross-app
-  read/administer surface it needs from `paper-packages`/`paper-host`
-  (including whether `uninstall` is ever added to `PackageManager`), are
-  follow-up work against the `paper-packages` surface WWW-7 landed on `main`
-  while this issue was in progress.
+
+## Second pass: wiring `LiveHost` (2026-09-17, same day)
+
+WWW-5 and WWW-7 landed for real while this issue was open — the app contract,
+the install transaction, catalog and rollback machinery (`paper_packages`:
+`inventory`, `install`, `launch`, `store`, `catalog`). Evee asked for the
+placeholder restriction to be lifted and the pages wired to what now exists.
+Verified against the landed code (not assumed) before wiring anything:
+
+- **Installed apps and rollback: real.** `host::LiveHost` builds
+  `InstalledAppSummary` rows from `paper_packages::inventory::Inventory`, and
+  `rollback` calls `PackageManager::rollback` — the same calls
+  `tools/paperctl install|list|rollback` make against `Layout::from_environment()`.
+  Tested against a real temp-directory store, seeded the same way
+  `paper_packages`' own tests seed one — not a mock of the store, the store.
+- **Storage: real.** `Layout` gained `data_bytes`/`shared_bytes`/
+  `staging_bytes`/`releases_bytes`/`app_data_bytes` (recursive, safe directory
+  walks; missing directories count as `0`, not an error) and `free_bytes`,
+  which shells out to `df -Pk` — matching `platform/host/src/probe.rs`'s
+  existing pattern of reading system facts via a command rather than adding
+  FFI for one number. No `unsafe` added anywhere in this pass.
+- **Uninstall: still not supported, confirmed rather than assumed.** There is
+  no `uninstall`/`remove`/`delete` transaction anywhere in `paper_packages` —
+  `PackageManager` has `install`, `rollback`, `recover` and nothing else. A
+  hand-rolled uninstall in `apps/settings` — deleting `apps/<id>`, `data/<id>`
+  and the selection files directly — would bypass the journal-and-fsync
+  durability `store.rs` exists to guarantee (see its own module doc: "what a
+  power cut is allowed to leave"), for the operation with the most to lose
+  from getting that wrong. `LiveHost::uninstall` returns
+  `HostOpError::NotSupported` with the reason attached, rather than doing
+  that or silently pretending to succeed.
+- **Grants: still not supported, confirmed rather than assumed.**
+  `InstallPolicy` (ADR-0003) is constructed fresh per install and is never
+  persisted or enumerated — there is no "every grant currently in force" to
+  read, and no store to revoke one from. `LiveHost::grants` returns an empty
+  list (the honest answer: nothing is known to be granted) and
+  `LiveHost::revoke_grant` returns `HostOpError::NotSupported`.
+- **Catalog: still not supported, confirmed rather than assumed.** No catalog
+  endpoint is persisted anywhere a Settings-launched process could read it —
+  `paperctl install`/`list` take `--catalog` explicitly on every invocation,
+  with no default. `LiveHost::catalog_status` reports "not configured",
+  which is the real state, not a fixture standing in for one.
+- **Platform facts: partially real.** `paperclip_version` now comes from
+  `env!("CARGO_PKG_VERSION")` rather than a literal. `firmware` and
+  `active_release` stay "not verified" — nothing in this pass runs on the
+  device, and inventing a firmware string would violate the project's own
+  standing rule against claiming a hardware gate without device evidence.
+- **Diagnostics: real, plus one addition.** Failed-launch entries come from
+  `paper_packages::launch::Ledger::health` per app. A synthetic entry states
+  plainly that grants and catalog have no persisted Host state yet, so the
+  page does not read as "verified empty" when it is actually "nothing to
+  read."
+- Nothing in `tools/paperctl`'s preview or screenshot path changed to use
+  `LiveHost` — it still draws from `PlaceholderHost`, deterministic and
+  already covered by existing tests. `LiveHost` is proven by 7 new tests in
+  `apps/settings/src/host.rs` against real temp-directory stores (installed
+  apps, rollback, rollback-with-nothing-to-roll-back-to, storage byte counts,
+  and that uninstall/grants/catalog report their real absence rather than
+  fake presence), not by a screenshot.
 
 ## What would make this wrong
 
 If a future decision concludes the cross-app surface Settings needs *is*
 better expressed as `Capability` variants after all (rather than a separate,
 non-sandbox authorization concept), this ADR's reasoning would be superseded
-by that decision, not by this document.
+by that decision, not by this document. If `paper_packages` grows an
+`uninstall` transaction or a persisted grant store, `LiveHost`'s two
+`NotSupported` returns are exactly what should be replaced, and nothing above
+`host.rs` should need to change shape when that happens.

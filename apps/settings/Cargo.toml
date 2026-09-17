@@ -12,5 +12,8 @@ repository.workspace = true
 paper-packages = { workspace = true }
 paper-sdk = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

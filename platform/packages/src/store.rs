@@ -40,6 +40,7 @@
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -245,6 +246,99 @@ impl Layout {
             Ok(None)
         }
     }
+
+    /// Bytes held under every app's own writable directory (`data/`).
+    pub fn data_bytes(&self) -> u64 {
+        tree_bytes(&self.root.join("data"))
+    }
+
+    /// Bytes held under one app's own writable directory.
+    pub fn app_data_bytes(&self, app: &AppId) -> u64 {
+        tree_bytes(&self.data_dir(app))
+    }
+
+    /// Bytes held under every cross-app sharing grant (`shared/`).
+    pub fn shared_bytes(&self) -> u64 {
+        tree_bytes(&self.root.join("shared"))
+    }
+
+    /// Bytes held in `staging/` — downloads and extractions in progress.
+    pub fn staging_bytes(&self) -> u64 {
+        tree_bytes(&self.staging_dir())
+    }
+
+    /// Bytes held across every app's release directories (`apps/`).
+    ///
+    /// Includes the release payloads themselves, not just their metadata —
+    /// this is what an uninstall or a prune actually gives back.
+    pub fn releases_bytes(&self) -> u64 {
+        tree_bytes(&self.root.join("apps"))
+    }
+
+    /// Bytes free on the filesystem this layout's root lives on.
+    ///
+    /// Shells out to `df` rather than a raw `statvfs` call: this crate has no
+    /// FFI today, `platform/host/src/probe.rs` already reads system facts by
+    /// running a command, and disk space is a number that changes by the
+    /// megabyte, not one that justifies adding unsafe code to get a few
+    /// microseconds back. Walks up to the nearest existing ancestor first,
+    /// because the root itself may not have been [`Self::ensure`]d yet.
+    pub fn free_bytes(&self) -> Result<u64, StoreError> {
+        let mut probe = self.root.as_path();
+        while !probe.exists() {
+            match probe.parent() {
+                Some(parent) => probe = parent,
+                None => break,
+            }
+        }
+
+        let output = Command::new("df")
+            .arg("-Pk")
+            .arg(probe)
+            .output()
+            .map_err(|source| StoreError::io(probe, source))?;
+        if !output.status.success() {
+            return Err(StoreError::io(
+                probe,
+                io::Error::other(format!("df exited with {}", output.status)),
+            ));
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        // POSIX format (`-P`) guarantees one line per filesystem with no
+        // wrapping: header, then exactly the line we want.
+        let data_line = text
+            .lines()
+            .nth(1)
+            .ok_or_else(|| StoreError::io(probe, io::Error::other("df produced no data line")))?;
+        let available_kb: u64 = data_line
+            .split_whitespace()
+            .nth(3)
+            .and_then(|field| field.parse().ok())
+            .ok_or_else(|| StoreError::io(probe, io::Error::other("could not parse df output")))?;
+        Ok(available_kb * 1024)
+    }
+}
+
+/// Total bytes held under `path`, walked recursively.
+///
+/// Missing paths, and anything unreadable along the way, count as `0` rather
+/// than an error — an empty bucket (nothing staged yet, no app given a
+/// shared grant) is the normal case, not a fault worth stopping a page over.
+fn tree_bytes(path: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries.flatten().fold(0, |total, entry| {
+        let Ok(metadata) = entry.metadata() else {
+            return total;
+        };
+        if metadata.is_dir() {
+            total + tree_bytes(&entry.path())
+        } else {
+            total + metadata.len()
+        }
+    })
 }
 
 /// What a completed release directory records about itself.
@@ -786,5 +880,45 @@ mod tests {
                 .starts_with(layout.release_dir(&app(), &version))
         );
         assert!(!layout.data_dir(&app()).starts_with(layout.app_dir(&app())));
+    }
+
+    #[test]
+    fn an_empty_layout_reports_zero_for_every_bucket() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path());
+        layout.ensure().unwrap();
+
+        assert_eq!(layout.data_bytes(), 0);
+        assert_eq!(layout.shared_bytes(), 0);
+        assert_eq!(layout.staging_bytes(), 0);
+        assert_eq!(layout.releases_bytes(), 0);
+        assert_eq!(layout.app_data_bytes(&app()), 0);
+    }
+
+    #[test]
+    fn bucket_sizes_count_bytes_actually_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path());
+        layout.ensure().unwrap();
+
+        fs::create_dir_all(layout.data_dir(&app())).unwrap();
+        fs::write(layout.data_dir(&app()).join("save.txt"), b"0123456789").unwrap();
+        fs::create_dir_all(layout.data_dir(&app()).join("sub")).unwrap();
+        fs::write(layout.data_dir(&app()).join("sub/more.txt"), b"12345").unwrap();
+
+        assert_eq!(layout.app_data_bytes(&app()), 15);
+        assert_eq!(layout.data_bytes(), 15);
+        // A different app's bucket stays untouched by this one's writes.
+        let store: AppId = "dev.calum.app-store".parse().unwrap();
+        assert_eq!(layout.app_data_bytes(&store), 0);
+    }
+
+    #[test]
+    fn free_bytes_reports_a_real_positive_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path());
+        // Deliberately not `ensure()`d: the root itself may not exist yet,
+        // and `free_bytes` has to walk up to a real ancestor regardless.
+        assert!(layout.free_bytes().unwrap() > 0);
     }
 }
