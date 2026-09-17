@@ -1,0 +1,10 @@
+# The home screen is itself a Paperclip app, and carries the same manifest
+# every other app does. Nothing about being first-party shortens the contract.
+
+[app]
+id = "dev.calum.home"
+name = "Home"
+version = "0.1.0"
+protocol = "1.0"
+entrypoint = "bin/home"
+assets = []

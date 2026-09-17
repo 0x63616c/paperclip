@@ -1,0 +1,21 @@
+[package]
+name = "paperctl"
+description = "The Paperclip command line: desktop preview, screenshots, manifest validation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+paper-chess = { workspace = true }
+paper-home = { workspace = true }
+paper-packages = { workspace = true }
+paper-protocol = { workspace = true }
+paper-sdk = { workspace = true, features = ["desktop"] }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

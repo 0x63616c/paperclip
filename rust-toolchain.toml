@@ -1,0 +1,7 @@
+# Pinned so every build on the Mac — and every later cross build — starts from
+# the same compiler. Bump deliberately, in its own commit, with a note in the
+# ADR log if the bump is forced by a dependency.
+[toolchain]
+channel = "1.94.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
