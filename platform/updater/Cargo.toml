@@ -1,0 +1,63 @@
+# The platform updater (§13, §14).
+#
+# A separate crate from `paper-host`, and the separation is the requirement
+# rather than tidiness: §13 says the updater must be independent of the host
+# being replaced. A host that contained its own updater could not honestly
+# report whether the replacement came back, because the process doing the
+# reporting is the process being replaced.
+#
+# Split the same way `paper-host` is:
+#
+#   * `layout`, `manifest`, `journal`, `health`, `upgrade`, `remove` are
+#     platform-free. They decide what happens, and are tested on the Mac.
+#   * `linux` drives systemd and sysfs, compiles only on Linux, and is proven
+#     by `tests/failure-harness` in a VM.
+#
+# The seam between them is `SessionControl`. A Mac test can prove the
+# transaction is right; only the VM can prove the session control is real.
+[package]
+name = "paper-updater"
+description = "The Paperclip platform update transaction: stage, activate, verify, commit, roll back."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+autotests = false
+
+[lib]
+name = "paper_updater"
+path = "src/lib.rs"
+
+[[test]]
+name = "upgrade"
+path = "tests/upgrade.rs"
+harness = true
+
+[features]
+# On by default because the Mac is where this crate is built and tested; the
+# device build says `default-features = false`, exactly as it does for
+# `paper-packages`, so the tablet cannot link a code path that renders a
+# platform manifest for signing (§12).
+default = ["publishing"]
+publishing = ["paper-packages/publishing", "dep:flate2", "dep:tar"]
+
+[dependencies]
+paper-host = { workspace = true }
+paper-device = { workspace = true }
+flate2 = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+paper-packages = { workspace = true }
+paper-protocol = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

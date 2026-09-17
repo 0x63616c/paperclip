@@ -12,6 +12,7 @@ members = [
     "platform/sdk",
     "platform/device",
     "platform/host",
+    "platform/updater",
     "apps/app-store",
     "apps/home",
     "apps/chess",
@@ -45,6 +46,11 @@ paper-device = { path = "platform/device" }
 paper-app-store = { path = "apps/app-store" }
 paper-home = { path = "apps/home" }
 paper-host = { path = "platform/host" }
+# `default-features = false` here for the reason `paper-packages` has it: the
+# default feature renders the document a signature is made over, and the
+# device build must not contain it. `paperctl` turns it on behind its own
+# `publishing` feature.
+paper-updater = { path = "platform/updater", default-features = false }
 paper-chess = { path = "apps/chess" }
 paper-settings = { path = "apps/settings" }
 paper-chess-rules = { path = "apps/chess-rules" }
