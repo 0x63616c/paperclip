@@ -27,7 +27,11 @@ use crate::waveform::{ContentType, GhostControl, PixelRect, Refresh, Waveform};
 
 /// The ABI version this crate was built against. Must match
 /// `PAPERCLIP_EP_ABI_VERSION` in `native/paperclip_ep.h`.
-const ABI_VERSION: u32 = 2;
+///
+/// 3 since WWW-30, which added [`VendorStatus::Detached`]. A bridge built at 2
+/// cannot produce that status, so a stale `.so` would present orphaned frames
+/// and call it success — exactly what this check exists to stop.
+const ABI_VERSION: u32 = 3;
 
 #[repr(C)]
 struct RawHandle {
@@ -164,6 +168,11 @@ impl Panel for VendorPanel {
     }
 
     fn buffer(&mut self) -> Result<PanelBuffer<'_>, DeviceError> {
+        // The bridge returns the same address every time — cached before the
+        // engine was handed the buffers, and the memory the engine shares. See
+        // the no-detach invariant in `native/paperclip_ep.h`: this pointer
+        // being stable is the reason drawing here reaches the panel at all.
+        //
         // SAFETY: `self.handle` is live for as long as `self` is.
         let raw = unsafe { paperclip_ep_buffer(self.handle.as_ptr()) };
         let raw = NonNull::new(raw).ok_or_else(|| DeviceError::Vendor {
@@ -173,8 +182,9 @@ impl Panel for VendorPanel {
         let len = self.stride * self.size.height as usize;
 
         // SAFETY: the bridge owns `height * stride` u32 of ARGB8888 for the
-        // lifetime of the handle, and `&mut self` means no other borrow of it
-        // exists. The returned slice's lifetime is tied to `self`, so it cannot
+        // lifetime of the handle — the same allocation for that whole lifetime,
+        // because the bridge never lets Qt reallocate it — and `&mut self`
+        // means no other borrow of it exists. The returned slice's lifetime is tied to `self`, so it cannot
         // outlive the engine that owns the memory.
         let pixels = unsafe { std::slice::from_raw_parts_mut(raw.as_ptr(), len) };
         Ok(PanelBuffer {
@@ -236,6 +246,10 @@ impl Panel for VendorPanel {
         // is a live allocation of exactly `wanted` u32 that outlives the call.
         // The bridge copies through Qt's const accessor and writes nothing
         // beyond `wanted`, which it re-checks against the plane's own extent.
+        //
+        // A front-plane read fails with `VendorStatus::Detached` rather than
+        // returning this side's private copy, which is the shape WWW-23's
+        // reassuring-but-vacuous match took.
         check(unsafe {
             paperclip_ep_readback(self.handle.as_ptr(), which, pixels.as_mut_ptr(), wanted)
         })?;

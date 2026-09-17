@@ -44,10 +44,11 @@ pub struct PanelBuffer<'a> {
 
 /// One of the three buffers the vendor engine was given.
 ///
-/// `paperclip_ep_open` hands it `setBuffers(make_tuple(front, back), &aux)`.
-/// Which one it presents from is not documented and has never been established
-/// on hardware — the note has been in `native/paperclip_ep.cpp` since WWW-3.
-/// Being able to read all three is how that question gets answered.
+/// `paperclip_ep_open` hands it `setBuffers(make_tuple(front, back), &aux)`,
+/// and it presents from `front` — settled by WWW-29's disassembly of
+/// `setBuffers`, not by reading the planes back, which cannot answer it. Being
+/// able to read all three is still how a frame gets checked against what was
+/// sent; see [`Panel::readback`] for what that is and is not worth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plane {
     /// Where [`Panel::buffer`] draws.
@@ -103,6 +104,15 @@ pub trait Panel: fmt::Debug {
     /// "the engine still has our pixels" — which does rule out the one failure
     /// that is otherwise invisible from here, a silent fallback that reports
     /// success over a blank or substituted frame (§17).
+    ///
+    /// It supports even that much only because the vendor engine *shares* the
+    /// front buffer rather than copying it, so reading it reads the engine's
+    /// memory. WWW-29 found that the bridge had broken that sharing, which made
+    /// a front match this side's private copy agreeing with itself — true for
+    /// any engine behaviour whatever. The bridge now refuses a detached front
+    /// with [`VendorStatus::Detached`] instead of answering; see ADR-0009.
+    ///
+    /// [`VendorStatus::Detached`]: crate::error::VendorStatus::Detached
     fn readback(&self, plane: Plane) -> Result<Vec<u32>, DeviceError>;
 
     /// Drives the whole panel white and waits for the waveform to settle.

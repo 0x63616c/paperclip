@@ -503,6 +503,13 @@ pub struct PanelWork {
 /// holding them, which rules out a silent fallback presenting a blank or
 /// substituted frame and reporting success. What it does not buy: anything
 /// about photons. That still needs a camera (§17).
+///
+/// And it buys that only while the bridge's no-detach invariant holds — the
+/// engine shares the front buffer, so reading it reads the engine's memory.
+/// WWW-23's front match was taken before WWW-29 found the invariant broken, and
+/// was therefore vacuous: this side's private copy agreeing with itself. The
+/// bridge now returns `VendorStatus::Detached` rather than a digest it knows
+/// is uninformative, so a `matches_sent` on `front` means what it says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaneDigest {
     /// Which buffer this is.

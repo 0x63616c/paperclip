@@ -13,6 +13,11 @@
 # /dev/dri, no waveform tables and no e-ink. The run stage is expected to stop
 # at the vendor's own precondition check, and the point is *which* check.
 #
+# It finishes by running `check-host.sh`, which needs Qt but not the vendor
+# library: the Qt implicit-sharing behaviour the display path rests on, and the
+# bridge's no-detach invariant (WWW-30). Those are semantic checks rather than
+# build ones, and the container is the one place both always run.
+#
 # Needs docker. `check-abi.sh` is the version that needs nothing.
 
 vendor=$1
@@ -74,6 +79,9 @@ case $rc in
   134|139) echo "FAIL: the process aborted or segfaulted. preflight() no longer guards the vendor's abort path." ; exit 1 ;;
   *)  echo "FAIL: unexpected exit $rc" ; exit 1 ;;
 esac
+
+echo "== host checks =="
+sh /native/check-host.sh || { echo "FAIL: the host checks did not pass"; exit 1; }
 INNER
 
 docker run --rm --platform linux/arm64 \

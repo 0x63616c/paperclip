@@ -1,5 +1,22 @@
 # WWW-23 — first light, and the lock that made it cost two incidents
 
+> **Corrected 2026-09-17 by WWW-29/WWW-30. Two claims on this page are
+> withdrawn, and this log is kept as written rather than rewritten.**
+>
+> - **"Home is on the panel" is not supported.** Nobody looked at the glass
+>   during this session. The bridge had detached its drawing buffer from the
+>   one the vendor engine holds, so what the engine was given to present was
+>   the all-white fill from `open` — every present between WWW-3 and WWW-30.
+> - **The readback below does not establish which buffer the engine uses,** and
+>   after the detach it did not even establish that the engine held our pixels.
+>   `front` was read from this side's private copy, so it matched the frame that
+>   was sent no matter what the engine did. `setBuffers` storing by
+>   `QImage::operator=` is what actually settles it, read off the library in
+>   WWW-29; see ADR-0009.
+>
+> Everything else here stands: the lock finding, the reboot post-mortem, the
+> takeover and release sequence, the timings and the sysfs samples.
+
 Home is on the panel. `paperctl open` presents the real shelf through the
 vendor waveform engine, holds it, clears it and gives the display back with
 stock verifiably unharmed — `NRestarts` 0 to 0, notebooks 59 to 59,
@@ -84,6 +101,17 @@ the image and change what it is measuring.
 `paperclip_ep_open` fills all three planes with. So the engine presents from
 `front`, the plane the caller already draws into, and the `UNVERIFIED` note that
 has sat in `paperclip_ep.cpp` since WWW-3 is now answered. ADR-0009 records it.
+
+> **Withdrawn (WWW-29).** The conclusion is right and the reasoning was not.
+> `paperclip_ep_buffer` returned `QImage::bits()`, which detaches a shared
+> image, so by the time anything was drawn `front` was a private copy the
+> engine had never seen. This readback compared that copy against itself: it
+> would have matched however the engine behaved, and `back` and `aux` staying
+> white said only that nothing wrote to them. Which plane the engine presents
+> from was settled instead by disassembling `setBuffers`. The bridge now caches
+> the pixel address before `setBuffers` and refuses a detached front readback
+> with `PAPERCLIP_EP_DETACHED`, which is what makes the paragraph below true
+> rather than merely plausible.
 
 **What the match supports.** The engine accepted our pixels and is holding them.
 That rules out the one failure otherwise invisible from inside the process — a

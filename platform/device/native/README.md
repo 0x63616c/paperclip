@@ -13,6 +13,9 @@ contract; this file is how to build it.
 | `vendor-abi.txt` | the signatures WWW-20 read off the device |
 | `check-abi.sh` | proves `ep_abi.hpp` generates exactly those signatures |
 | `check-link.sh` | compiles, links and runs the bridge against the real library |
+| `check-host.sh` | runs the two semantic checks below — Qt, no vendor library |
+| `check-sharing.cpp` | the Qt implicit-sharing behaviour the display path rests on |
+| `check-detach.cpp` | the bridge's no-detach invariant, against a stub engine |
 
 ## Check the ABI — needs nothing installed
 
@@ -38,6 +41,35 @@ running natively. Compiles with `-Werror`, links against the real
 
 A `134` or `139` exit is a **failure**: it means the vendor's `abort()` path
 was reached, which on the tablet is a dead session rather than an error.
+
+## Check that it is *correct* — needs Qt, not the vendor library
+
+```sh
+./check-host.sh
+```
+
+`check-abi.sh` checks the declarations and `check-link.sh` checks the link.
+Neither would have caught WWW-29, where the bridge built, linked, ran and
+returned success while presenting white for four issues. This is the check that
+does.
+
+`EPFramebuffer::setBuffers` stores its arguments by `QImage::operator=`, so the
+engine holds a `QImage` **sharing** our pixels. Writing through that shared data
+is how a frame reaches the panel, and a detach — which Qt performs silently on
+any non-const accessor — severs it without an error. So:
+
+- `check-sharing.cpp` pins the Qt behaviour on its own. Runs anywhere with Qt,
+  a Mac included.
+- `check-detach.cpp` runs the real `paperclip_ep_open` against a stub
+  `EPFramebuffer` that shares its buffers the way the disassembly shows the real
+  one doing, and asserts the handed-out buffer *is* the engine's memory, that a
+  clear reaches it, and that a forced detach turns swap, clear and front
+  readback into `PAPERCLIP_EP_DETACHED`. It needs a disposable
+  `/usr/share/remarkable` for `preflight()`, so it is skipped where one cannot
+  be made and always runs in `check-link.sh`'s container.
+
+`check-link.sh` runs both as its last stage. See ADR-0009, "Implicit sharing is
+the transport".
 
 ## Build it for the tablet — needs two things this repository does not contain
 

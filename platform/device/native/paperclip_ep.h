@@ -25,6 +25,21 @@
  *   then `paperclip_ep_close`, then let the host restart xochitl. Closing
  *   without clearing leaves waveform residue on the glass that stock's own
  *   repaint does not remove (WWW-20).
+ *
+ * ## The no-detach invariant
+ *
+ * `EPFramebuffer::setBuffers` stores its arguments by `QImage::operator=`,
+ * Qt's refcounted shallow assignment, so from `open` onwards the engine holds
+ * a `QImage` *sharing* the bridge's pixel data. Qt's implicit sharing is
+ * therefore inverted at this boundary: writing through shared data is the
+ * entire mechanism, and a detach — which Qt performs silently, on any
+ * non-const accessor — severs the caller's drawing from the engine's page.
+ *
+ * So the bridge caches the pixel address before `setBuffers` runs, hands that
+ * cached pointer out, and never calls a non-const `QImage` accessor again.
+ * Every present re-checks the two agree and returns PAPERCLIP_EP_DETACHED
+ * rather than presenting a frame the engine has never seen. WWW-29 found the
+ * bug this guards; WWW-30 is the fix.
  */
 
 #ifndef PAPERCLIP_EP_H
@@ -44,19 +59,27 @@ extern "C" {
 #define PAPERCLIP_EP_EXCEPTION 4
 #define PAPERCLIP_EP_WRONG_THREAD 5
 #define PAPERCLIP_EP_OUT_OF_MEMORY 6
+/* The drawing buffer is no longer the memory the engine holds. See the
+ * no-detach invariant below; this is never a successful present. */
+#define PAPERCLIP_EP_DETACHED 7
 
 /* Bumped whenever this header changes shape. The Rust side checks it at open
  * so a stale .so and a new crate fail loudly instead of corrupting a call. */
-#define PAPERCLIP_EP_ABI_VERSION 2u
+#define PAPERCLIP_EP_ABI_VERSION 3u
 
 /* Which of the three buffers `paperclip_ep_readback` copies out.
  *
- * `open` hands the engine `setBuffers(make_tuple(front, back), &aux)`, and
- * which of them it presents from is not documented anywhere we can read. FRONT
- * is where the caller draws, so reading it back answers "are the pixels I wrote
- * still in the buffer the engine was given" — which is a different and weaker
- * question than "is that image on the glass", and the only one available from
- * inside the process. */
+ * `open` hands the engine `setBuffers(make_tuple(front, back), &aux)`. WWW-29
+ * disassembled `setBuffers` and established that the engine keeps the first
+ * tuple element — our FRONT — and presents from it, so FRONT is both where the
+ * caller draws and what reaches the panel.
+ *
+ * Reading FRONT back therefore answers "are the pixels I wrote still in the
+ * memory the engine shares with me" — a different and weaker question than "is
+ * that image on the glass", and the only one available from inside the
+ * process. It answers even that much only while the no-detach invariant holds;
+ * before WWW-30 it did not, and the readback was this side's buffer agreeing
+ * with itself. */
 #define PAPERCLIP_EP_PLANE_FRONT 0
 #define PAPERCLIP_EP_PLANE_BACK 1
 #define PAPERCLIP_EP_PLANE_AUX 2
@@ -90,6 +113,11 @@ int32_t paperclip_ep_geometry(paperclip_ep *ep, int32_t *width, int32_t *height,
 /*
  * The drawing buffer: `height * stride_pixels` ARGB8888 pixels, little-endian,
  * so the bytes are B, G, R, 0xFF. Owned by the bridge. NULL on failure.
+ *
+ * The same address every time, cached at `open` before the engine was handed
+ * the buffers, and valid until `paperclip_ep_close`. It is the memory the
+ * engine shares — see the no-detach invariant above, which is why this is a
+ * cached pointer and not a fresh `QImage::bits()` call.
  */
 uint32_t *paperclip_ep_buffer(paperclip_ep *ep);
 
@@ -112,12 +140,21 @@ int32_t paperclip_ep_swap(paperclip_ep *ep, int32_t x, int32_t y, int32_t width,
  * perturb what the engine is sharing — a readback that changed the thing it
  * measured would be worse than none.
  *
+ * With the no-detach invariant holding, a FRONT readback reads the memory the
+ * engine reads. Without it the call is sound but vacuous: it compares this
+ * side's private copy against itself and matches no matter what the engine
+ * holds. That is exactly what WWW-23's "front came back byte-identical"
+ * measured, and why the bug it missed stayed silent until WWW-29.
+ *
  * Never a claim about the panel. See the note in the header comment. */
 int32_t paperclip_ep_readback(paperclip_ep *ep, int32_t plane, uint32_t *out, int32_t len);
 
 int32_t paperclip_ep_ghost_control(paperclip_ep *ep, int32_t mode);
 
-/* Drives the whole panel white with a settled waveform. */
+/* Drives the whole panel white with a settled waveform.
+ *
+ * Fills through the cached pointer rather than `QImage::fill`, which is
+ * non-const and would detach. */
 int32_t paperclip_ep_clear(paperclip_ep *ep);
 
 /* A description of the last failure on this thread. Never NULL. */

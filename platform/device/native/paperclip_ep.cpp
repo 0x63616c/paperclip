@@ -36,6 +36,8 @@
 #include <QtCore/QRect>
 #include <QtGui/QImage>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
@@ -146,10 +148,25 @@ struct paperclip_ep {
     QCoreApplication *owned_app = nullptr;
     /* The bridge owns these for as long as the handle lives. EPFramebuffer is
      * handed the two page buffers and the auxiliary one by setBuffers; Rust
-     * borrows the bits of `front` and never frees anything. */
+     * borrows `pixels` below and never frees anything. */
     QImage front;
     QImage back;
     QImage aux;
+    /* `front`'s pixel address, cached in `open` *before* setBuffers runs — at
+     * which point the refcount is still 1, so taking it cannot copy anything
+     * and the address is stable for the handle's life.
+     *
+     * After setBuffers the engine shares this data, and every non-const QImage
+     * accessor on `front` would detach it onto fresh memory. That is the
+     * WWW-29 bug: the caller keeps drawing, the engine keeps presenting the
+     * white it was handed at open, and nothing returns an error. So this is
+     * the only pixel address the bridge ever hands out or writes through, and
+     * `present` refuses to swap if `front` has moved away from it. */
+    uint32_t *pixels = nullptr;
+    /* How many uint32_t `pixels` addresses — `stride_pixels * height`. Cached
+     * with the pointer because both describe the same allocation and a fill
+     * bounded by a re-read could outlive the thing it was measured from. */
+    size_t pixel_count = 0;
     pthread_t owner = {};
 };
 
@@ -229,14 +246,34 @@ int32_t paperclip_ep_open(paperclip_ep **out)
         handle->back.fill(0xFFFFFFFFu);
         handle->aux.fill(0xFFFFFFFFu);
 
-        /* VERIFIED on hardware, WWW-23: the engine presents from `front`, the
-         * first element of the tuple, which is also what `paperclip_ep_buffer`
-         * hands out. Reading all three planes back after a full-panel swap gave
-         * `front` exactly the frame that was sent, while `back` and `aux` both
-         * still held the white they were filled with at open — their digest is
-         * the all-white 1620x2160 buffer's, computed independently. So the
-         * caller draws into the page the engine reads, and `aux` is neither the
-         * shadow nor the target for this call path. ADR-0009 records it. */
+        /* Cache the pixel address HERE, before setBuffers. This is the only
+         * moment `front` is unshared, so `bits()` cannot copy and the address
+         * it returns is the one the engine is about to start sharing. Taking
+         * it any later is the WWW-29 bug. */
+        handle->pixels = reinterpret_cast<uint32_t *>(handle->front.bits());
+        if (handle->pixels == nullptr) {
+            delete handle;
+            return fail(PAPERCLIP_EP_OUT_OF_MEMORY, "the front buffer has no pixels");
+        }
+        handle->pixel_count = static_cast<size_t>(handle->front.bytesPerLine() / 4)
+            * static_cast<size_t>(handle->front.height());
+
+        /* The engine presents from `front`, the first element of the tuple,
+         * which is also what `paperclip_ep_buffer` hands out.
+         *
+         * ESTABLISHED BY DISASSEMBLY, WWW-29 — not by readback. `setBuffers`
+         * at 0x328c0 stores `std::get<0>(tuple)` into `this+0x88`, and
+         * `swapBuffers` at 0x32930 reads `this+0x88`. It stores by
+         * `QImage::operator=`, so what it keeps *shares* our pixel data rather
+         * than copying it; that sharing is the transport, and severing it is
+         * the failure `PAPERCLIP_EP_DETACHED` exists to catch.
+         *
+         * WWW-23 reached the same conclusion from a readback and was not
+         * entitled to: at the time `paperclip_ep_buffer` had already detached
+         * `front` onto private memory, so "front came back byte-identical to
+         * what was sent" was this side's buffer agreeing with itself and would
+         * have read the same however the engine behaved. The conclusion
+         * survived; the evidence for it did not. ADR-0009 records both. */
         engine->setBuffers(std::make_tuple(handle->front, handle->back), &handle->aux);
 
         *out = handle;
@@ -285,6 +322,28 @@ int32_t check(paperclip_ep *ep) noexcept
     return PAPERCLIP_EP_OK;
 }
 
+/* Whether `front` still shares the memory the caller has been drawing into.
+ *
+ * Qt detaches silently, so nothing else in this file would notice. A detach
+ * means the frame the caller drew is not the frame the engine holds, and
+ * presenting anyway would report success over a stale page — precisely the
+ * failure that hid WWW-29 for four issues. It is an error, never a present. */
+int32_t attached(paperclip_ep *ep) noexcept
+{
+    if (ep->pixels == nullptr) {
+        /* Not reachable through a handle `open` returned — it fails rather
+         * than hand back a handle with no cached address — so this is the
+         * absence of a buffer, not a detached one. */
+        return fail(PAPERCLIP_EP_NOT_OPEN, "the front buffer was never cached");
+    }
+    if (ep->front.constBits() != reinterpret_cast<const uchar *>(ep->pixels)) {
+        return fail(PAPERCLIP_EP_DETACHED,
+                    "the front buffer detached from the engine's: the frame that was drawn "
+                    "is not the frame the engine holds");
+    }
+    return PAPERCLIP_EP_OK;
+}
+
 /* EPScreenMode is the mode number on its own.
  *
  * An earlier reading packed the content type into bit 8 — `0x100 | mode` — and
@@ -304,6 +363,10 @@ int32_t present(paperclip_ep *ep, QRect rect, int32_t content, int32_t mode,
                 int32_t full) noexcept
 {
     (void)content;
+    const int32_t shared = attached(ep);
+    if (shared != PAPERCLIP_EP_OK) {
+        return shared;
+    }
     try {
         const int screen_mode = mode;
         const int flags = full != 0 ? 1 : 0;
@@ -348,12 +411,16 @@ uint32_t *paperclip_ep_buffer(paperclip_ep *ep)
     if (check(ep) != PAPERCLIP_EP_OK) {
         return nullptr;
     }
-    try {
-        return reinterpret_cast<uint32_t *>(ep->front.bits());
-    } catch (...) {
-        fail(PAPERCLIP_EP_EXCEPTION, "paperclip_ep_buffer: unknown C++ exception");
+    /* The cached address, never `front.bits()`. `bits()` is non-const, the
+     * engine shares this data from `open` onwards, and Qt's contract for a
+     * non-const accessor on shared data is to detach — so the obvious spelling
+     * of this function is the one that orphans every frame. No Qt call here
+     * means nothing to throw, which is why there is no try block left. */
+    if (ep->pixels == nullptr) {
+        fail(PAPERCLIP_EP_NOT_OPEN, "paperclip_ep_buffer: the front buffer was never cached");
         return nullptr;
     }
+    return ep->pixels;
 }
 
 int32_t paperclip_ep_readback(paperclip_ep *ep, int32_t plane, uint32_t *out, int32_t len)
@@ -368,9 +435,18 @@ int32_t paperclip_ep_readback(paperclip_ep *ep, int32_t plane, uint32_t *out, in
     try {
         const QImage *image = nullptr;
         switch (plane) {
-        case PAPERCLIP_EP_PLANE_FRONT:
+        case PAPERCLIP_EP_PLANE_FRONT: {
+            /* A detached front reads back as this side's private copy, which
+             * matches whatever was drawn into it no matter what the engine
+             * holds. That vacuous match is the WWW-23 result, so refuse rather
+             * than hand a caller a digest it will believe. */
+            const int32_t shared = attached(ep);
+            if (shared != PAPERCLIP_EP_OK) {
+                return shared;
+            }
             image = &ep->front;
             break;
+        }
         case PAPERCLIP_EP_PLANE_BACK:
             image = &ep->back;
             break;
@@ -440,11 +516,15 @@ int32_t paperclip_ep_clear(paperclip_ep *ep)
     if (status != PAPERCLIP_EP_OK) {
         return status;
     }
-    try {
-        ep->front.fill(0xFFFFFFFFu);
-    } catch (...) {
-        return fail(PAPERCLIP_EP_EXCEPTION, "paperclip_ep_clear: unknown C++ exception");
+    /* std::fill_n through the cached pointer, not `QImage::fill`, which is
+     * non-const and detaches exactly as `bits()` does — the second instance of
+     * the same WWW-29 bug, and the one that would have left a white clear
+     * invisible on the glass while the handle was handed back. */
+    const int32_t shared = attached(ep);
+    if (shared != PAPERCLIP_EP_OK) {
+        return shared;
     }
+    std::fill_n(ep->pixels, ep->pixel_count, 0xFFFFFFFFu);
     /* The one place a full refresh is wanted: this runs before handing the
      * display back, and a partial update would leave the residue it exists to
      * remove. Mono mode 3 is the settled waveform. */

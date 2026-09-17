@@ -3,6 +3,13 @@
 **Status:** accepted, and **exercised on hardware** — three takeover round
 trips on 2026-09-17 with stock verified healthy after each (Stage 3, WWW-3).
 See `docs/device/www-3-takeover-session.md`.
+
+**Amended 2026-09-17 (WWW-29, WWW-30).** The engine holds a *shared* `QImage`,
+so Qt's implicit-sharing rules are inverted at this boundary and every present
+from WWW-3 to WWW-30 was orphaned from the frame it was meant to show. See
+"Which buffer the engine presents from", which also withdraws the evidence the
+earlier version of that section rested on. Takeover, release and the safety
+properties are unaffected; what was on the glass is not.
 Implements the decision in [ADR-0007](0007-display-transport-via-vendor-waveform-engine.md);
 this ADR is about *how* the vendor engine is called, not whether it is.
 
@@ -42,7 +49,10 @@ libqsgepaper.so            EPFramebuffer, proprietary, never vendored
   closes it in `Drop`, including on the error paths inside `open` itself.
 - The **pixel buffer** is owned by the bridge — three `QImage`s allocated in
   `paperclip_ep_open` and handed to `EPFramebuffer::setBuffers`. Rust borrows
-  the bits of one of them and frees nothing.
+  one address and frees nothing. That address is cached in `open` *before*
+  `setBuffers`, and it is the only one the bridge ever hands out or writes
+  through; see "Implicit sharing is the transport" below, which is the reason
+  and not an optimisation.
 - The **error string** is thread-local storage inside the bridge. Rust copies
   it before returning; it never holds the pointer.
 
@@ -87,7 +97,7 @@ be.
 
 ### Error conversion
 
-The C ABI returns `int32_t` and nothing else. Seven status codes, defined once
+The C ABI returns `int32_t` and nothing else. Eight status codes, defined once
 in `native/paperclip_ep.h` and mirrored in `paper_device::VendorStatus`, with
 an `Unknown` arm so a bridge from a future build cannot produce a value that
 panics a match. Every non-zero status becomes `DeviceError::Vendor { code,
@@ -254,30 +264,90 @@ gate is closed, `QCoreApplication` is a far lighter requirement than the
 `QGuiApplication` this ADR previously feared, and rmweb's QPA route stays the
 fallback rather than becoming the cheaper option.
 
-## Which buffer the engine presents from (WWW-23, on hardware)
+## Which buffer the engine presents from
 
 `paperclip_ep_open` hands the engine `setBuffers(make_tuple(front, back),
-&aux)`, and until WWW-23 which of the three it actually presents from was an
-open question carried as an `UNVERIFIED` comment in `paperclip_ep.cpp`.
+&aux)`. The engine presents from **`front`**, the first tuple element, which is
+also what `paperclip_ep_buffer` hands the caller. Nothing needs swapping.
 
-`paperclip_ep_readback` answers it. After a full-panel swap of the Home shelf:
+**The evidence is WWW-29's disassembly of our own pulled copy of
+`libqsgepaper.so`** — sha256 `3f76b7db32…`, image `20260827113527`
+(`3.28.0.172`), the file `native/vendor-abi.txt` already records. No device was
+needed to establish it.
+
+`EPFramebuffer::setBuffers` at `0x328c0` writes three members:
 
 ```
-readback front sha256:0fb73b27198efb386d8d5dc906b190430e9ef465f7243b69e8b72cb6b0b08dd2 == sent
-readback back  sha256:804c5351ba93f2c08ab9f6dc7ccc853873b11fb080c4d18f4c5f18539555117b != sent
-readback aux   sha256:804c5351ba93f2c08ab9f6dc7ccc853873b11fb080c4d18f4c5f18539555117b != sent
+this+0x88 = std::get<0>(tuple)        // our front
+this+0xa0 = aux ? aux : &this[0x88]   // our aux
+this+0xa8 = std::get<1>(tuple)        // our back
 ```
 
-`804c5351…` is the digest of an all-white 1620x2160 ARGB8888 buffer, computed
-independently on the Mac — which is exactly what `open` fills all three planes
-with. So `back` and `aux` were never touched, and the engine presents from
-`front`, which is the plane `paperclip_ep_buffer` already hands the caller.
-Nothing needs swapping.
+and `swapBuffers(QRegion const &, EPScreenModeMap const &, QFlags<UpdateFlag>)`
+at `0x32930` calls `QImage::rect()` on `this+0x88`. So the member the engine
+presents from is the one set from `front`.
 
-The readback reads through `QImage::constBits()`, never `bits()`. The non-const
-accessor detaches the image from whatever the engine shares with it, so a
-readback written the obvious way would both invalidate its own measurement and
-risk leaving the caller drawing into a page the engine had stopped reading.
+### Implicit sharing is the transport — and this inverts Qt's usual rules
+
+Those three writes are `QImage::operator=(const QImage &)`: Qt's refcounted
+**shallow** assignment. The engine does not copy our pixels; it holds a
+`QImage` *sharing* our `QImageData`, at refcount 2, for its whole lifetime.
+Writing through that shared data is how a frame reaches the panel.
+
+Everywhere else in Qt, implicit sharing is an invisible convenience and a
+detach is harmless. Here it is load-bearing in the opposite direction:
+
+- **Writing through shared data is deliberate.** That is the entire mechanism.
+- **Any detach is a bug**, and a silent one — Qt detaches on *any* non-const
+  accessor, returns a perfectly valid pointer to the wrong memory, and reports
+  nothing.
+
+So the bridge caches `front`'s address in `open`, in the one moment the image
+is unshared and taking it cannot copy anything, and after `setBuffers` never
+calls a non-const `QImage` accessor on `front`, `back` or `aux` again.
+`paperclip_ep_buffer` returns the cached address; `paperclip_ep_clear` fills
+through it with `std::fill_n` rather than `QImage::fill`. Every present
+re-checks that `front.constBits()` still equals it and returns the new
+`PAPERCLIP_EP_DETACHED` rather than presenting — a frame the engine cannot see
+is an error, never a successful present. The ABI version is 3 for this, so a
+stale bridge cannot silently lack the guard.
+
+### What this corrects, and what it cost
+
+Between WWW-3 and WWW-30 the bridge got this wrong, and **every present since
+WWW-3 presented white.**
+
+`paperclip_ep_buffer` returned `front.bits()` — the *non-const* accessor. The
+first call after `setBuffers` deep-copied `front` onto fresh memory. From that
+moment the caller drew somewhere the engine had never heard of, and the engine
+kept presenting the all-white fill written before `setBuffers` ran.
+`paperclip_ep_clear`'s `front.fill()` was the same bug a second time.
+
+The symptom was silent because `paperclip_ep_readback` read `front` too — the
+detached copy. "Front came back byte-identical to what was sent" was **our own
+buffer agreeing with itself**, and would have read the same however the engine
+behaved. The earlier version of this section recorded that readback as hardware
+verification of which plane the engine presents from:
+
+```
+readback front sha256:0fb73b27… == sent
+readback back  sha256:804c5351… != sent
+readback aux   sha256:804c5351… != sent
+```
+
+The **conclusion was right**; the **evidence for it was not**. Reading our own
+planes back cannot establish which memory the engine scans out — and once
+`front` had detached, it could not even establish that the engine held our
+pixels, which is the weaker claim it was actually being used for. `back` and
+`aux` differing said only that nothing had written to them, which was true and
+uninformative. The comment block in `paperclip_ep.cpp` that cited this as
+`VERIFIED on hardware, WWW-23` is corrected to cite the disassembly.
+
+With the invariant holding, a `front` readback finally reads the memory the
+engine reads, and the claim it supports is the one it was always written to
+make. `paperclip_ep_readback` now refuses a detached front with
+`PAPERCLIP_EP_DETACHED` rather than returning a private copy that flatters
+itself.
 
 **What a match supports, and what it does not.** It rules out the one failure
 that is otherwise invisible from inside the process: a silent fallback that
@@ -285,6 +355,31 @@ returns success over a blank or substituted frame. It says nothing whatever
 about photons — `PanelWork::claim` therefore reads "engine holds the frame that
 was sent; presented without error, appearance on glass unverified", and weakens
 itself automatically if no plane matches.
+
+### How this is held without a tablet
+
+`native/check-host.sh`, run on its own or as the last stage of
+`check-link.sh`, and needing Qt but neither the vendor library nor the device:
+
+- `check-sharing.cpp` reproduces the Qt behaviour in isolation — that a pointer
+  cached while unshared stays good and its writes reach a shallow copy, and
+  that one `bits()` call on the shared original breaks exactly that. If the
+  second half ever stops failing, Qt changed its rules and this section needs
+  rereading rather than deleting.
+- `check-detach.cpp` runs the bridge's real `paperclip_ep_open` against a stub
+  `EPFramebuffer` whose `setBuffers` shares its arguments the way the
+  disassembly shows the real one doing, then asserts that the handed-out
+  buffer is the memory the engine holds, that a clear reaches it, and that a
+  forced detach turns swap, clear and front readback into
+  `PAPERCLIP_EP_DETACHED`. A stub that ignored its arguments would leave the
+  refcount at 1, nothing would detach, and the test would pass over the bug it
+  exists to catch — which is why it does not.
+
+Checked against the reintroduced bug on 2026-09-17: reverting
+`paperclip_ep_buffer` to `front.bits()` turns 8 of the 16 assertions red,
+including the present, which refuses with `PAPERCLIP_EP_DETACHED` instead of
+succeeding. **Landing this does not prove the glass changed** — that is
+WWW-33's job, on the tablet.
 
 ## Provenance
 
@@ -315,7 +410,11 @@ pointed at by `PAPERCLIP_VENDOR_LIB_DIR`.
 - the wakelock releasing on every exit path including drop;
 - advisory-lock parsing against the exact bytes the tablet wrote, and that the
   description leaks neither the machine id nor the boot id;
-- that `ep_abi.hpp` generates exactly the recorded vendor signatures.
+- that `ep_abi.hpp` generates exactly the recorded vendor signatures;
+- that a pixel address cached before `setBuffers` reaches the image the engine
+  shares, that a non-const `QImage` accessor severs it silently, and that the
+  bridge refuses to present once severed — `native/check-host.sh`, which needs
+  Qt but neither the vendor library nor the tablet.
 
 **Not proven — every one of these is an open hardware gate:**
 
@@ -326,14 +425,15 @@ pointed at by `PAPERCLIP_VENDOR_LIB_DIR`.
 | Whether `EPFramebuffer` needs a live `QGuiApplication` | **closed** — a bare `QCoreApplication` suffices; without one it segfaults | whether the primary path is simpler than the fallback |
 | Whether the vendor can kill the process past our error handling | **closed, and it can** — `abort()` on init failure, guarded by `preflight()` | the honesty of the no-exception contract |
 | Which waveform table the engine loads | **closed** — panel-specific, selected by lot/TFT; not the `ct33_*` files | a guard that wrongly refuses another panel |
-| The engine opens and presents on the real tablet | **closed** — three round trips, stock healthy after each | the stage |
+| The engine opens and presents on the real tablet | **opens: closed** — three round trips, stock healthy after each. **Presents: reopened by WWW-29** — every one of those presents was a detached frame, so the engine was handed white | the stage |
 | The `EPScreenMode` encoding | **closed, and it was wrong** — mode alone, no content bit | every colour swap |
 | **That what reaches the glass is correct** | **open** — nothing has seen the panel | §18 item 2 |
 | Panel settle time, as against API call latency | **open** — connect `framebufferUpdated` or use a camera | the §9 latency budget |
 | Input during a session | **open** — needs a finger on the glass | the input half of the round trip |
 | Ghosting, memory, CPU, behaviour across a real suspend | **open** — the tablet was on charge, so it never suspended | the §9 baseline |
 | A Paperclip surface is legible on the glass | **open** | §18 item 2, the stage's whole point |
-| Which tuple element the engine presents from | **guessed** in `paperclip_ep_open` | drawing landing on the wrong page |
+| Which tuple element the engine presents from | **closed** — `front`, by WWW-29's disassembly of `setBuffers` and `swapBuffers`; no device needed | drawing landing on the wrong page |
+| That the caller's drawing reaches the memory the engine presents from | **closed off-device** — `check-host.sh`; a detach is now `PAPERCLIP_EP_DETACHED` rather than a silent success | every frame |
 | The `EPScreenMode` / `UpdateFlag` / `GhostControlMode` numeric values | **guessed** | wrong waveform, silently |
 | Mono 0 / mono 3 / colour 4 being the right waveforms | **proposed** | latency and legibility |
 | Aux buffer byte order `B, G, R, 0xFF` | **inferred** from quill, not measured | inverted colour |

@@ -99,6 +99,11 @@ pub enum VendorStatus {
     WrongThread = 5,
     /// Allocation failed.
     OutOfMemory = 6,
+    /// The drawing buffer stopped being the memory the vendor engine holds, so
+    /// the frame that was drawn is not the frame that would have been
+    /// presented. Never a successful present; see the no-detach invariant in
+    /// `native/paperclip_ep.h` and ADR-0009.
+    Detached = 7,
     /// The bridge returned a code this build does not know.
     Unknown = -1,
 }
@@ -114,6 +119,7 @@ impl VendorStatus {
             4 => Self::Exception,
             5 => Self::WrongThread,
             6 => Self::OutOfMemory,
+            7 => Self::Detached,
             _ => Self::Unknown,
         }
     }
@@ -128,6 +134,10 @@ impl VendorStatus {
             Self::Exception => "a C++ exception was caught at the FFI boundary",
             Self::WrongThread => "called from a thread other than the owning one",
             Self::OutOfMemory => "allocation failed",
+            Self::Detached => {
+                "the drawing buffer detached from the engine's: the frame that was drawn is \
+                 not the frame the engine holds"
+            }
             Self::Unknown => "the bridge returned an unrecognised status",
         }
     }
@@ -156,6 +166,7 @@ mod tests {
     fn unknown_statuses_do_not_panic_or_alias_a_known_one() {
         assert_eq!(VendorStatus::from_raw(0), VendorStatus::Ok);
         assert_eq!(VendorStatus::from_raw(3), VendorStatus::Locked);
+        assert_eq!(VendorStatus::from_raw(7), VendorStatus::Detached);
         assert_eq!(VendorStatus::from_raw(4242), VendorStatus::Unknown);
         assert_eq!(VendorStatus::from_raw(-7), VendorStatus::Unknown);
     }
