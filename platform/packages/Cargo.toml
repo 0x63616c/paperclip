@@ -9,11 +9,24 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+ed25519-dalek = { workspace = true }
+flate2 = { workspace = true }
+getrandom = { workspace = true, optional = true }
 paper-protocol = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
+
+[features]
+# Everything a *publisher* needs: secret keys, key generation, archive building,
+# catalog rendering. On by default because the Mac is where this crate is
+# built; the device host turns it off (`default-features = false`) so the
+# tablet cannot link a code path that holds a signing key (§12).
+default = ["publishing"]
+publishing = ["dep:getrandom"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

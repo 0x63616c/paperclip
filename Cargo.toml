@@ -41,10 +41,15 @@ paper-chess = { path = "apps/chess" }
 
 cc = "1.2"
 clap = { version = "4.6", features = ["derive"] }
+ed25519-dalek = "3.0"
+flate2 = "1.1"
+getrandom = { version = "0.4", features = ["std"] }
 libc = "0.2"
 semver = { version = "1.0.28", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11"
 softbuffer = "0.4.8"
+tar = "0.4"
 tempfile = "3.24"
 thiserror = "2.0.20"
 tiny-skia = "0.12"
