@@ -53,17 +53,29 @@ def main(argv):
         print(__doc__, file=sys.stderr)
         return 64
 
+    # Multitouch protocol B delimits each contact with MT_TRACKING_ID, NOT with
+    # BTN_TOUCH: BTN_TOUCH only goes 1 on the first finger down and 0 on the
+    # last finger up, so keying on it merges a whole sequence of taps into one
+    # contact and loses every tap in between.
     contacts = []          # one (x, y) per completed touch or pen contact
     pending = {}
     for stamp, etype, name, value in decode(argv[1]):
         if etype == 0:
             continue
         print(f"t+{stamp:8.3f}  {etype:4}  {name:16} {value}")
-        if name in ("MT_POSITION_X", "X"):
+        if name == "MT_TRACKING_ID":
+            if value == -1:
+                if "x" in pending and "y" in pending:
+                    contacts.append((pending["x"], pending["y"]))
+                pending = {}
+            else:
+                pending = {}
+        elif name in ("MT_POSITION_X", "X"):
             pending["x"] = value
         elif name in ("MT_POSITION_Y", "Y"):
             pending["y"] = value
-        elif name in ("BTN_TOUCH", "BTN_TOOL_PEN") and value == 0:
+        elif name == "BTN_TOUCH" and value == 0 and "MT" not in str(pending):
+            # Pen path: the tip has no tracking id, so its lift delimits it.
             if "x" in pending and "y" in pending:
                 contacts.append((pending["x"], pending["y"]))
             pending = {}
