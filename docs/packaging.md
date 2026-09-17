@@ -136,7 +136,7 @@ else does.
 
 ## The App Store
 
-`apps/app-store`, in three pieces, split so the interesting one needs no
+`apps/app-store`, in four pieces, split so the interesting one needs no
 device:
 
 - `screen` is the state, and it is **pure**. A press returns a `Request`; the
@@ -156,6 +156,12 @@ device:
   Store that host policy did not grant `packages` gets an error at startup, not
   a degraded installer. That is §5's "client of platform facilities, not the
   owner of them" as a property of the code rather than a claim about it.
+- `app` is the wire adapter, `AppStoreApp`. It owns nothing `screen` and
+  `source` do not already own: a tap becomes a `Request`, `Request`s go to a
+  worker thread (never `event` or `draw` — §8), and what comes back — a
+  `Step` along the way, or the final `Outcome` — is folded back into `screen`.
+  It is what `paperctl run --app app-store` and the Home shelf's App Store
+  tile actually launch.
 
 The app is built **without** the `publishing` feature. An app must not contain
 a code path that can sign a release (§12), and `cargo build -p paper-app-store`
@@ -174,7 +180,9 @@ errors and "the catalog could not be read" is a fact rather than an action:
 | Offered version is older | Use roll back instead. |
 | No room left | Free some space and try again. |
 
-`paperctl screenshot --screen app-store` renders it.
+`paperctl screenshot --screen app-store` renders it; `paperctl run --app
+app-store` runs it interactively, against `PAPERCLIP_ROOT`'s own store and a
+`catalog/` directory beside it.
 
 ### What it shows
 

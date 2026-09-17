@@ -3,11 +3,25 @@
 //!
 //! Shared between `paperctl dev` (a window on the Mac) and `paperctl run` (the
 //! real panel on the device, WWW-6): both hand a real, unmodified
-//! [`HomeApp`]/[`ChessApp`]/[`SettingsApp`] to [`paper_sdk::run`] over a loopback
-//! [`UnixStream`] and read the frames it publishes back out of a shared
-//! canvas — the same bridge [`dev`](crate::dev) used before this module
-//! existed, gated only on `apps` rather than `desktop` so a device build,
-//! which has no windowing stack at all, still links it.
+//! [`HomeApp`]/[`ChessApp`]/[`SettingsApp`]/[`SudokuApp`]/[`AppStoreApp`] to
+//! [`paper_sdk::run`] over a loopback [`UnixStream`] and read the frames it
+//! publishes back out of a shared canvas — the same bridge
+//! [`dev`](crate::dev) used before this module existed, gated only on `apps`
+//! rather than `desktop` so a device build, which has no windowing stack at
+//! all, still links it.
+//!
+//! [`DevApp`] wraps Home, Chess, Settings and Sudoku behind one `App` impl,
+//! so [`open_session_with`] can hand `paper_sdk::run` a single concrete type.
+//! The App Store cannot join it: unlike the other four,
+//! [`AppStoreApp::Completion`](paper_sdk::App::Completion) is not
+//! [`Infallible`] — it carries install progress — and [`paper_sdk::Context`]
+//! is a distinct type per completion type, with no public constructor outside
+//! `paper_sdk` to convert between them. [`open_app_store_session`] builds and
+//! spawns it separately instead. What both paths share — preparing storage,
+//! opening the socket, the `Hello`/`Ready` handshake — is
+//! [`open_session_common`], because `paper_sdk::run`'s return type does not
+//! depend on `A` at all: whichever app is inside it, the thread it runs on
+//! joins through the same [`Session`].
 
 use std::convert::Infallible;
 use std::fs;
@@ -17,10 +31,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use paper_app_store::{AppStoreApp, AppStoreScreen, PackagesSource, SourceError, StoreSource};
 use paper_chess::ChessApp;
 use paper_home::{HomeApp, HomeScreen, ShelfEntry, ShelfGlyph, SystemFact};
-use paper_packages::store::Layout;
-use paper_packages::{Manifest, ManifestError};
+use paper_packages::install::NothingIsRunning;
+use paper_packages::signing::TrustedKeys;
+use paper_packages::store::{Layout, StoreError};
+use paper_packages::{InstallPolicy, InstalledApp, Manifest, ManifestError};
 use paper_protocol::{
     AppId, AppMessage, AppPaths, Capability, Damage, DrawReason, DrawRequest, ExitReason, FrameId,
     Hello, HostMessage, LaunchReason, LifecycleEvent, PixelFormat, PointerEvent, Request, Saved,
@@ -36,6 +53,7 @@ const HOME_MANIFEST: &str = include_str!("../../../apps/home/paper.toml");
 const CHESS_MANIFEST: &str = include_str!("../../../apps/chess/paper.toml");
 const SETTINGS_MANIFEST: &str = include_str!("../../../apps/settings/paper.toml");
 const SUDOKU_MANIFEST: &str = include_str!("../../../apps/sudoku/paper.toml");
+const APP_STORE_MANIFEST: &str = include_str!("../../../apps/app-store/paper.toml");
 
 /// How long a read on the loopback socket may block waiting for the app
 /// thread before this side gives up on it. See [`open_session`].
@@ -46,8 +64,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) enum SessionError {
     /// `app` is not one this loop knows how to run.
     #[error(
-        "`{app}` is not something this session can run \u{2014} try `home`, `chess`, \
-         `settings` or `sudoku`"
+        "`{app}` is not something this session can run \u{2014} try `home`, `chess`, `settings`, \
+         `sudoku` or `app-store`"
     )]
     UnknownApp {
         /// What was asked for.
@@ -66,6 +84,12 @@ pub(crate) enum SessionError {
         #[source]
         source: std::io::Error,
     },
+    /// The App Store's own install store could not be prepared.
+    #[error("cannot prepare the Paperclip store")]
+    PackageStore(#[from] StoreError),
+    /// The App Store's package source could not be built.
+    #[error("the App Store's package source could not be built")]
+    PackageSource(#[from] SourceError),
     /// Setting up the loopback connection failed.
     #[error("cannot set up the session")]
     Io(#[from] std::io::Error),
@@ -78,17 +102,19 @@ pub(crate) enum SessionError {
 }
 
 /// Which app id a `Launch` request names, resolved to the slug this loop's
-/// callers use — `"home"`, `"chess"` or `"settings"`.
+/// callers use — `"home"`, `"chess"`, `"settings"`, `"sudoku"` or
+/// `"app-store"`.
 ///
-/// Both dev and device sessions only ever run the apps that ship a
-/// dev-runnable entry point (see [`open_session`]'s `UnknownApp`), so this is
-/// a closed match rather than a catalog lookup.
+/// Dev and device sessions only ever run the apps that ship a dev-runnable
+/// entry point (see [`open_session`]'s `UnknownApp`), so this is a closed
+/// match rather than a catalog lookup.
 pub(crate) fn launch_target(id: &AppId) -> Option<&'static str> {
     match id.as_str() {
         "dev.calum.chess" => Some("chess"),
         "dev.calum.home" => Some("home"),
         "dev.calum.settings" => Some("settings"),
         "dev.calum.sudoku" => Some("sudoku"),
+        "dev.calum.app-store" => Some("app-store"),
         _ => None,
     }
 }
@@ -96,17 +122,19 @@ pub(crate) fn launch_target(id: &AppId) -> Option<&'static str> {
 /// The shelf an interactive session shows, built from the compiled-in
 /// manifests.
 ///
-/// `pub(crate)` so `screens::golden::both_shelves_list_the_same_apps` can
+/// `pub(crate)` so `screens::golden::both_shelves_offer_the_same_apps` can
 /// compare it against the shelf `screenshot` and `open` render, rather than
 /// against a list of names someone has to remember to update — which is the
 /// failure that put Settings on one shelf and not the other.
 pub(crate) fn home_screen(status: &str, mode_fact: &str) -> Result<HomeScreen, SessionError> {
     let chess = Manifest::parse(CHESS_MANIFEST)?;
     let settings = Manifest::parse(SETTINGS_MANIFEST)?;
+    let app_store = Manifest::parse(APP_STORE_MANIFEST)?;
     Ok(HomeScreen {
         entries: vec![
             ShelfEntry::from_manifest(&chess, ShelfGlyph::Board),
             ShelfEntry::from_manifest(&settings, ShelfGlyph::Gear),
+            ShelfEntry::from_manifest(&app_store, ShelfGlyph::Store),
             ShelfEntry::action("Return to stock", "REMARKABLE", ShelfGlyph::Stock),
         ],
         facts: vec![SystemFact::new("Mode", mode_fact)],
@@ -246,10 +274,11 @@ impl Session {
     }
 }
 
-/// Either dev-runnable app, so [`open_session`] can hand `paper_sdk::run` one
-/// concrete type instead of a trait object — `App` has no forwarding impl for
-/// `Box<dyn App>`, and adding one is a bigger change to a shared crate than
-/// this local enum is.
+/// One of the three dev-runnable apps that share a completion type, so
+/// [`open_session_with`] can hand `paper_sdk::run` one concrete type instead
+/// of a trait object — `App` has no forwarding impl for `Box<dyn App>`, and
+/// adding one is a bigger change to a shared crate than this local enum is.
+/// The App Store does not fit here; see the module doc for why.
 pub(crate) enum DevApp {
     /// The shelf.
     Home(HomeApp),
@@ -329,37 +358,77 @@ impl App for DevApp {
     }
 }
 
+/// Builds the App Store's own package source: an install store rooted at
+/// `PAPERCLIP_ROOT` (or the device path, [`Layout::from_environment`]),
+/// reading a `catalog` directory alongside it.
+///
+/// There is nowhere yet for a person to configure a different catalog or
+/// trusted keys for an interactive session — `apps/settings/src/host.rs`
+/// records the same gap for Settings. A missing or empty catalog is the
+/// already-supported "nothing offered" state
+/// ([`AppStoreScreen::catalog_summary`]), not a failure, so this still runs
+/// usefully without one; pointing `PAPERCLIP_ROOT` at a store that has a real
+/// `catalog/` directory underneath it is how the App Store is exercised end
+/// to end today (see `apps/app-store/tests/`).
+fn app_store_source(manifest: &Manifest) -> Result<PackagesSource, SessionError> {
+    let mut policy = InstallPolicy::deny_all();
+    policy.allow(manifest.id(), Capability::Packages);
+    let caller = InstalledApp::install(manifest.clone(), &policy);
+
+    let layout = Layout::from_environment();
+    layout.ensure()?;
+    let catalog = layout.root().join("catalog");
+    Ok(PackagesSource::for_app(
+        layout,
+        policy,
+        catalog,
+        TrustedKeys::none(),
+        &caller,
+        // `paperctl` drives a store from outside the running system, the
+        // same as `paperctl install`/`list` (`tools/paperctl/src/install.rs`):
+        // when the host gains a supervisor (WWW-4) it supplies the real
+        // answer, and claiming to know one here would be inventing it.
+        Box::new(NothingIsRunning),
+    )?)
+}
+
 /// Opens a session for `app_slug`, under `storage_root`, and waits for its
 /// first frame.
 ///
 /// `status` and `mode_fact` become the Home shelf's status line and one
 /// system fact — the visible difference between "this is `paperctl dev`,
 /// local, not device verified" and "this is `paperctl run`, presenting on the
-/// panel", so a screenshot of either alone says which one it is.
+/// panel", so a screenshot of either alone says which one it is. Neither is
+/// used by Settings, Sudoku or the App Store, which have no shelf and no
+/// status line of their own.
 pub(crate) fn open_session(
     app_slug: &str,
     storage_root: &Path,
     status: &str,
     mode_fact: &str,
 ) -> Result<Session, SessionError> {
-    let app = match app_slug {
-        "chess" => DevApp::Chess(Box::new(ChessApp::new())),
-        "home" => DevApp::Home(HomeApp::new(home_screen(status, mode_fact)?)),
+    match app_slug {
+        "chess" => open_session_with(DevApp::Chess(Box::new(ChessApp::new())), storage_root),
+        "home" => open_session_with(
+            DevApp::Home(HomeApp::new(home_screen(status, mode_fact)?)),
+            storage_root,
+        ),
         // The real store, not the fixture the desktop preview draws: a
         // Settings page that invented its numbers would be worse than one
         // that reports an empty store, which is what a Mac with no
         // `PAPERCLIP_ROOT` honestly has. See `paper_settings::LiveHost`.
-        "settings" => DevApp::Settings(Box::new(SettingsApp::new(LiveHost::new(
-            Layout::from_environment(),
-        )))),
-        "sudoku" => DevApp::Sudoku(Box::new(SudokuApp::new())),
-        other => {
-            return Err(SessionError::UnknownApp {
-                app: other.to_owned(),
-            });
-        }
-    };
-    open_session_with(app, storage_root)
+        "settings" => open_session_with(
+            DevApp::Settings(Box::new(SettingsApp::new(LiveHost::new(
+                Layout::from_environment(),
+            )))),
+            storage_root,
+        ),
+        "sudoku" => open_session_with(DevApp::Sudoku(Box::new(SudokuApp::new())), storage_root),
+        "app-store" => open_app_store_session(storage_root),
+        other => Err(SessionError::UnknownApp {
+            app: other.to_owned(),
+        }),
+    }
 }
 
 /// Opens a session on an app the caller already built, under `storage_root`,
@@ -372,7 +441,59 @@ pub(crate) fn open_session(
 pub(crate) fn open_session_with(app: DevApp, storage_root: &Path) -> Result<Session, SessionError> {
     let app_slug = app.slug();
     let manifest = Manifest::parse(app.manifest_text())?;
+    open_session_common(
+        app_slug,
+        &manifest,
+        vec![Capability::Storage],
+        storage_root,
+        move |reader, app_side, surfaces| {
+            thread::spawn(move || paper_sdk::run(app, reader, app_side, surfaces))
+        },
+    )
+}
 
+/// Opens an App Store session — the App Store's counterpart to
+/// [`open_session_with`], built and spawned on its own rather than through
+/// [`DevApp`] for the reason the module doc gives.
+fn open_app_store_session(storage_root: &Path) -> Result<Session, SessionError> {
+    let manifest = Manifest::parse(APP_STORE_MANIFEST)?;
+    let source = app_store_source(&manifest)?;
+    let screen = AppStoreScreen::new(source.inventory()?);
+    let app = AppStoreApp::new(screen, Arc::new(source));
+    open_session_common(
+        "app-store",
+        &manifest,
+        // `packages`, not `storage` — the App Store never calls
+        // `context.storage()`.
+        vec![Capability::Packages],
+        storage_root,
+        move |reader, app_side, surfaces| {
+            thread::spawn(move || paper_sdk::run(app, reader, app_side, surfaces))
+        },
+    )
+}
+
+/// Everything common to opening a session, whichever app ends up inside it:
+/// preparing its storage directories, opening the loopback socket, the
+/// `Hello`/`Ready` handshake, and the first frame.
+///
+/// `spawn` is handed the reader, the writer and the bridged surface, and
+/// returns the thread the app runs on — a closure rather than a value,
+/// because [`open_session_with`] and [`open_app_store_session`] each build a
+/// differently-typed `App` and `paper_sdk::run`'s return type does not depend
+/// on which one, so there is nothing generic to hand back except the
+/// `JoinHandle` itself (see the module doc).
+fn open_session_common(
+    app_slug: &str,
+    manifest: &Manifest,
+    capabilities: Vec<Capability>,
+    storage_root: &Path,
+    spawn: impl FnOnce(
+        UnixStream,
+        UnixStream,
+        BridgeSurfaces,
+    ) -> thread::JoinHandle<Result<paper_sdk::Outcome, paper_sdk::RuntimeError>>,
+) -> Result<Session, SessionError> {
     let app_storage = storage_root.join(app_slug);
     let private = app_storage.join("private");
     let had_state = private.exists();
@@ -403,7 +524,7 @@ pub(crate) fn open_session_with(app: DevApp, storage_root: &Path) -> Result<Sess
         shared: shared.clone(),
         damage: damage_slot.clone(),
     };
-    let app_thread = thread::spawn(move || paper_sdk::run(app, reader, app_side, surfaces));
+    let app_thread = spawn(reader, app_side, surfaces);
 
     let mut host = host;
     let hello = Hello {
@@ -417,7 +538,7 @@ pub(crate) fn open_session_with(app: DevApp, storage_root: &Path) -> Result<Sess
             LaunchReason::Fresh
         },
         surface: SurfaceDescriptor::packed(SCREEN, PixelFormat::Argb8888),
-        capabilities: vec![Capability::Storage],
+        capabilities,
         paths: AppPaths {
             assets,
             private,

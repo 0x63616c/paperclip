@@ -1,5 +1,5 @@
-//! `paperctl run` — an interactive Home/Chess/Settings session on the panel
-//! (§4, WWW-6).
+//! `paperctl run` — an interactive Home/Chess/Settings/Sudoku/App Store
+//! session on the panel (§4, WWW-6).
 //!
 //! `paperctl open` puts one static screen on the glass and gives it back.
 //! This is the same takeover, but for as long as someone is actually using
@@ -90,6 +90,8 @@ pub(crate) enum RunAppArg {
     /// The sudoku app, whose per-cell damage is the reason this loop presents
     /// regions rather than whole panels (WWW-6, WWW-39).
     Sudoku,
+    /// The App Store, against `PAPERCLIP_ROOT`'s own store and catalog.
+    AppStore,
 }
 
 impl RunAppArg {
@@ -99,6 +101,7 @@ impl RunAppArg {
             RunAppArg::Chess => "chess",
             RunAppArg::Settings => "settings",
             RunAppArg::Sudoku => "sudoku",
+            RunAppArg::AppStore => "app-store",
         }
     }
 }

@@ -175,17 +175,20 @@ impl Screens {
         let home_manifest = parse_built_in("home", HOME_MANIFEST)?;
         let chess_manifest = parse_built_in("chess", CHESS_MANIFEST)?;
         let settings_manifest = parse_built_in("settings", SETTINGS_MANIFEST)?;
+        let app_store_manifest = parse_built_in("app-store", APP_STORE_MANIFEST)?;
 
-        // Settings is a default app (ADR-0015) and belongs on the shelf every
-        // path renders. `session::home_screen` listed it and this did not, so
-        // the tile appeared in an interactive session and was missing from the
-        // panel — `open` renders through here. Two shelves is one too many;
-        // `both_shelves_list_the_same_apps` below holds them together.
+        // Settings and the App Store are default apps (ADR-0015, ADR-0018)
+        // and belong on the shelf every path renders. `session::home_screen`
+        // is the other one; `both_shelves_offer_the_same_apps` below holds
+        // them together so the two cannot drift the way Settings once did.
         let home = HomeScreen {
             entries: vec![
                 ShelfEntry::from_manifest(&chess_manifest, ShelfGlyph::Board),
                 ShelfEntry::from_manifest(&settings_manifest, ShelfGlyph::Gear),
-                ShelfEntry::action("App Store", "NOT INSTALLED", ShelfGlyph::Store),
+                // Read from its own manifest the same way Chess and Settings
+                // are, rather than from a catalog lookup that finds nothing
+                // and renders it as if it were not installed at all.
+                ShelfEntry::from_manifest(&app_store_manifest, ShelfGlyph::Store),
                 ShelfEntry::action("Return to stock", "REMARKABLE", ShelfGlyph::Stock),
             ],
             facts: vec![
@@ -201,7 +204,6 @@ impl Screens {
 
         let settings_host = PlaceholderHost::new();
         let settings = SettingsScreen::from_host(&settings_host);
-        let app_store_manifest = parse_built_in("app-store", APP_STORE_MANIFEST)?;
         let sudoku_manifest = parse_built_in("sudoku", SUDOKU_MANIFEST)?;
         let app_store = AppStoreScreen::new(preview_inventory(
             &chess_manifest,
@@ -456,23 +458,25 @@ mod golden {
 
     /// Screen, its frozen digest, and its ink coverage in per mille.
     ///
-    /// Home's value is also device evidence rather than only a desktop
-    /// reading: `docs/device/www-23-first-light.md` records the tablet
-    /// computing `0fb73b27…b0b08dd2` at ink 318/1000 for this same render, on
-    /// aarch64, which is the one direct check that the digest a device run
-    /// reports and the digest a Mac run reports are the same number.
+    /// `docs/device/www-23-first-light.md` records the tablet computing
+    /// `0fb73b27…b0b08dd2` at ink 318/1000 for the Home shelf, on aarch64 —
+    /// the one direct check that the digest a device run reports and the
+    /// digest a Mac run reports are the same number. That was the three-tile
+    /// shelf, before Settings (WWW-37) and the App Store (WWW-38) had tiles
+    /// of their own; today's Home digest below has moved past it and is a
+    /// desktop reading only, the same as the other three, until it is
+    /// re-verified on the device.
     ///
     /// The other four are desktop readings only. Rendering uses `sin`, `cos`
     /// and `powf`, whose results are the platform's libm rather than something
     /// IEEE 754 pins down, so a device run printing a different digest for
-    /// Chess, Settings or the App Store is a question to investigate — which
-    /// libm, and by how many pixels — and not by itself proof the render
-    /// drifted. Home matching across both platforms is the reason to expect
-    /// they agree, not a guarantee that they do.
+    /// Chess, Settings, the App Store or Sudoku is a question to
+    /// investigate — which libm, and by how many pixels — and not by itself
+    /// proof the render drifted.
     const GOLDEN: [(Screen, &str, u32); 5] = [
         (
             Screen::Home,
-            "1dff16794e0cc4188720d3d74eac62c536fcd4d4fb292d6337ac9871203bc786",
+            "0a1239517ab8da7a07978347dfd14de8a1e5f07f2d62970e1b8818c76857a5e4",
             420,
         ),
         (
@@ -614,11 +618,9 @@ mod golden {
     /// Compared by launchable app id, read from both constructions, rather
     /// than against a list of names written down here: a list is a third
     /// place to forget, and forgetting is the whole failure. What that
-    /// deliberately does not compare is an entry with no id — the preview's
-    /// `App Store` placeholder and `Return to stock` launch nothing, and the
-    /// placeholder is a known difference until WWW-38 gives the App Store a
-    /// real entry. The moment it does, on either shelf alone, the ids stop
-    /// matching and this fails.
+    /// deliberately does not compare is an entry with no id — `Return to
+    /// stock` launches nothing on either shelf, so it never enters the
+    /// comparison at all.
     #[test]
     fn both_shelves_offer_the_same_apps() {
         fn launchable(entries: &[paper_home::ShelfEntry]) -> Vec<String> {

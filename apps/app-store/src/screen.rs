@@ -42,7 +42,11 @@ pub enum Request {
 }
 
 /// What a [`Request`] produced.
-#[derive(Debug)]
+///
+/// `Clone` so [`AppStoreApp`](crate::AppStoreApp) can fold one in from a
+/// borrowed [`Event::Completed`](paper_sdk::Event::Completed) without owning
+/// the event.
+#[derive(Debug, Clone)]
 pub enum Outcome {
     /// A fresh snapshot.
     Refreshed(Box<Inventory>),

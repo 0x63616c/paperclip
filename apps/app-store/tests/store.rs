@@ -87,7 +87,7 @@ impl World {
     fn source_with(
         &self,
         granted: bool,
-        running: Box<dyn paper_packages::install::ActivationGuard>,
+        running: Box<dyn paper_packages::install::ActivationGuard + Send + Sync>,
     ) -> Result<paper_app_store::PackagesSource, SourceError> {
         paper_app_store::PackagesSource::for_app(
             self.layout.clone(),

@@ -40,7 +40,11 @@ use semver::Version;
 /// A trait because the answer comes from a different place on a developer's
 /// Mac than it will on the tablet once the host carries package operations
 /// over the protocol. The screen above it does not change when that lands.
-pub trait StoreSource: fmt::Debug {
+///
+/// `Send + Sync`: every method here blocks, so [`AppStoreApp`](crate::AppStoreApp)
+/// holds its source behind an `Arc` and calls it from a worker thread, never
+/// from `App::event` or `App::draw`.
+pub trait StoreSource: fmt::Debug + Send + Sync {
     /// Everything installed, everything offered, merged.
     fn inventory(&self) -> Result<Inventory, SourceError>;
 
@@ -71,7 +75,7 @@ pub struct PackagesSource {
     layout: Layout,
     catalog: PathBuf,
     keys: TrustedKeys,
-    running: Box<dyn ActivationGuard>,
+    running: Box<dyn ActivationGuard + Send + Sync>,
 }
 
 impl PackagesSource {
@@ -79,13 +83,20 @@ impl PackagesSource {
     ///
     /// The `caller` is what makes this a client rather than an owner. There is
     /// no constructor that skips it.
+    ///
+    /// `running` must be `Send + Sync`: every [`StoreSource`] method blocks
+    /// (this module's own doc says so), so the app that owns one calls it
+    /// from a worker thread, never from `App::event` or `App::draw` — see
+    /// `apps/app-store/src/app.rs`. A guard that could not cross that
+    /// boundary would make the one constructor for the real thing unusable
+    /// from the one place it is meant to be called from.
     pub fn for_app(
         layout: Layout,
         policy: InstallPolicy,
         catalog: impl Into<PathBuf>,
         keys: TrustedKeys,
         caller: &InstalledApp,
-        running: Box<dyn ActivationGuard>,
+        running: Box<dyn ActivationGuard + Send + Sync>,
     ) -> Result<Self, SourceError> {
         if !caller.capabilities().holds(Capability::Packages) {
             return Err(SourceError::NotPermitted {
