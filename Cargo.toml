@@ -12,6 +12,7 @@ members = [
     "platform/sdk",
     "platform/device",
     "platform/host",
+    "apps/app-store",
     "apps/home",
     "apps/chess",
     "apps/settings",
@@ -41,6 +42,7 @@ paper-packages = { path = "platform/packages", default-features = false }
 # consumer that needs a window. Apps must not drag in a windowing stack.
 paper-sdk = { path = "platform/sdk", default-features = false }
 paper-device = { path = "platform/device" }
+paper-app-store = { path = "apps/app-store" }
 paper-home = { path = "apps/home" }
 paper-host = { path = "platform/host" }
 paper-chess = { path = "apps/chess" }

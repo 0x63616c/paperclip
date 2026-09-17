@@ -1352,6 +1352,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "paper-app-store"
+version = "0.1.0"
+dependencies = [
+ "paper-packages",
+ "paper-sdk",
+ "semver",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "paper-chess"
 version = "0.1.0"
 dependencies = [
@@ -1494,6 +1505,7 @@ name = "paperctl"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "paper-app-store",
  "paper-chess",
  "paper-home",
  "paper-host",

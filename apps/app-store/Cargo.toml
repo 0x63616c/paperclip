@@ -1,0 +1,26 @@
+[package]
+name = "paper-app-store"
+description = "The App Store: what is installed, what a catalog offers, and installing it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+paper-packages = { workspace = true }
+paper-sdk = { workspace = true }
+semver = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# The app itself is built without `publishing` — an app must never contain a
+# code path that can sign a release (§12), and `cargo build -p paper-app-store`
+# proves it does not. The *tests* need to build a catalog to install from, so
+# they turn the feature on for the test binary only.
+paper-packages = { workspace = true, features = ["publishing"] }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

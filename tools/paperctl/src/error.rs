@@ -3,12 +3,14 @@
 use std::io;
 use std::path::PathBuf;
 
+#[cfg(feature = "publishing")]
+use paper_packages::CheckError;
 use paper_packages::archive::ArchiveError;
 use paper_packages::catalog::CatalogError;
 use paper_packages::install::InstallError;
 use paper_packages::signing::SignatureError;
 use paper_packages::store::StoreError;
-use paper_packages::{CheckError, ManifestError, PayloadError};
+use paper_packages::{ManifestError, PayloadError};
 
 /// A command failure, phrased for someone at a terminal.
 #[derive(Debug, thiserror::Error)]
@@ -44,6 +46,10 @@ pub(crate) enum CommandError {
     /// Boxed because `CheckError` is the largest thing this enum can hold, and
     /// every `Result<(), CommandError>` in the binary would otherwise be that
     /// big on the success path too.
+    ///
+    /// Publishing-only: `paperctl check` is a Mac-side command, and the device
+    /// build has no code path that can produce this.
+    #[cfg(feature = "publishing")]
     #[error("the package source at {path} did not pass `paperctl check`")]
     PackageSource {
         /// Which package directory.

@@ -1,0 +1,15 @@
+# The App Store ships with Paperclip and is always present (project decision,
+# 2026-09-16, amending §3 and §5), and it carries the same manifest every other
+# app does. Being a default does not shorten the contract.
+#
+# There is no `capabilities` key here and there never will be: an app cannot
+# grant itself anything (ADR-0003). The App Store manages packages because host
+# policy grants it `packages`, which `PackageManager::on_behalf_of` checks.
+
+[app]
+id = "dev.calum.app-store"
+name = "App Store"
+version = "0.1.0"
+protocol = "1.0"
+entrypoint = "bin/app-store"
+assets = []

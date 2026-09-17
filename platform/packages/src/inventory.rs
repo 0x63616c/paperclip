@@ -71,6 +71,37 @@ pub struct AppEntry {
 }
 
 impl AppEntry {
+    /// An entry built by hand, for previews and tests.
+    ///
+    /// The *state* is still derived rather than passed in, so a fixture cannot
+    /// show a combination the real survey would never produce — a preview that
+    /// can draw an impossible row is a preview that stops predicting anything.
+    pub fn fixture(
+        app: AppId,
+        name: DisplayName,
+        installed: Option<Version>,
+        available: Option<Version>,
+    ) -> Self {
+        let on_disk = installed.clone().into_iter().collect::<Vec<_>>();
+        Self {
+            state: state_of(
+                installed.as_ref(),
+                available.as_ref(),
+                &on_disk,
+                None,
+                available.is_some(),
+            ),
+            app,
+            name,
+            installed,
+            fallback: None,
+            on_disk,
+            available,
+            available_prerelease: None,
+            health: None,
+        }
+    }
+
     /// Whether installing would move this app forward.
     pub fn update_available(&self) -> bool {
         matches!(self.state, AppState::UpdateAvailable)
@@ -227,6 +258,14 @@ impl Inventory {
                 stale: view.stale,
             }),
         })
+    }
+
+    /// An inventory built by hand, for previews and tests.
+    ///
+    /// Never a substitute for [`Self::survey`] anywhere a real answer is
+    /// needed — this is display data with no device behind it.
+    pub fn fixture(entries: Vec<AppEntry>, catalog: Option<CatalogStatus>) -> Self {
+        Self { entries, catalog }
     }
 
     /// Every row, in app id order.

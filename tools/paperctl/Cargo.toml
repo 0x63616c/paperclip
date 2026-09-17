@@ -17,7 +17,7 @@ repository.workspace = true
 [features]
 default = ["desktop", "publishing"]
 # The offscreen renderer and the built-in screens.
-apps = ["dep:paper-chess", "dep:paper-home", "dep:paper-settings"]
+apps = ["dep:paper-app-store", "dep:paper-chess", "dep:paper-home", "dep:paper-settings"]
 # The preview window, which drags in winit and softbuffer.
 desktop = ["apps", "paper-sdk/desktop"]
 # `paperctl key`, `package`, `publish` and `check`: the commands that hold a
@@ -28,6 +28,7 @@ publishing = ["paper-packages/publishing"]
 
 [dependencies]
 clap = { workspace = true }
+paper-app-store = { workspace = true, optional = true }
 paper-chess = { workspace = true, optional = true }
 paper-home = { workspace = true, optional = true }
 paper-host = { workspace = true }
