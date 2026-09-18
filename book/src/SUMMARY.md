@@ -44,3 +44,4 @@
 - [ADR-0037: The compositor accept loop, its client wire, and crash/hang isolation](./decisions/0037-compositor-accept-loop-and-crash-hang-isolation.md)
 - [ADR-0038: Sleep and lock as a compositor overlay, not a session hack](./decisions/0038-sleep-and-lock-as-a-compositor-overlay.md)
 - [ADR-0039: Everything is an app: the compositor as a long-running service](./decisions/0039-everything-is-an-app-the-compositor-as-a-service.md)
+- [ADR-0040: Staging the compositor into the platform release](./decisions/0040-staging-the-compositor-into-the-platform-release.md)
