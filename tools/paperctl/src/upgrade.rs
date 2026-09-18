@@ -426,12 +426,19 @@ fn reconcile(args: &StatusArgs) -> Result<(), CommandError> {
 /// Replaces `paperctl` itself, keeping the outgoing one beside it.
 ///
 /// §13: updating the bootstrap is a separate operation with its own recovery
-/// plan, and this is the plan — the outgoing binary is *renamed*, not
-/// overwritten, so it keeps working for anything already running it and stays
-/// on disk under `paperctl.previous` for a person to move back by hand over
-/// SSH. Overwriting in place would fail with `ETXTBSY` against a running
-/// process anyway, and succeed against a stopped one in a way that leaves no
-/// way back.
+/// plan, and this is the plan — the outgoing binary is *copied* to
+/// `paperctl.previous` for a person to move back by hand over SSH, and
+/// [`paper_packages::store::atomic_write`] puts the replacement at the live
+/// path with a single `rename`, so `live` is either the old binary or the new
+/// one at every instant and is never briefly absent. An earlier version of
+/// this function renamed `live` to `kept` *before* writing the replacement:
+/// if the write then failed (a full disk, a directory gone read-only), the
+/// device was left with no `paperctl` at all — only `kept`. `atomic_write`
+/// already stages its content beside the target and swaps it in with one
+/// `rename`, so it does not need `live` moved out of the way first; renaming
+/// over a binary that is currently executing works too (the running process
+/// keeps its own inode open — that is a plain `rename`, not the in-place
+/// truncate that fails with `ETXTBSY`).
 fn bootstrap(args: &BootstrapArgs) -> Result<(), CommandError> {
     let layout = args.root.layout();
     layout.ensure().map_err(CommandError::from)?;
@@ -443,8 +450,7 @@ fn bootstrap(args: &BootstrapArgs) -> Result<(), CommandError> {
         source,
     })?;
     if live.exists() {
-        let _ = std::fs::remove_file(&kept);
-        std::fs::rename(&live, &kept).map_err(|source| CommandError::Write {
+        std::fs::copy(&live, &kept).map_err(|source| CommandError::Write {
             path: kept.clone(),
             source,
         })?;
@@ -601,6 +607,14 @@ fn report_outcome(outcome: &Outcome) {
                 .as_ref()
                 .map_or_else(|| "nothing".to_owned(), ToString::to_string);
             println!("Paperclip {from} -> {to}: {}", health.summary());
+            // WWW-76: a platform upgrade never touches `bin/paperctl` itself
+            // — see this module's doc and ADR-0032 for why that stays a
+            // separate, deliberate step. `doctor` is what notices it went
+            // stale; this line is where an operator learns to ask it.
+            println!(
+                "if this release changed paperctl, `paperctl doctor` will say so; \
+                 `paperctl upgrade bootstrap <path>` refreshes it."
+            );
         }
         Outcome::RolledBack {
             candidate,
@@ -682,6 +696,100 @@ mod tests {
                 "--root",
                 "/home/root/paperclip",
             ]
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod bootstrap_tests {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::Path;
+
+    use super::*;
+
+    fn args(root: &Path, replacement: &Path) -> BootstrapArgs {
+        BootstrapArgs {
+            replacement: replacement.to_path_buf(),
+            root: RootArgs {
+                root: root.to_path_buf(),
+            },
+        }
+    }
+
+    #[test]
+    fn bootstrap_replaces_live_and_keeps_a_copy_of_the_previous_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layout = PlatformLayout::new(dir.path());
+        layout.ensure().expect("ensure");
+        let live = layout.bin_dir().join("paperctl");
+        std::fs::write(&live, b"old paperctl").expect("write live");
+
+        let replacement = dir.path().join("new-paperctl");
+        std::fs::write(&replacement, b"new paperctl").expect("write replacement");
+
+        bootstrap(&args(dir.path(), &replacement)).expect("bootstrap");
+
+        assert_eq!(std::fs::read(&live).expect("read live"), b"new paperctl");
+        let kept = layout.bin_dir().join("paperctl.previous");
+        assert_eq!(std::fs::read(&kept).expect("read kept"), b"old paperctl");
+        let mode = std::fs::metadata(&live)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755, "the replacement must be executable");
+    }
+
+    /// Proves the invariant the module doc claims: a write that fails
+    /// part-way through leaves `live` exactly as it was, never absent.
+    ///
+    /// `paperctl.previous` is pre-created so the copy step (which only needs
+    /// write access to that existing file, not a new directory entry) still
+    /// succeeds once the directory is made read-only; only `atomic_write`'s
+    /// staging file — a brand new directory entry — is refused. That is the
+    /// failure this test forces: the same shape as a full disk or a
+    /// filesystem gone read-only under the write.
+    #[test]
+    fn a_failed_replacement_leaves_the_previous_paperctl_working() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layout = PlatformLayout::new(dir.path());
+        layout.ensure().expect("ensure");
+        let bin_dir = layout.bin_dir();
+        let live = bin_dir.join("paperctl");
+        let kept = bin_dir.join("paperctl.previous");
+        std::fs::write(&live, b"old paperctl").expect("write live");
+        std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod live");
+        std::fs::write(&kept, b"older paperctl").expect("write kept");
+
+        let replacement = dir.path().join("new-paperctl");
+        std::fs::write(&replacement, b"new paperctl").expect("write replacement");
+
+        std::fs::set_permissions(&bin_dir, std::fs::Permissions::from_mode(0o555))
+            .expect("make bin_dir refuse new entries");
+
+        let result = bootstrap(&args(dir.path(), &replacement));
+
+        // Restore write access so the tempdir can clean itself up.
+        std::fs::set_permissions(&bin_dir, std::fs::Permissions::from_mode(0o755))
+            .expect("restore bin_dir permissions");
+
+        assert!(
+            result.is_err(),
+            "the replacement write was expected to fail"
+        );
+        assert_eq!(
+            std::fs::read(&live).expect("live must still exist"),
+            b"old paperctl",
+            "a failed replacement must leave the working binary in place"
+        );
+        let mode = std::fs::metadata(&live)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o111,
+            0o111,
+            "the surviving binary must stay executable"
         );
     }
 }

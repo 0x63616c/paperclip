@@ -51,7 +51,39 @@ pub(crate) struct LockStatus {
 pub(crate) struct BinaryStatus {
     present: bool,
     version: Option<String>,
-    matches_local: Option<bool>,
+    comparison: Option<VersionComparison>,
+}
+
+/// How the device's `paperctl` version compares to the one running this
+/// command (WWW-76): a plain string-equality check cannot say which side is
+/// stale, and "the device's binary is older" is what a recovery bootstrap
+/// actually needs surfaced — a newer device talking to an older Mac is not
+/// the same problem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum VersionComparison {
+    Same,
+    DeviceOlder,
+    DeviceNewer,
+    /// One side (almost always the device's, which reports whatever WWW-34's
+    /// era of `paperctl` printed) did not parse as semver.
+    Unparseable,
+}
+
+impl VersionComparison {
+    fn of(local: &str, device: &str) -> Self {
+        match (
+            local.parse::<semver::Version>(),
+            device.parse::<semver::Version>(),
+        ) {
+            (Ok(local), Ok(device)) => match device.cmp(&local) {
+                std::cmp::Ordering::Less => VersionComparison::DeviceOlder,
+                std::cmp::Ordering::Equal => VersionComparison::Same,
+                std::cmp::Ordering::Greater => VersionComparison::DeviceNewer,
+            },
+            _ => VersionComparison::Unparseable,
+        }
+    }
 }
 
 /// The overall answer, and what it means for the process exit code.
@@ -251,17 +283,17 @@ fn parse_binary(output: &CapturedOutput) -> BinaryStatus {
         return BinaryStatus {
             present: false,
             version: None,
-            matches_local: None,
+            comparison: None,
         };
     }
     let version = output.stdout.split_whitespace().last().map(str::to_owned);
-    let matches_local = version
+    let comparison = version
         .as_deref()
-        .map(|version| version == env!("CARGO_PKG_VERSION"));
+        .map(|version| VersionComparison::of(env!("CARGO_PKG_VERSION"), version));
     BinaryStatus {
         present: true,
         version,
-        matches_local,
+        comparison,
     }
 }
 
@@ -269,7 +301,10 @@ fn compute_verdict(xochitl: &XochitlStatus, lock: &LockStatus, binary: &BinarySt
     let degraded = xochitl.n_restarts > 0
         || lock.held
         || !binary.present
-        || binary.matches_local == Some(false);
+        || matches!(
+            binary.comparison,
+            Some(VersionComparison::DeviceOlder) | Some(VersionComparison::Unparseable)
+        );
     if degraded {
         Verdict::Degraded
     } else {
@@ -316,9 +351,18 @@ fn print_report(report: &DoctorReport, output: OutputFormat) -> Result<(), Comma
                     "device paperctl present={} version={}{}",
                     binary.present,
                     binary.version.as_deref().unwrap_or("-"),
-                    match binary.matches_local {
-                        Some(true) => " (matches this paperctl)".to_owned(),
-                        Some(false) => format!(" (this paperctl is {})", env!("CARGO_PKG_VERSION")),
+                    match binary.comparison {
+                        Some(VersionComparison::Same) => " (matches this paperctl)".to_owned(),
+                        Some(VersionComparison::DeviceOlder) => format!(
+                            " (older than this paperctl, {} — run `paperctl upgrade bootstrap` \
+                             or `paperctl deploy` to refresh it)",
+                            env!("CARGO_PKG_VERSION")
+                        ),
+                        Some(VersionComparison::DeviceNewer) =>
+                            format!(" (newer than this paperctl, {})", env!("CARGO_PKG_VERSION")),
+                        Some(VersionComparison::Unparseable) => {
+                            " (could not compare to this paperctl)".to_owned()
+                        }
                         None => String::new(),
                     }
                 );
@@ -407,12 +451,12 @@ mod tests {
         let present = BinaryStatus {
             present: true,
             version: Some("0.1.0".to_owned()),
-            matches_local: Some(true),
+            comparison: Some(VersionComparison::Same),
         };
         let missing = BinaryStatus {
             present: false,
             version: None,
-            matches_local: None,
+            comparison: None,
         };
 
         assert_eq!(compute_verdict(&clean, &free, &present), Verdict::Healthy);
@@ -422,6 +466,60 @@ mod tests {
         );
         assert_eq!(compute_verdict(&clean, &held, &present), Verdict::Degraded);
         assert_eq!(compute_verdict(&clean, &free, &missing), Verdict::Degraded);
+    }
+
+    #[test]
+    fn an_older_device_binary_degrades_the_verdict_but_a_newer_one_does_not() {
+        let clean = XochitlStatus {
+            active: true,
+            n_restarts: 0,
+        };
+        let free = LockStatus {
+            held: false,
+            holder: None,
+        };
+        let older = BinaryStatus {
+            present: true,
+            version: Some("0.1.0".to_owned()),
+            comparison: Some(VersionComparison::DeviceOlder),
+        };
+        let newer = BinaryStatus {
+            present: true,
+            version: Some("9.0.0".to_owned()),
+            comparison: Some(VersionComparison::DeviceNewer),
+        };
+        let unparseable = BinaryStatus {
+            present: true,
+            version: Some("not-a-version".to_owned()),
+            comparison: Some(VersionComparison::Unparseable),
+        };
+
+        assert_eq!(compute_verdict(&clean, &free, &older), Verdict::Degraded);
+        assert_eq!(compute_verdict(&clean, &free, &newer), Verdict::Healthy);
+        assert_eq!(
+            compute_verdict(&clean, &free, &unparseable),
+            Verdict::Degraded
+        );
+    }
+
+    #[test]
+    fn version_comparison_reads_semver_order_not_string_equality() {
+        assert_eq!(
+            VersionComparison::of("0.4.0", "0.4.0"),
+            VersionComparison::Same
+        );
+        assert_eq!(
+            VersionComparison::of("0.4.0", "0.3.9"),
+            VersionComparison::DeviceOlder
+        );
+        assert_eq!(
+            VersionComparison::of("0.4.0", "0.5.0"),
+            VersionComparison::DeviceNewer
+        );
+        assert_eq!(
+            VersionComparison::of("0.4.0", "garbage"),
+            VersionComparison::Unparseable
+        );
     }
 
     #[test]
@@ -463,8 +561,8 @@ mod tests {
         });
         assert_eq!(status.version.as_deref(), Some("0.0.1"));
         assert_eq!(
-            status.matches_local,
-            Some("0.0.1" == env!("CARGO_PKG_VERSION"))
+            status.comparison,
+            Some(VersionComparison::of(env!("CARGO_PKG_VERSION"), "0.0.1"))
         );
     }
 
