@@ -45,7 +45,6 @@ struct Painted {
 pub struct SettingsApp {
     screen: SettingsScreen,
     host: Box<dyn SettingsHost + Send>,
-    layout: Option<SettingsLayout>,
     /// What the last frame drawn showed, or `None` when the next frame has to
     /// be treated as the first one.
     painted: Option<Painted>,
@@ -61,7 +60,6 @@ impl SettingsApp {
         Self {
             screen: SettingsScreen::from_host(host.as_ref()),
             host,
-            layout: None,
             painted: None,
             damage: Damage::Full,
         }
@@ -159,10 +157,12 @@ impl App for SettingsApp {
     ) -> Action {
         match event {
             Event::Pointer(pointer) => {
-                let Some(layout) = self.layout.as_ref() else {
-                    return Action::None;
-                };
-                let press = self.screen.press(layout, pointer, self.host.as_mut());
+                // Pure and cheap: no canvas, no drawn frame to wait for. A
+                // tap is hit-testable the instant Settings exists, not only
+                // after the first `draw` — see `crate::screen::layout`'s own
+                // doc.
+                let layout = crate::screen::layout(context.viewport(), &self.screen);
+                let press = self.screen.press(&layout, pointer, self.host.as_mut());
                 if let Some(error) = press.error {
                     // The dialog has already closed and the snapshot has
                     // already been refreshed, so the next frame shows the
@@ -191,7 +191,6 @@ impl App for SettingsApp {
         };
         self.damage = Self::damage_between(self.painted, now, &layout, canvas.bounds());
         self.painted = Some(now);
-        self.layout = Some(layout);
     }
 
     fn save(&mut self, _context: &mut Context<'_, Self::Completion>) -> Result<(), SaveError> {
@@ -236,7 +235,6 @@ mod tests {
         };
         let damage = SettingsApp::damage_between(app.painted, now, &layout, canvas.bounds());
         app.painted = Some(now);
-        app.layout = Some(layout.clone());
         (layout, damage)
     }
 
@@ -336,12 +334,31 @@ mod tests {
     }
 
     #[test]
-    fn a_press_before_the_first_frame_does_nothing() {
+    fn a_press_before_the_first_frame_hits_nothing_up_there() {
+        // The layout is computed fresh from `context.viewport()` on every
+        // event now (`crate::screen::layout`), not cached from a previous
+        // `draw` — so this asks whether (1, 1) lands on anything, not
+        // whether a layout exists yet. It does not: that point is inside the
+        // status bar, above every tab and action.
+        let mut session = session::Session::start(app());
+        assert_eq!(session.pointer(tap(Point::new(1.0, 1.0))), None);
+        session.finish();
+    }
+
+    /// The bug this restructure removes: five apps each stored `layout:
+    /// Option<Layout>` and read taps as dead until the first `draw`
+    /// completed. A tab tap here lands before this session has ever been
+    /// asked to draw a frame, and still switches the page.
+    #[test]
+    fn a_tab_press_before_any_draw_still_switches_the_page() {
+        let screen = crate::screen::SettingsScreen::from_host(&PlaceholderHost::new());
+        let layout = crate::screen::layout(SCREEN, &screen);
+        let storage_tab = layout.nav.tabs()[1];
+
         let mut session = session::Session::start(app());
         assert_eq!(
-            session.pointer(tap(Point::new(1.0, 1.0))),
-            None,
-            "there was no layout to hit-test against"
+            session.pointer(tap(storage_tab.center())),
+            Some(paper_protocol::Request::Redraw)
         );
         session.finish();
     }

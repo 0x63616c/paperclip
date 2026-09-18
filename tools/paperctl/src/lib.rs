@@ -42,6 +42,8 @@ mod install;
 #[cfg(not(target_os = "linux"))]
 mod logs;
 mod manifest;
+#[cfg(not(target_os = "linux"))]
+mod new_app;
 #[cfg(feature = "apps")]
 mod open;
 #[cfg(feature = "publishing")]
@@ -108,6 +110,12 @@ enum Command {
     Manifest {
         #[command(subcommand)]
         command: manifest::ManifestCommand,
+    },
+    /// Scaffold a new app from `sdk-examples/counter` (WWW-51).
+    #[cfg(not(target_os = "linux"))]
+    New {
+        #[command(subcommand)]
+        command: new_app::NewCommand,
     },
     /// Report what the isolation actually enforces (§11).
     Isolation(device::IsolationArgs),
@@ -183,6 +191,8 @@ impl Command {
             #[cfg(feature = "apps")]
             Command::Run(_) => "run",
             Command::Manifest { .. } => "manifest",
+            #[cfg(not(target_os = "linux"))]
+            Command::New { .. } => "new",
             Command::Isolation(_) => "isolation",
             Command::Units(_) => "units",
             Command::Stock(_) => "stock",
@@ -331,6 +341,8 @@ fn run_cli(cli: Cli) -> Result<u8, CommandError> {
         #[cfg(feature = "apps")]
         Command::Run(args) => run::run(&args).map(|()| 0),
         Command::Manifest { command } => manifest::run(command).map(|()| 0),
+        #[cfg(not(target_os = "linux"))]
+        Command::New { command } => new_app::run_command(command).map(|()| 0),
         Command::Isolation(args) => device::run(device::DeviceCommand::Isolation(args)).map(|()| 0),
         Command::Units(args) => device::run(device::DeviceCommand::Units(args)).map(|()| 0),
         Command::Stock(args) => device::run(device::DeviceCommand::Stock(args)).map(|()| 0),

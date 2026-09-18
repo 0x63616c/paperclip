@@ -16,7 +16,7 @@ use paper_packages::AppId;
 use paper_packages::install::{Progress, Step};
 use paper_sdk::{
     Action, App, Canvas, Completer, Context, Damage, Event, Point, PointerEvent, PointerPhase,
-    Rect, SaveError,
+    Rect, SaveError, Size,
 };
 
 use crate::render::{DetailLayout, ListLayout, StoreLayout, render};
@@ -49,7 +49,6 @@ pub enum Completion {
 pub struct AppStoreApp {
     screen: AppStoreScreen,
     source: Arc<dyn StoreSource>,
-    layout: Option<StoreLayout>,
     /// What the last state change actually touched, so [`App::damage`] can
     /// claim less than the whole panel when that is safe.
     ///
@@ -70,7 +69,6 @@ impl AppStoreApp {
         Self {
             screen,
             source,
-            layout: None,
             pending_damage: Damage::Full,
         }
     }
@@ -79,9 +77,10 @@ impl AppStoreApp {
         if pointer.phase != PointerPhase::Up {
             return Action::None;
         }
-        let Some(layout) = self.layout.clone() else {
-            return Action::None;
-        };
+        // Pure and cheap: no canvas, no drawn frame to wait for. A tap is
+        // hit-testable the instant the store exists, not only after the
+        // first `draw` — see `crate::render::layout`'s own doc.
+        let layout = crate::render::layout(context.viewport(), &self.screen);
         match layout {
             StoreLayout::List(list) => self.press_list(&list, pointer.at, context),
             StoreLayout::Detail(detail) => self.press_detail(&detail, pointer.at, context),
@@ -228,12 +227,11 @@ impl AppStoreApp {
     }
 
     /// The row the operation in flight belongs to, in the current layout —
-    /// `None` when that is not answerable (the detail view is showing, the
-    /// layout has not been drawn yet, or the row scrolled out since). Every
-    /// `None` case falls back to [`Damage::Full`] in the caller, which is
-    /// always correct.
-    fn working_row(&self) -> Option<Rect> {
-        let StoreLayout::List(list) = self.layout.as_ref()? else {
+    /// `None` when that is not answerable (the detail view is showing, or the
+    /// row scrolled out since). Every `None` case falls back to
+    /// [`Damage::Full`] in the caller, which is always correct.
+    fn working_row(&self, bounds: Size) -> Option<Rect> {
+        let StoreLayout::List(list) = crate::render::layout(bounds, &self.screen) else {
             return None;
         };
         let working = self.screen.working()?;
@@ -261,7 +259,7 @@ impl App for AppStoreApp {
                 match completion.clone() {
                     Completion::Progress { step, percent } => {
                         self.pending_damage =
-                            self.working_row()
+                            self.working_row(context.viewport())
                                 .map_or(Damage::Full, |body| Damage::Regions {
                                     regions: vec![body],
                                 });
@@ -284,7 +282,7 @@ impl App for AppStoreApp {
     }
 
     fn draw(&mut self, canvas: &mut Canvas, _context: &mut Context<'_, Self::Completion>) {
-        self.layout = Some(render(canvas, &self.screen));
+        render(canvas, &self.screen);
     }
 
     /// Nothing here outlives the process. The screen's inventory comes from a
@@ -372,11 +370,11 @@ mod tests {
         Hello, HostMessage, LaunchReason, LifecycleEvent, PixelFormat, Pointer, PointerEvent,
         PointerPhase, Request, SessionId, SurfaceDescriptor, codec,
     };
-    use paper_sdk::{Canvas, Damage, LocalSurfaces, Outcome, RuntimeError, SCREEN, run};
+    use paper_sdk::{Damage, LocalSurfaces, Outcome, RuntimeError, SCREEN, run};
     use semver::Version;
 
     use super::AppStoreApp;
-    use crate::render::{StoreLayout, render};
+    use crate::render::StoreLayout;
     use crate::screen::AppStoreScreen;
     use crate::source::{SourceError, StoreSource};
 
@@ -605,13 +603,12 @@ mod tests {
     }
 
     /// The install button's position and its row's body, computed the same
-    /// way the app itself renders — the same convention `ChessApp`'s own
-    /// tests use (`square_center`, `apps/chess/src/app.rs`) — so a tap lands
-    /// where the button actually is.
+    /// pure way [`AppStoreApp::press`] does — no canvas needed, since
+    /// `crate::render::layout` does not draw anything. The same convention
+    /// `ChessApp`'s own tests use (`square_center`, `apps/chess/src/app.rs`).
     fn install_button(inventory: Inventory) -> (paper_protocol::Point, paper_protocol::Rect) {
         let screen = AppStoreScreen::new(inventory);
-        let mut canvas = Canvas::new(SCREEN).expect("a canvas");
-        let StoreLayout::List(list) = render(&mut canvas, &screen) else {
+        let StoreLayout::List(list) = crate::render::layout(SCREEN, &screen) else {
             panic!("an app that is only offered, not installed, shows the list");
         };
         let row = list.rows.first().expect("one row");
@@ -628,6 +625,33 @@ mod tests {
 
         assert_eq!(draw(&mut host_reader, &mut host_writer, 1), Damage::Full);
 
+        finish_session(host_reader, host_writer, handle);
+    }
+
+    /// The bug this restructure removes: five apps each stored `layout:
+    /// Option<Layout>` and read taps as dead until the first `draw`
+    /// completed. An install tap here lands before this session has ever
+    /// been asked to draw a frame, and still starts the install.
+    #[test]
+    fn an_install_tap_before_any_draw_still_starts_the_install() {
+        let version: Version = "0.1.0".parse().expect("a valid version");
+        let (install_at, _row_body) = install_button(inventory_offering(&version));
+        let source: Arc<dyn StoreSource> = Arc::new(SlowSource {
+            version,
+            delay: Duration::ZERO,
+        });
+        let (mut host_reader, mut host_writer, handle) = start_session(source);
+
+        let reply = send(&mut host_reader, &mut host_writer, &pointer_up(install_at));
+        assert!(
+            matches!(reply, AppMessage::Request(Request::Redraw)),
+            "pressing install before any draw must still ask for a redraw, got {reply:?}"
+        );
+
+        assert_eq!(
+            wait_for_settle(&mut host_reader, &mut host_writer),
+            Damage::Full
+        );
         finish_session(host_reader, host_writer, handle);
     }
 

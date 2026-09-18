@@ -27,8 +27,9 @@ apps = [
     "dep:paper-sudoku",
     "dep:paper-sudoku-rules",
 ]
-# The preview window, which drags in winit and softbuffer.
-desktop = ["apps", "paper-sdk/desktop"]
+# The preview window, which drags in winit and softbuffer. `notify` too, for
+# `paperctl dev`'s hot reload — the tablet build never links either.
+desktop = ["apps", "paper-sdk/desktop", "dep:notify"]
 # `paperctl key`, `package`, `publish` and `check`: the commands that hold a
 # signing key. Off in the device build for the same reason `paper-packages`
 # gates its own publishing half — the tablet installs and verifies, and must
@@ -48,6 +49,7 @@ discovery = ["dep:mdns-sd"]
 [dependencies]
 clap = { workspace = true }
 mdns-sd = { version = "0.21", default-features = false, optional = true }
+notify = { workspace = true, optional = true }
 paper-app-store = { workspace = true, optional = true }
 paper-chess = { workspace = true, optional = true }
 paper-chess-rules = { workspace = true, optional = true }

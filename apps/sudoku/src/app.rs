@@ -8,10 +8,10 @@
 
 use std::convert::Infallible;
 
-use paper_sdk::{Action, App, Canvas, Context, Damage, Event, MAX_DAMAGE_RECTS, SaveError};
+use paper_sdk::{Action, App, Canvas, Context, Damage, DamageAccumulator, Event, SaveError};
 use paper_sudoku_rules::{Difficulty, Game};
 
-use crate::screen::{SudokuLayout, SudokuScreen};
+use crate::screen::SudokuScreen;
 
 /// The file name a puzzle is saved under, inside the app's own private
 /// storage. Not a path: [`paper_sdk::Storage`] resolves names relative to the
@@ -26,16 +26,14 @@ const FIRST_PUZZLE: Difficulty = Difficulty::Easy;
 pub struct SudokuApp {
     game: Game,
     screen: SudokuScreen,
-    layout: Option<SudokuLayout>,
-    /// What has changed since the last frame was published.
-    ///
-    /// Starts as [`Damage::Full`], which is the only correct answer for a
-    /// first frame: nothing is on the glass yet, so nothing can be reused.
-    pending: Damage,
+    /// What has changed since the last frame was published, under ADR-0021's
+    /// rules — see [`DamageAccumulator`]'s own doc.
+    damage_claims: DamageAccumulator,
     /// What the frame just drawn changed — [`App::damage`]'s answer.
     ///
     /// Held separately because `damage` is asked after `draw`, by which point
-    /// `pending` has already been reset for the next frame.
+    /// `damage_claims` has already been reset for the next frame by
+    /// [`DamageAccumulator::take_frame`].
     frame: Damage,
     /// Whether the saved puzzle has been loaded yet.
     ///
@@ -72,8 +70,7 @@ impl SudokuApp {
         Self {
             screen: SudokuScreen::new(game.difficulty()),
             game,
-            layout: None,
-            pending: Damage::Full,
+            damage_claims: DamageAccumulator::new(),
             frame: Damage::Full,
             loaded: false,
         }
@@ -104,27 +101,6 @@ impl SudokuApp {
         let path = private.join(SAVE_FILE);
         paper_sudoku_rules::save(&self.game, &path).map_err(SaveError::new)
     }
-
-    /// Folds what a press changed into what the next frame will claim.
-    ///
-    /// [`Damage::Full`] is absorbing in both directions, and more rectangles
-    /// than the protocol accepts collapses to it as well. Both are the safe
-    /// direction: a larger claim costs one bigger panel update, while a
-    /// dropped rectangle costs a cell that stays wrong until something else
-    /// happens to repaint it.
-    fn accumulate(&mut self, damage: Damage) {
-        let Damage::Regions { regions: added } = damage else {
-            self.pending = Damage::Full;
-            return;
-        };
-        let Damage::Regions { regions: pending } = &mut self.pending else {
-            return;
-        };
-        pending.extend(added);
-        if pending.len() > MAX_DAMAGE_RECTS {
-            self.pending = Damage::Full;
-        }
-    }
 }
 
 impl Default for SudokuApp {
@@ -152,12 +128,14 @@ impl App for SudokuApp {
         }
         match event {
             Event::Pointer(pointer) => {
-                let Some(layout) = self.layout else {
-                    return Action::None;
-                };
+                // Pure and cheap: no canvas, no drawn frame to wait for. A
+                // tap is hit-testable the instant a puzzle exists, not only
+                // after the first `draw` — see `crate::screen::layout`'s own
+                // doc.
+                let layout = crate::screen::layout(context.viewport());
                 let revision = self.game.revision();
                 let press = self.screen.press(&mut self.game, &layout, pointer);
-                self.accumulate(press.damage);
+                self.damage_claims.claim(press.damage);
                 // Comparing the revision is the "did the puzzle change"
                 // question: a tap that only moved the selection, or that was
                 // refused, has nothing worth writing to storage.
@@ -174,7 +152,7 @@ impl App for SudokuApp {
             // presentable (see `Event::Resumed`), which is why this asks for
             // nothing.
             Event::Suspended | Event::Resumed => {
-                self.pending = Damage::Full;
+                self.damage_claims.claim(Damage::Full);
                 Action::None
             }
             _ => Action::None,
@@ -185,21 +163,8 @@ impl App for SudokuApp {
         if !self.loaded {
             self.load(context);
         }
-        self.layout = Some(crate::screen::render(canvas, &self.screen, &self.game));
-        let claimed = std::mem::replace(
-            &mut self.pending,
-            Damage::Regions {
-                regions: Vec::new(),
-            },
-        );
-        // A draw the app did not ask for — a first frame, a remapped surface,
-        // a host that simply wants one — has no accumulated claim behind it,
-        // and "nothing changed" would present nothing at all. The whole
-        // viewport is the only answer that cannot be wrong.
-        self.frame = match claimed {
-            Damage::Regions { ref regions } if regions.is_empty() => Damage::Full,
-            claimed => claimed,
-        };
+        crate::screen::render(canvas, &self.screen, &self.game);
+        self.frame = self.damage_claims.take_frame();
     }
 
     fn save(&mut self, context: &mut Context<'_, Self::Completion>) -> Result<(), SaveError> {
@@ -352,13 +317,12 @@ mod tests {
     }
 
     /// The game a session on [`SEED`] starts from, and the layout a real
-    /// render of it produces — computed the way the screen's own tests do, so
-    /// these are the pixels the app is actually working in and not a guess.
+    /// session sees — computed the same pure way [`SudokuApp::event`] does,
+    /// no canvas needed, since `crate::screen::layout` does not draw
+    /// anything.
     fn probe() -> (Game, crate::SudokuLayout) {
         let game = Game::start(Difficulty::Easy, SEED);
-        let screen = crate::SudokuScreen::new(game.difficulty());
-        let mut canvas = paper_sdk::Canvas::new(paper_sdk::SCREEN).expect("a canvas");
-        let layout = crate::screen::render(&mut canvas, &screen, &game);
+        let layout = crate::screen::layout(paper_sdk::SCREEN);
         (game, layout)
     }
 

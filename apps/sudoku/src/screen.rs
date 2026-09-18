@@ -24,7 +24,7 @@
 
 use paper_sdk::chrome::{self, MARGIN};
 use paper_sdk::{
-    Action, Canvas, Damage, MAX_DAMAGE_RECTS, Point, PointerEvent, Rect, TextStyle, palette,
+    Action, Canvas, Damage, MAX_DAMAGE_RECTS, Point, PointerEvent, Rect, Size, TextStyle, palette,
 };
 use paper_sudoku_rules::{Cell, Difficulty, Game, MoveError};
 
@@ -316,35 +316,21 @@ pub struct SudokuLayout {
     pub home: Rect,
 }
 
-/// Draws the Sudoku screen and returns the layout used.
-pub fn render(canvas: &mut Canvas, screen: &SudokuScreen, game: &Game) -> SudokuLayout {
-    let bounds = canvas.bounds();
-    canvas.clear(palette::PAPER);
-    let content = chrome::draw_status_bar(
-        canvas,
-        "SUDOKU",
-        &format!(
-            "{} \u{00B7} {} GIVENS",
-            game.difficulty().label(),
-            game.puzzle().given_count()
-        ),
-    );
-
-    let heading_bottom = chrome::draw_section_heading(
-        canvas,
-        "PUZZLE",
-        Point::new(MARGIN, content.y + 40.0),
-        bounds.width - MARGIN * 2.0,
-    );
+/// Where everything on the Sudoku screen would land for a viewport shaped
+/// like `bounds` — no [`Canvas`], no [`SudokuScreen`] and no [`Game`], because
+/// nothing about this screen's geometry depends on the puzzle or its state:
+/// there are always exactly three footer actions, whatever their labels say.
+///
+/// [`crate::app::SudokuApp`] calls this directly from
+/// [`event`](paper_sdk::App::event), so a tap is hit-testable before the
+/// first [`draw`](paper_sdk::App::draw) ever runs rather than only after a
+/// frame has been drawn to cache it from.
+pub(crate) fn layout(bounds: Size) -> SudokuLayout {
+    let bounds = Rect::new(0.0, 0.0, bounds.width as f32, bounds.height as f32);
+    let content = chrome::status_bar_content_area(bounds);
+    let heading_bottom = chrome::section_heading_content_top(Point::new(MARGIN, content.y + 40.0));
 
     let status = Rect::new(0.0, heading_bottom + 8.0, bounds.width, STATUS_BAND);
-    canvas.draw_text(
-        &status_text(screen, game),
-        Point::new(MARGIN, status.y + 26.0),
-        TextStyle::new(52.0, palette::INK)
-            .with_weight(0.12)
-            .with_tracking(0.06),
-    );
 
     let footer_top = bounds.height - chrome::FOOTER_HEIGHT;
     let pad = PadLayout::fit(Rect::new(
@@ -361,16 +347,7 @@ pub fn render(canvas: &mut Canvas, screen: &SudokuScreen, game: &Game) -> Sudoku
         pad.keys()[0].1.y - 28.0 - grid_top,
     ));
 
-    draw_grid(canvas, grid, screen, game);
-    draw_pad(canvas, &pad);
-
-    let new_puzzle_label = if screen.new_puzzle_armed {
-        "CONFIRM NEW PUZZLE?"
-    } else {
-        "NEW PUZZLE"
-    };
-    let next_label = format!("NEXT: {}", screen.next_difficulty.label());
-    let actions = chrome::draw_footer_actions(canvas, &[new_puzzle_label, &next_label, "HOME"]);
+    let actions = chrome::footer_action_rects(bounds, 3);
 
     SudokuLayout {
         grid,
@@ -380,6 +357,54 @@ pub fn render(canvas: &mut Canvas, screen: &SudokuScreen, game: &Game) -> Sudoku
         difficulty: actions[1],
         home: actions[2],
     }
+}
+
+/// Draws the Sudoku screen against a layout [`layout`] already computed.
+pub(crate) fn draw(canvas: &mut Canvas, screen: &SudokuScreen, game: &Game, layout: &SudokuLayout) {
+    let bounds = canvas.bounds();
+    canvas.clear(palette::PAPER);
+    let content = chrome::draw_status_bar(
+        canvas,
+        "SUDOKU",
+        &format!(
+            "{} \u{00B7} {} GIVENS",
+            game.difficulty().label(),
+            game.puzzle().given_count()
+        ),
+    );
+    chrome::draw_section_heading(
+        canvas,
+        "PUZZLE",
+        Point::new(MARGIN, content.y + 40.0),
+        bounds.width - MARGIN * 2.0,
+    );
+    canvas.draw_text(
+        &status_text(screen, game),
+        Point::new(MARGIN, layout.status.y + 26.0),
+        TextStyle::new(52.0, palette::INK)
+            .with_weight(0.12)
+            .with_tracking(0.06),
+    );
+
+    draw_grid(canvas, layout.grid, screen, game);
+    draw_pad(canvas, &layout.pad);
+
+    let new_puzzle_label = if screen.new_puzzle_armed {
+        "CONFIRM NEW PUZZLE?"
+    } else {
+        "NEW PUZZLE"
+    };
+    let next_label = format!("NEXT: {}", screen.next_difficulty.label());
+    chrome::draw_footer_actions(canvas, &[new_puzzle_label, &next_label, "HOME"]);
+}
+
+/// Computes the layout and draws it, for callers that want both — every
+/// existing call site, and every test that predates the split above.
+pub fn render(canvas: &mut Canvas, screen: &SudokuScreen, game: &Game) -> SudokuLayout {
+    let bounds = canvas.bounds();
+    let layout = self::layout(Size::new(bounds.width as u32, bounds.height as u32));
+    draw(canvas, screen, game, &layout);
+    layout
 }
 
 /// The line under the heading: what the last press did, or what to do next.
@@ -501,7 +526,7 @@ fn draw_pad(canvas: &mut Canvas, pad: &PadLayout) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Notice, SudokuLayout, SudokuScreen, render};
+    use super::{Notice, SudokuLayout, SudokuScreen, layout, render};
     use crate::layout::PadKey;
     use paper_sdk::chrome::MIN_TOUCH_TARGET;
     use paper_sdk::{
@@ -524,6 +549,14 @@ mod tests {
         let mut canvas = screen_canvas();
         let layout = render(&mut canvas, &screen, &game);
         (game, screen, canvas, layout)
+    }
+
+    #[test]
+    fn layout_needs_no_canvas_and_matches_what_render_draws() {
+        let game = Game::start(Difficulty::Easy, 4_242);
+        let screen = SudokuScreen::new(game.difficulty());
+        let drawn = render(&mut screen_canvas(), &screen, &game);
+        assert_eq!(layout(SCREEN), drawn);
     }
 
     /// An empty cell, and a digit that is legal in it.

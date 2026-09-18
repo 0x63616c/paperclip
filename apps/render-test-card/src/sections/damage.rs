@@ -63,28 +63,30 @@ impl DamageGridLayout {
 
 const CELL_HEIGHT: f32 = 220.0;
 
-pub(crate) fn render(
-    canvas: &mut Canvas,
-    content: Rect,
-    state: DamageGridState,
-) -> DamageGridLayout {
-    canvas.draw_text(
-        "TAP A CELL - EACH TAP CLAIMS ONLY THAT CELL (ADR-0021)",
-        Point::new(content.x, content.y),
-        TextStyle::new(26.0, palette::INK_SOFT).with_tracking(0.06),
-    );
-
+/// Where the grid and its cells land inside `content`. Pure geometry:
+/// nothing here depends on [`DamageGridState`], only on where the section
+/// starts.
+pub(crate) fn layout(content: Rect) -> DamageGridLayout {
     let grid = Rect::new(
         content.x,
         content.y + 44.0,
         content.width,
         CELL_HEIGHT * ROWS as f32,
     );
-    let layout = DamageGridLayout {
+    DamageGridLayout {
         grid,
         cell_width: grid.width / COLUMNS as f32,
         cell_height: grid.height / ROWS as f32,
-    };
+    }
+}
+
+/// Draws this section against a layout [`layout`] already computed.
+pub(crate) fn draw(canvas: &mut Canvas, state: DamageGridState, layout: &DamageGridLayout) {
+    canvas.draw_text(
+        "TAP A CELL - EACH TAP CLAIMS ONLY THAT CELL (ADR-0021)",
+        Point::new(layout.grid.x, layout.grid.y - 44.0),
+        TextStyle::new(26.0, palette::INK_SOFT).with_tracking(0.06),
+    );
 
     for index in 0..CELL_COUNT {
         let rect = layout.cell_rect(index);
@@ -96,10 +98,10 @@ pub(crate) fn render(
         canvas.fill_rect(rect, fill);
         canvas.stroke_rect(rect, palette::HAIRLINE, 2.0);
     }
-
-    layout
 }
 
+/// Computes the layout and draws it, for callers that want both — every
+/// existing call site, and every test that predates the split above.
 /// Handles a tap. `Some` carries the one cell that changed; `None` means the
 /// tap missed the grid.
 pub(crate) fn press(
@@ -114,19 +116,17 @@ pub(crate) fn press(
 
 #[cfg(test)]
 mod tests {
-    use super::{CELL_COUNT, DamageGridState, press, render};
-    use paper_sdk::{Canvas, Rect, SCREEN};
+    use super::{CELL_COUNT, DamageGridState, layout, press};
+    use paper_sdk::Rect;
 
-    fn canvas() -> Canvas {
-        Canvas::new(SCREEN).expect("a canvas")
+    fn content() -> Rect {
+        Rect::new(40.0, 40.0, 1500.0, 1600.0)
     }
 
     #[test]
     fn tapping_a_cell_toggles_only_that_cell() {
-        let mut canvas = canvas();
-        let content = Rect::new(40.0, 40.0, 1500.0, 1600.0);
         let mut state = DamageGridState::default();
-        let layout = render(&mut canvas, content, state);
+        let layout = layout(content());
         let target = layout.cell_rect(3);
 
         let changed = press(&mut state, &layout, target.center());
@@ -141,10 +141,8 @@ mod tests {
 
     #[test]
     fn a_tap_outside_the_grid_changes_nothing() {
-        let mut canvas = canvas();
-        let content = Rect::new(40.0, 40.0, 1500.0, 1600.0);
         let mut state = DamageGridState::default();
-        let layout = render(&mut canvas, content, state);
+        let layout = layout(content());
         assert_eq!(
             press(&mut state, &layout, paper_sdk::Point::new(0.0, 0.0)),
             None
@@ -154,13 +152,17 @@ mod tests {
 
     #[test]
     fn every_cell_is_reachable() {
-        let mut canvas = canvas();
-        let content = Rect::new(40.0, 40.0, 1500.0, 1600.0);
-        let state = DamageGridState::default();
-        let layout = render(&mut canvas, content, state);
+        let layout = layout(content());
         for index in 0..CELL_COUNT {
             let rect = layout.cell_rect(index);
             assert_eq!(layout.cell_at(rect.center()), Some(index));
         }
+    }
+
+    #[test]
+    fn drawing_does_not_panic() {
+        let mut canvas = paper_sdk::Canvas::new(paper_sdk::SCREEN).expect("a canvas");
+        super::draw(&mut canvas, DamageGridState::default(), &layout(content()));
+        assert!(canvas.ink_coverage() > 0.0);
     }
 }

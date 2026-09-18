@@ -3,16 +3,22 @@
 //! Runs a real app — [`paper_home::HomeApp`], [`paper_chess::ChessApp`] or
 //! [`paper_sudoku::SudokuApp`] — through the actual wire protocol
 //! [`paper_sdk::run`] speaks, in a real window, with isolated local storage
-//! that survives a restart. Watches this
-//! source tree; when it changes, rebuilds `paperctl` itself (which is what
-//! every app crate is linked into) and restarts into the freshly built
-//! binary — but only once the current session ends (the window closes, or
-//! the app itself asks for Home/`Launch`/`ReturnToStock`), never while it is
-//! sitting open. Making a rebuild interrupt a session someone is in the
-//! middle of would need a way to wake `paper_sdk::desktop`'s event loop from
-//! another thread, which does not exist yet ([`PreviewControl`] added a way
-//! to close it *from inside* a callback, not from outside one) — recorded
-//! here rather than guessed at, per the WWW-6 report.
+//! that survives a restart.
+//!
+//! ## Hot reload
+//!
+//! A [`notify`] watcher on this source tree runs for as long as `paperctl
+//! dev` does, on its own thread. When it sees a change during an open
+//! session, it does two things: sets a flag this module checks once the
+//! session ends, and asks the window to close *now*, through
+//! [`desktop::PreviewHandle`] — the door [`PreviewControl`] left for exactly
+//! this, closing the loop from outside a [`PreviewEvent`] callback rather
+//! than only from inside one. A closed window without an app-requested
+//! `Launch`/`Home`/`ReturnToStock` behind it and a set flag means "the
+//! watcher did this, not the user", which is what tells [`run`] to rebuild
+//! and relaunch the same app rather than exit the tool the way an
+//! intentional close still does. The loop this makes is edit, save, look —
+//! nothing left to close by hand.
 //!
 //! ## The bridge
 //!
@@ -29,11 +35,13 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
+use notify::Watcher as _;
 use paper_protocol::{AppId, ExitReason, PixelFormat, Request, SurfaceDescriptor};
 use paper_sdk::SCREEN;
-use paper_sdk::desktop::{self, PreviewControl, PreviewEvent, PreviewOptions};
+use paper_sdk::desktop::{self, PreviewControl, PreviewEvent, PreviewHandle, PreviewOptions};
 
 use crate::error::CommandError;
 use crate::session::{self, SessionError};
@@ -81,6 +89,84 @@ pub(crate) enum DevError {
     /// A fresh `paperctl dev` process could not be spawned.
     #[error("cannot start the rebuilt paperctl")]
     Spawn(#[source] std::io::Error),
+    /// The OS-level file watcher could not be created at all.
+    #[error("cannot start a file watcher")]
+    WatcherInit(#[source] notify::Error),
+    /// A directory could not be added to the file watcher.
+    #[error("cannot watch {path} for changes")]
+    Watch {
+        /// Which directory.
+        path: PathBuf,
+        /// Why.
+        #[source]
+        source: notify::Error,
+    },
+}
+
+/// A background watch on [`WATCHED_DIRS`], shared between the session loop
+/// and the watcher's own callback thread.
+struct SourceWatcher {
+    /// Kept alive for as long as the watch should run — dropping it stops
+    /// watching.
+    _watcher: notify::RecommendedWatcher,
+    /// Set the moment any watched file changes, and checked once a session
+    /// ends. [`run`] clears it at the start of every session so it answers
+    /// "did anything change during the session that just ran", not "ever".
+    changed: Arc<AtomicBool>,
+    /// The currently open preview's handle, if a session is running one —
+    /// `None` between sessions and while a session's window has not opened
+    /// yet. The watcher's callback uses this to close the window the moment
+    /// it sees a change, rather than waiting for the session to end on its
+    /// own to notice.
+    handle: Arc<Mutex<Option<PreviewHandle>>>,
+}
+
+/// Starts watching [`WATCHED_DIRS`] under `root`.
+fn watch_sources(root: &Path) -> Result<SourceWatcher, DevError> {
+    watch_dirs(WATCHED_DIRS.iter().map(|dir| root.join(dir)))
+}
+
+/// Starts watching every directory in `dirs`, recursively.
+///
+/// Split from [`watch_sources`] so the watch-and-signal behaviour is
+/// testable against a scratch directory, rather than only against this
+/// checkout's own `WATCHED_DIRS`.
+fn watch_dirs(dirs: impl IntoIterator<Item = PathBuf>) -> Result<SourceWatcher, DevError> {
+    let changed = Arc::new(AtomicBool::new(false));
+    let handle: Arc<Mutex<Option<PreviewHandle>>> = Arc::new(Mutex::new(None));
+
+    let event_changed = Arc::clone(&changed);
+    let event_handle = Arc::clone(&handle);
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.is_err() {
+            return;
+        }
+        event_changed.store(true, Ordering::SeqCst);
+        // Best-effort: if no session has a window open right now, there is
+        // nothing to close, and the flag above is what `run` acts on once
+        // one does.
+        if let Ok(handle) = event_handle.lock()
+            && let Some(handle) = handle.as_ref()
+        {
+            handle.request_exit();
+        }
+    })
+    .map_err(DevError::WatcherInit)?;
+
+    for path in dirs {
+        watcher
+            .watch(&path, notify::RecursiveMode::Recursive)
+            .map_err(|source| DevError::Watch {
+                path: path.clone(),
+                source,
+            })?;
+    }
+
+    Ok(SourceWatcher {
+        _watcher: watcher,
+        changed,
+        handle,
+    })
 }
 
 /// `paperctl dev`.
@@ -135,21 +221,24 @@ pub(crate) fn run(args: &DevArgs) -> Result<(), CommandError> {
         }
     }
 
+    let watcher = watch_sources(&workspace_root())?;
+
     loop {
         eprintln!(
-            "paperctl dev: running {app_slug} \u{2014} close the window, or use HOME / RETURN TO STOCK in the app, to pick up code changes"
+            "paperctl dev: running {app_slug} \u{2014} edit a watched file to rebuild and reload automatically"
         );
-        let watch_started = SystemTime::now();
-        let outcome = run_session(&app_slug, &storage_root)?;
+        watcher.changed.store(false, Ordering::SeqCst);
+        let outcome = run_session(&app_slug, &storage_root, &watcher)?;
+        let changed_during_session = watcher.changed.load(Ordering::SeqCst);
         app_slug = match outcome {
             SessionOutcome::Exit => return Ok(()),
             SessionOutcome::Relaunch(next) => next,
         };
 
-        if !sources_changed_since(watch_started) {
+        if !changed_during_session {
             continue;
         }
-        eprintln!("paperctl dev: source changed since this session started; rebuilding...");
+        eprintln!("paperctl dev: source changed; rebuilding...");
         match cargo_build() {
             Ok(()) => {
                 eprintln!("paperctl dev: build succeeded; restarting on the new build");
@@ -171,36 +260,6 @@ fn dev_storage_root() -> PathBuf {
 /// happens to be invoked from, which a relative path would not be.
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn sources_changed_since(since: SystemTime) -> bool {
-    let root = workspace_root();
-    WATCHED_DIRS
-        .iter()
-        .any(|dir| directory_changed_since(&root.join(dir), since))
-}
-
-fn directory_changed_since(dir: &Path, since: SystemTime) -> bool {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if directory_changed_since(&path, since) {
-                return true;
-            }
-            continue;
-        }
-        if entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .is_ok_and(|modified| modified > since)
-        {
-            return true;
-        }
-    }
-    false
 }
 
 fn cargo_build() -> Result<(), String> {
@@ -240,7 +299,16 @@ enum SessionOutcome {
 }
 
 /// Runs one app in one window to completion.
-fn run_session(app_slug: &str, storage_root: &Path) -> Result<SessionOutcome, CommandError> {
+///
+/// `watcher` is registered for the window's lifetime so a source change can
+/// close it from outside — see the module doc — and unregistered again
+/// before this returns, so a change landing between sessions has nothing
+/// stale to reach.
+fn run_session(
+    app_slug: &str,
+    storage_root: &Path,
+    watcher: &SourceWatcher,
+) -> Result<SessionOutcome, CommandError> {
     let mut current = session::open_session(
         app_slug,
         storage_root,
@@ -252,35 +320,56 @@ fn run_session(app_slug: &str, storage_root: &Path) -> Result<SessionOutcome, Co
     let options = PreviewOptions::new(format!("paperctl dev \u{2014} {app_slug}"), SCREEN);
     let mut relaunch: Option<String> = None;
 
-    let ran = desktop::run(options, |event| match event {
-        PreviewEvent::Render(canvas) => {
-            *canvas = current.frame();
-            PreviewControl::Continue
-        }
-        PreviewEvent::Pointer(pointer) => match current.pointer(pointer) {
-            Ok(Some(Request::Home)) => {
-                relaunch = Some("home".to_owned());
-                PreviewControl::Exit
-            }
-            Ok(Some(Request::Launch(id))) => {
-                relaunch = launch_target(&id);
-                PreviewControl::Exit
-            }
-            Ok(Some(Request::ReturnToStock)) => {
-                // Dev mode has no stock to hand back to; leaving the tool is
-                // the honest equivalent of the real device's exit route.
-                PreviewControl::Exit
-            }
-            Ok(_) => PreviewControl::Continue,
-            Err(error) => {
-                eprintln!("paperctl dev: {error}");
-                PreviewControl::Exit
-            }
+    let ran = desktop::run_with_handle(
+        options,
+        |handle| {
+            *watcher
+                .handle
+                .lock()
+                .expect("the watcher's handle mutex is never poisoned") = Some(handle);
         },
-        _ => PreviewControl::Continue,
-    });
+        |event| match event {
+            PreviewEvent::Render(canvas) => {
+                *canvas = current.frame();
+                PreviewControl::Continue
+            }
+            PreviewEvent::Pointer(pointer) => match current.pointer(pointer) {
+                Ok(Some(Request::Home)) => {
+                    relaunch = Some("home".to_owned());
+                    PreviewControl::Exit
+                }
+                Ok(Some(Request::Launch(id))) => {
+                    relaunch = launch_target(&id);
+                    PreviewControl::Exit
+                }
+                Ok(Some(Request::ReturnToStock)) => {
+                    // Dev mode has no stock to hand back to; leaving the tool
+                    // is the honest equivalent of the real device's exit
+                    // route.
+                    PreviewControl::Exit
+                }
+                Ok(_) => PreviewControl::Continue,
+                Err(error) => {
+                    eprintln!("paperctl dev: {error}");
+                    PreviewControl::Exit
+                }
+            },
+            _ => PreviewControl::Continue,
+        },
+    );
+    *watcher
+        .handle
+        .lock()
+        .expect("the watcher's handle mutex is never poisoned") = None;
     if let Err(error) = ran {
         eprintln!("paperctl dev: the window ended unexpectedly: {error}");
+    }
+
+    // No explicit Home/Launch/ReturnToStock, but a watched file changed while
+    // the window was open: the watcher closed it, not the user, so this is a
+    // reload of the same app, not an exit.
+    if relaunch.is_none() && watcher.changed.load(Ordering::SeqCst) {
+        relaunch = Some(app_slug.to_owned());
     }
 
     let reason = if relaunch.is_some() {
@@ -309,5 +398,56 @@ fn launch_target(id: &AppId) -> Option<String> {
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::watch_dirs;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    /// Polls `condition` for up to two seconds — the OS-level watchers this
+    /// wraps (FSEvents, inotify, kqueue) deliver asynchronously, so a test
+    /// that changed a file has to wait for a notification rather than
+    /// assert immediately.
+    fn wait_for(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        condition()
+    }
+
+    #[test]
+    fn writing_a_file_in_a_watched_directory_sets_the_changed_flag() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let watcher = watch_dirs([dir.path().to_path_buf()]).expect("a watcher");
+        assert!(!watcher.changed.load(Ordering::SeqCst));
+
+        std::fs::write(dir.path().join("lib.rs"), b"// changed").expect("writes a file");
+
+        assert!(
+            wait_for(|| watcher.changed.load(Ordering::SeqCst)),
+            "the watcher never saw the write"
+        );
+    }
+
+    #[test]
+    fn a_change_outside_every_watched_directory_is_not_seen() {
+        let watched = tempfile::tempdir().expect("a temp dir");
+        let unwatched = tempfile::tempdir().expect("a temp dir");
+        let watcher = watch_dirs([watched.path().to_path_buf()]).expect("a watcher");
+
+        std::fs::write(unwatched.path().join("lib.rs"), b"// changed").expect("writes a file");
+
+        // There is nothing to wait for that would ever become true, so this
+        // waits out the same window `wait_for` would and confirms it stayed
+        // false throughout rather than raced a slow notification.
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!watcher.changed.load(Ordering::SeqCst));
     }
 }

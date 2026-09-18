@@ -9,7 +9,7 @@
 
 use paper_packages::{AppId, Capability};
 use paper_sdk::chrome;
-use paper_sdk::{Action, Canvas, Point, PointerEvent, Rect};
+use paper_sdk::{Action, Canvas, Point, PointerEvent, Rect, Size};
 
 use crate::confirm::{self, ConfirmDialog, ConfirmLayout};
 use crate::host::{
@@ -336,44 +336,29 @@ pub struct SettingsLayout {
     pub confirm: Option<ConfirmLayout>,
 }
 
-/// Draws the Settings screen and returns the layout used, so the caller can
-/// hit-test presses against exactly what was drawn.
-pub fn render(canvas: &mut Canvas, screen: &SettingsScreen) -> SettingsLayout {
-    canvas.clear(paper_sdk::palette::PAPER);
-    let content = chrome::draw_status_bar(
-        canvas,
-        "SETTINGS",
-        &format!("V{}", screen.platform.paperclip_version),
-    );
-    let (nav_layout, area) = nav::draw_nav(canvas, screen.page, content.y);
+/// Where everything on the Settings screen would land for a viewport shaped
+/// like `bounds`, computed from `screen` alone — no [`Canvas`].
+///
+/// [`crate::app::SettingsApp`] calls this directly from
+/// [`event`](paper_sdk::App::event), so a tap is hit-testable before the
+/// first [`draw`](paper_sdk::App::draw) ever runs rather than only after a
+/// frame has been drawn to cache it from.
+pub(crate) fn layout(bounds: Size, screen: &SettingsScreen) -> SettingsLayout {
+    let bounds = Rect::new(0.0, 0.0, bounds.width as f32, bounds.height as f32);
+    let content_y = chrome::status_bar_content_area(bounds).y;
+    let (nav_layout, area) = nav::layout_nav(bounds, content_y);
 
     let page = match screen.page {
-        SettingsPage::Apps => PageLayout::Apps(pages::draw_apps(canvas, area, &screen.apps)),
-        SettingsPage::Storage => {
-            pages::draw_storage(canvas, area, &screen.storage);
-            PageLayout::ReadOnly
-        }
-        SettingsPage::Grants => {
-            PageLayout::Grants(pages::draw_grants(canvas, area, &screen.grants))
-        }
-        SettingsPage::Catalog => {
-            pages::draw_catalog(canvas, area, &screen.catalog);
-            PageLayout::ReadOnly
-        }
-        SettingsPage::Platform => {
-            pages::draw_platform(canvas, area, &screen.platform);
-            PageLayout::ReadOnly
-        }
-        SettingsPage::Diagnostics => {
-            pages::draw_diagnostics(canvas, area, &screen.diagnostics);
-            PageLayout::ReadOnly
-        }
+        SettingsPage::Apps => PageLayout::Apps(pages::layout_apps(area, &screen.apps)),
+        SettingsPage::Storage => PageLayout::ReadOnly,
+        SettingsPage::Grants => PageLayout::Grants(pages::layout_grants(area, &screen.grants)),
+        SettingsPage::Catalog => PageLayout::ReadOnly,
+        SettingsPage::Platform => PageLayout::ReadOnly,
+        SettingsPage::Diagnostics => PageLayout::ReadOnly,
     };
 
     let return_to_stock = if screen.pending.is_none() {
-        chrome::draw_footer_actions(canvas, &["RETURN TO REMARKABLE"])
-            .into_iter()
-            .next()
+        chrome::footer_action_rects(bounds, 1).into_iter().next()
     } else {
         None
     };
@@ -381,7 +366,7 @@ pub fn render(canvas: &mut Canvas, screen: &SettingsScreen) -> SettingsLayout {
     let confirm = screen
         .pending
         .as_ref()
-        .map(|pending| confirm::draw_confirm(canvas, &pending.dialog));
+        .map(|pending| confirm::layout_confirm(bounds, pending.dialog.lines.len()));
 
     SettingsLayout {
         nav: nav_layout,
@@ -389,6 +374,59 @@ pub fn render(canvas: &mut Canvas, screen: &SettingsScreen) -> SettingsLayout {
         return_to_stock,
         confirm,
     }
+}
+
+/// Draws the Settings screen against a layout [`layout`] already computed.
+pub(crate) fn draw(canvas: &mut Canvas, screen: &SettingsScreen, layout: &SettingsLayout) {
+    canvas.clear(paper_sdk::palette::PAPER);
+    let content = chrome::draw_status_bar(
+        canvas,
+        "SETTINGS",
+        &format!("V{}", screen.platform.paperclip_version),
+    );
+    let (_, area) = nav::layout_nav(canvas.bounds(), content.y);
+    nav::draw(canvas, screen.page, &layout.nav);
+
+    match (screen.page, &layout.page) {
+        (SettingsPage::Apps, PageLayout::Apps(apps_layout)) => {
+            pages::draw_apps(canvas, area, &screen.apps, apps_layout);
+        }
+        (SettingsPage::Storage, _) => pages::draw_storage(canvas, area, &screen.storage),
+        (SettingsPage::Grants, PageLayout::Grants(grants_layout)) => {
+            pages::draw_grants(canvas, area, &screen.grants, grants_layout);
+        }
+        (SettingsPage::Catalog, _) => pages::draw_catalog(canvas, area, &screen.catalog),
+        (SettingsPage::Platform, _) => pages::draw_platform(canvas, area, &screen.platform),
+        (SettingsPage::Diagnostics, _) => {
+            pages::draw_diagnostics(canvas, area, &screen.diagnostics)
+        }
+        // `layout` was computed from the same `screen.page` `draw` is being
+        // asked to draw, so the interactive variant always matches the page.
+        (SettingsPage::Apps | SettingsPage::Grants, _) => {
+            unreachable!("layout() and draw() were called with different SettingsScreen values")
+        }
+    }
+
+    if screen.pending.is_none() {
+        chrome::draw_footer_actions(canvas, &["RETURN TO REMARKABLE"]);
+    }
+
+    if let Some(pending) = &screen.pending {
+        let confirm_layout = layout
+            .confirm
+            .as_ref()
+            .expect("layout() computed a confirmation layout whenever screen.pending is Some");
+        confirm::draw_confirm(canvas, &pending.dialog, confirm_layout);
+    }
+}
+
+/// Computes the layout and draws it, for callers that want both — every
+/// existing call site, and every test that predates the split above.
+pub fn render(canvas: &mut Canvas, screen: &SettingsScreen) -> SettingsLayout {
+    let bounds = canvas.bounds();
+    let layout = self::layout(Size::new(bounds.width as u32, bounds.height as u32), screen);
+    draw(canvas, screen, &layout);
+    layout
 }
 
 #[cfg(test)]
@@ -403,6 +441,19 @@ mod tests {
 
     fn chess_id() -> AppId {
         "dev.calum.chess".parse().expect("valid fixture id")
+    }
+
+    #[test]
+    fn layout_needs_no_canvas_and_matches_what_render_draws_for_every_page() {
+        let host = PlaceholderHost::new();
+        for page in SettingsPage::ALL {
+            let screen = SettingsScreen {
+                page,
+                ..SettingsScreen::from_host(&host)
+            };
+            let drawn = render(&mut canvas(), &screen);
+            assert_eq!(layout(SCREEN, &screen), drawn, "{page:?}");
+        }
     }
 
     #[test]

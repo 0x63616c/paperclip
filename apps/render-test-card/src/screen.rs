@@ -9,7 +9,7 @@
 //! saves.
 
 use paper_sdk::{
-    Action, Canvas, Damage, MAX_DAMAGE_RECTS, Point, PointerEvent, Rect, SurfaceDescriptor,
+    Action, Canvas, Damage, MAX_DAMAGE_RECTS, Point, PointerEvent, Rect, Size, SurfaceDescriptor,
     TextStyle, chrome, palette,
 };
 
@@ -96,23 +96,14 @@ pub(crate) struct RenderTestCardLayout {
     damage_grid: Option<DamageGridLayout>,
 }
 
-/// Draws the card and returns the layout used.
+/// The content area below the tab strip and the section heading, for a
+/// viewport shaped like `bounds` with the strip starting at `below_status`.
 ///
-/// `surface` is this session's own [`SurfaceDescriptor`] — see
-/// [`crate::sections::geometry`] for why it has to arrive from the caller
-/// rather than be assumed.
-pub(crate) fn render(
-    canvas: &mut Canvas,
-    screen: &RenderTestCardScreen,
-    surface: SurfaceDescriptor,
-) -> RenderTestCardLayout {
-    let bounds = canvas.bounds();
-    canvas.clear(palette::PAPER);
-
-    let below_status =
-        chrome::draw_status_bar(canvas, "RENDER TEST CARD", screen.section.tab_label());
-    let (nav_layout, content) = nav::draw_nav(canvas, screen.section, below_status.y);
-
+/// Pure geometry, factored out because both [`layout`] and [`draw`] need the
+/// same two-step shrink (footer clearance, then heading clearance) and only
+/// one of them has a [`Canvas`] to draw the heading into.
+fn section_content_area(bounds: Rect, below_status: f32) -> (NavLayout, Rect) {
+    let (nav_layout, content) = nav::layout_nav(bounds, below_status);
     let footer_top = bounds.height - chrome::FOOTER_HEIGHT;
     let content = Rect::new(
         content.x,
@@ -120,6 +111,60 @@ pub(crate) fn render(
         content.width,
         (footer_top - 24.0 - content.y).max(0.0),
     );
+    let content = Rect::new(
+        content.x,
+        content.y + 48.0,
+        content.width,
+        content.height - 48.0,
+    );
+    (nav_layout, content)
+}
+
+/// Where everything on the card would land for a viewport shaped like
+/// `bounds`, computed from `screen` alone — no [`Canvas`].
+///
+/// [`crate::app::RenderTestCardApp`] calls this directly from
+/// [`event`](paper_sdk::App::event), so a tap is hit-testable before the
+/// first [`draw`](paper_sdk::App::draw) ever runs rather than only after a
+/// frame has been drawn to cache it from. The [`SurfaceDescriptor`] the
+/// [`Section::Geometry`] section reports is a [`draw`]-only concern: that
+/// section has no interactive layout of its own to compute.
+pub(crate) fn layout(bounds: Size, screen: &RenderTestCardScreen) -> RenderTestCardLayout {
+    let bounds = Rect::new(0.0, 0.0, bounds.width as f32, bounds.height as f32);
+    let below_status = chrome::status_bar_content_area(bounds).y;
+    let (nav_layout, content) = section_content_area(bounds, below_status);
+
+    let ghosting_layout = (screen.section == Section::Ghosting).then(|| ghosting::layout(content));
+    let damage_layout = (screen.section == Section::Damage).then(|| damage::layout(content));
+
+    let actions = chrome::footer_action_rects(bounds, 1);
+
+    RenderTestCardLayout {
+        nav: nav_layout,
+        home: actions[0],
+        ghosting: ghosting_layout,
+        damage_grid: damage_layout,
+    }
+}
+
+/// Draws the card against a layout [`layout`] already computed.
+///
+/// `surface` is this session's own [`SurfaceDescriptor`] — see
+/// [`crate::sections::geometry`] for why it has to arrive from the caller
+/// rather than be assumed.
+pub(crate) fn draw(
+    canvas: &mut Canvas,
+    screen: &RenderTestCardScreen,
+    surface: SurfaceDescriptor,
+    layout: &RenderTestCardLayout,
+) {
+    let bounds = canvas.bounds();
+    canvas.clear(palette::PAPER);
+
+    let below_status =
+        chrome::draw_status_bar(canvas, "RENDER TEST CARD", screen.section.tab_label());
+    let (_, content) = section_content_area(bounds, below_status.y);
+    nav::draw(canvas, screen.section, &layout.nav);
 
     canvas.draw_text(
         screen.section.heading(),
@@ -128,37 +173,39 @@ pub(crate) fn render(
             .with_weight(0.13)
             .with_tracking(0.08),
     );
-    let content = Rect::new(
-        content.x,
-        content.y + 48.0,
-        content.width,
-        content.height - 48.0,
-    );
 
-    let mut ghosting_layout = None;
-    let mut damage_layout = None;
     match screen.section {
         Section::Greyscale => greyscale::render(canvas, content),
         Section::Colour => colour::render(canvas, content),
         Section::Waveform => waveform::render(canvas, content),
         Section::Ghosting => {
-            ghosting_layout = Some(ghosting::render(canvas, content, screen.ghosting));
+            if let Some(ghosting_layout) = &layout.ghosting {
+                ghosting::draw(canvas, screen.ghosting, ghosting_layout);
+            }
         }
         Section::Text => lines_and_text::render(canvas, content),
         Section::Damage => {
-            damage_layout = Some(damage::render(canvas, content, screen.damage_grid));
+            if let Some(damage_layout) = &layout.damage_grid {
+                damage::draw(canvas, screen.damage_grid, damage_layout);
+            }
         }
         Section::Geometry => geometry::render(canvas, content, surface),
     }
 
-    let actions = chrome::draw_footer_actions(canvas, &["HOME"]);
+    chrome::draw_footer_actions(canvas, &["HOME"]);
+}
 
-    RenderTestCardLayout {
-        nav: nav_layout,
-        home: actions[0],
-        ghosting: ghosting_layout,
-        damage_grid: damage_layout,
-    }
+/// Computes the layout and draws it, for callers that want both — every
+/// existing call site, and every test that predates the split above.
+pub(crate) fn render(
+    canvas: &mut Canvas,
+    screen: &RenderTestCardScreen,
+    surface: SurfaceDescriptor,
+) -> RenderTestCardLayout {
+    let bounds = canvas.bounds();
+    let layout = self::layout(Size::new(bounds.width as u32, bounds.height as u32), screen);
+    draw(canvas, screen, surface, &layout);
+    layout
 }
 
 /// Handles a tap against the layout a draw already produced.
@@ -205,7 +252,7 @@ pub(crate) fn press(
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderTestCardScreen, press, render};
+    use super::{RenderTestCardScreen, layout, press, render};
     use crate::nav::Section;
     use paper_sdk::{
         Action, Canvas, ContactId, Damage, PixelFormat, Point, Pointer, PointerEvent, PointerPhase,
@@ -227,6 +274,18 @@ mod tests {
     #[test]
     fn a_fresh_screen_starts_on_greyscale() {
         assert_eq!(RenderTestCardScreen::default().section, Section::Greyscale);
+    }
+
+    #[test]
+    fn layout_needs_no_canvas_and_matches_what_render_draws() {
+        for section in Section::ALL {
+            let screen = RenderTestCardScreen {
+                section,
+                ..Default::default()
+            };
+            let drawn = render(&mut canvas(), &screen, surface());
+            assert_eq!(layout(SCREEN, &screen), drawn, "{section:?}");
+        }
     }
 
     #[test]

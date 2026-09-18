@@ -14,7 +14,6 @@ use paper_sdk::{
 };
 
 use crate::screen::HomeScreen;
-use crate::shelf::ShelfLayout;
 
 /// The label [`HomeScreen::set_fact`] files the battery reading under.
 const BATTERY_FACT: &str = "Battery";
@@ -33,7 +32,6 @@ const BATTERY_FACT: &str = "Battery";
 #[derive(Debug)]
 pub struct HomeApp {
     screen: HomeScreen,
-    layout: Option<ShelfLayout>,
     asked_battery: bool,
 }
 
@@ -42,7 +40,6 @@ impl HomeApp {
     pub fn new(screen: HomeScreen) -> Self {
         Self {
             screen,
-            layout: None,
             asked_battery: false,
         }
     }
@@ -68,18 +65,25 @@ impl App for HomeApp {
     fn event(
         &mut self,
         event: &Event<Self::Completion>,
-        _context: &mut Context<'_, Self::Completion>,
+        context: &mut Context<'_, Self::Completion>,
     ) -> Action {
-        match (event, &self.layout) {
-            (Event::Pointer(pointer), Some(layout)) => self.screen.press(layout, pointer),
-            (Event::System(answer), _) => match &answer.result {
+        match event {
+            Event::Pointer(pointer) => {
+                // Pure and cheap: no canvas, no drawn frame to wait for. A
+                // tap is hit-testable the instant Home exists, not only
+                // after the first `draw` — see `crate::screen::layout`'s own
+                // doc.
+                let layout = crate::screen::layout(context.viewport(), &self.screen);
+                self.screen.press(&layout, pointer)
+            }
+            Event::System(answer) => match &answer.result {
                 Ok(SystemValue::Battery(fact)) => {
                     self.apply_battery(*fact);
                     Action::Redraw
                 }
                 _ => Action::None,
             },
-            (Event::SystemChanged(SystemEvent::Battery(fact)), _) => {
+            Event::SystemChanged(SystemEvent::Battery(fact)) => {
                 self.apply_battery(*fact);
                 Action::Redraw
             }
@@ -92,7 +96,7 @@ impl App for HomeApp {
             self.asked_battery = true;
             context.query_system(SystemQueryKind::Battery);
         }
-        self.layout = Some(crate::screen::render(canvas, &self.screen));
+        crate::screen::render(canvas, &self.screen);
     }
 
     fn save(&mut self, _context: &mut Context<'_, Self::Completion>) -> Result<(), SaveError> {

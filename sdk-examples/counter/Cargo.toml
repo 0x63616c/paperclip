@@ -1,0 +1,33 @@
+[package]
+name = "paper-counter"
+description = "The SDK's worked example: layout as a value, from an empty crate to a tap on screen."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "counter"
+path = "src/main.rs"
+
+# Off by default, the same way `paperctl`'s own `desktop` feature is: a
+# window is a Mac-only convenience for looking at this app, not something the
+# entrypoint binary — the thing that actually ships — needs to build.
+[features]
+preview = ["paper-sdk/desktop"]
+
+[[example]]
+name = "preview"
+required-features = ["preview"]
+
+[dependencies]
+paper-sdk = { workspace = true }
+
+[dev-dependencies]
+paper-protocol = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

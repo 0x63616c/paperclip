@@ -18,7 +18,7 @@ use std::rc::Rc;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
@@ -158,6 +158,31 @@ pub enum PreviewError {
     },
 }
 
+/// A handle for asking a running preview to close, from another thread.
+///
+/// The one door into the event loop from outside a [`PreviewEvent`] callback:
+/// [`PreviewControl::Exit`] already closes the window *from inside* one, but
+/// nothing wakes the loop from outside it otherwise — winit only calls the
+/// handler in response to its own events, and a source file changing while a
+/// session is open is none of those. `paperctl dev`'s file watcher exists
+/// because of this: without a way to reach in from its own thread, a rebuild
+/// could only ever happen once the window closed on its own.
+#[derive(Debug, Clone)]
+pub struct PreviewHandle(EventLoopProxy<()>);
+
+impl PreviewHandle {
+    /// Asks the preview to close soon, the same clean exit the window's own
+    /// close button takes.
+    ///
+    /// Best-effort: if the window has already closed there is nothing left
+    /// to wake, and this is silently a no-op rather than an error — by the
+    /// time a caller on another thread learns the window is gone, closing it
+    /// again is not a mistake worth reporting.
+    pub fn request_exit(&self) {
+        let _ = self.0.send_event(());
+    }
+}
+
 /// Opens the preview window and runs until it closes.
 ///
 /// `handler` is called for every frame and every input event; it owns whatever
@@ -166,8 +191,22 @@ pub fn run(
     options: PreviewOptions,
     handler: impl FnMut(PreviewEvent<'_>) -> PreviewControl,
 ) -> Result<(), PreviewError> {
-    let event_loop = EventLoop::new().map_err(PreviewError::EventLoop)?;
+    run_with_handle(options, |_handle| {}, handler)
+}
+
+/// [`run`], but `on_start` is called with a [`PreviewHandle`] once the event
+/// loop exists and before it starts blocking — the only point at which there
+/// is a handle to hand out.
+pub fn run_with_handle(
+    options: PreviewOptions,
+    on_start: impl FnOnce(PreviewHandle),
+    handler: impl FnMut(PreviewEvent<'_>) -> PreviewControl,
+) -> Result<(), PreviewError> {
+    let event_loop = EventLoop::<()>::with_user_event()
+        .build()
+        .map_err(PreviewError::EventLoop)?;
     event_loop.set_control_flow(ControlFlow::Wait);
+    on_start(PreviewHandle(event_loop.create_proxy()));
 
     let canvas = Canvas::new(options.canvas).ok_or(PreviewError::Canvas {
         width: options.canvas.width,
@@ -458,6 +497,14 @@ fn resolve_pointer(
 }
 
 impl<H: FnMut(PreviewEvent<'_>) -> PreviewControl> ApplicationHandler for Preview<H> {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ()) {
+        // The one event this preview ever sends itself: a [`PreviewHandle`]
+        // asking, from another thread, to close the window — the same clean
+        // exit `WindowEvent::CloseRequested` takes, not `Self::stop`'s
+        // failure path.
+        event_loop.exit();
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;

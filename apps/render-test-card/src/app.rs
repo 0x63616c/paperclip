@@ -10,21 +10,22 @@
 
 use std::convert::Infallible;
 
-use paper_sdk::{Action, App, Canvas, Context, Damage, Event, MAX_DAMAGE_RECTS, SaveError};
+use paper_sdk::{Action, App, Canvas, Context, Damage, DamageAccumulator, Event, SaveError};
 
-use crate::screen::{RenderTestCardLayout, RenderTestCardScreen};
+use crate::screen::RenderTestCardScreen;
 
 /// The render test card app.
 #[derive(Debug)]
 pub struct RenderTestCardApp {
     screen: RenderTestCardScreen,
-    layout: Option<RenderTestCardLayout>,
-    /// What has changed since the last frame was published. Starts as
-    /// [`Damage::Full`] — nothing is on the glass yet.
-    pending: Damage,
-    /// What the frame just drawn changed — [`App::damage`]'s answer, held
-    /// separately because `damage` is asked after `draw`, once `pending` has
-    /// already been reset for the next frame.
+    /// What has changed since the last frame was published, under ADR-0021's
+    /// rules — see [`DamageAccumulator`]'s own doc.
+    damage_claims: DamageAccumulator,
+    /// What the frame just drawn changed — [`App::damage`]'s answer.
+    ///
+    /// Held separately because `damage` is asked after `draw`, by which point
+    /// `damage_claims` has already been reset for the next frame by
+    /// [`DamageAccumulator::take_frame`].
     frame: Damage,
 }
 
@@ -33,28 +34,8 @@ impl RenderTestCardApp {
     pub fn new() -> Self {
         Self {
             screen: RenderTestCardScreen::default(),
-            layout: None,
-            pending: Damage::Full,
+            damage_claims: DamageAccumulator::new(),
             frame: Damage::Full,
-        }
-    }
-
-    /// Folds what a press changed into what the next frame will claim.
-    ///
-    /// Same rule as `paper_sudoku::SudokuApp::accumulate`: [`Damage::Full`]
-    /// is absorbing, and more rectangles than the protocol accepts collapses
-    /// to it too.
-    fn accumulate(&mut self, damage: Damage) {
-        let Damage::Regions { regions: added } = damage else {
-            self.pending = Damage::Full;
-            return;
-        };
-        let Damage::Regions { regions: pending } = &mut self.pending else {
-            return;
-        };
-        pending.extend(added);
-        if pending.len() > MAX_DAMAGE_RECTS {
-            self.pending = Damage::Full;
         }
     }
 }
@@ -71,22 +52,24 @@ impl App for RenderTestCardApp {
     fn event(
         &mut self,
         event: &Event<Self::Completion>,
-        _context: &mut Context<'_, Self::Completion>,
+        context: &mut Context<'_, Self::Completion>,
     ) -> Action {
         match event {
             Event::Pointer(pointer) => {
-                let Some(layout) = self.layout.as_ref() else {
-                    return Action::None;
-                };
-                let press = crate::screen::press(&mut self.screen, layout, pointer);
-                self.accumulate(press.damage);
+                // Pure and cheap: no canvas, no drawn frame to wait for. A
+                // tap is hit-testable the instant the card exists, not only
+                // after the first `draw` — see `crate::screen::layout`'s own
+                // doc.
+                let layout = crate::screen::layout(context.viewport(), &self.screen);
+                let press = crate::screen::press(&mut self.screen, &layout, pointer);
+                self.damage_claims.claim(press.damage);
                 press.action
             }
             // Whatever was on the glass while this app was away is not
             // something it can reason about, so the next frame claims all of
             // it — same reasoning as `SudokuApp`'s.
             Event::Suspended | Event::Resumed => {
-                self.pending = Damage::Full;
+                self.damage_claims.claim(Damage::Full);
                 Action::None
             }
             _ => Action::None,
@@ -94,22 +77,8 @@ impl App for RenderTestCardApp {
     }
 
     fn draw(&mut self, canvas: &mut Canvas, context: &mut Context<'_, Self::Completion>) {
-        let layout = crate::screen::render(canvas, &self.screen, context.surface());
-        self.layout = Some(layout);
-        let claimed = std::mem::replace(
-            &mut self.pending,
-            Damage::Regions {
-                regions: Vec::new(),
-            },
-        );
-        // A draw nobody asked for (the first frame, a resumed session) has no
-        // accumulated claim behind it, and "nothing changed" would present
-        // nothing at all — the whole viewport is the only answer that cannot
-        // be wrong.
-        self.frame = match claimed {
-            Damage::Regions { ref regions } if regions.is_empty() => Damage::Full,
-            claimed => claimed,
-        };
+        crate::screen::render(canvas, &self.screen, context.surface());
+        self.frame = self.damage_claims.take_frame();
     }
 
     fn save(&mut self, _context: &mut Context<'_, Self::Completion>) -> Result<(), SaveError> {

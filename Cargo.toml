@@ -24,6 +24,7 @@ members = [
     "apps/sudoku",
     "apps/sudoku-rules",
     "apps/render-test-card",
+    "sdk-examples/counter",
     "tools/paperctl",
     "tools/fault-app",
     "tests/system",
@@ -76,6 +77,9 @@ ed25519-dalek = "3.0"
 flate2 = "1.1"
 getrandom = { version = "0.4", features = ["std"] }
 libc = "0.2"
+# `paperctl dev`'s hot reload, Mac-only (see the crate's own feature comment):
+# the tablet build never pulls this in.
+notify = "8.0"
 semver = { version = "1.0.28", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.145"

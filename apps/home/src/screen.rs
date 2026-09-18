@@ -1,7 +1,9 @@
 //! Composing the home screen.
 
 use paper_sdk::chrome::{self, MARGIN};
-use paper_sdk::{Action, Canvas, Point, PointerEvent, PointerPhase, TextStyle, palette};
+use paper_sdk::{
+    Action, Canvas, Point, PointerEvent, PointerPhase, Rect, Size, TextStyle, palette,
+};
 
 use crate::shelf::{self, ShelfEntry, ShelfLayout};
 
@@ -96,21 +98,33 @@ impl HomeScreen {
     }
 }
 
-/// Draws the home screen and returns the shelf layout used, so the caller can
-/// hit-test presses against exactly what was drawn.
-pub fn render(canvas: &mut Canvas, screen: &HomeScreen) -> ShelfLayout {
+/// Where everything on the home screen would land for a viewport shaped like
+/// `bounds`, computed from `screen` alone — no [`Canvas`], because nothing
+/// about the shelf's geometry depends on having drawn a frame.
+///
+/// [`HomeApp`](crate::HomeApp) calls this directly from
+/// [`event`](paper_sdk::App::event) so a tap is hit-testable before the first
+/// [`draw`](paper_sdk::App::draw) ever runs, rather than caching what the last
+/// draw computed.
+pub(crate) fn layout(bounds: Size, screen: &HomeScreen) -> ShelfLayout {
+    let bounds = Rect::new(0.0, 0.0, bounds.width as f32, bounds.height as f32);
+    let content = chrome::status_bar_content_area(bounds);
+    let apps_heading = chrome::section_heading_content_top(Point::new(MARGIN, content.y + 40.0));
+    ShelfLayout::compute(
+        shelf::shelf_area(bounds.width, apps_heading + 44.0, 0.0),
+        screen.entries.len(),
+    )
+}
+
+/// Draws the home screen against a layout [`layout`] already computed.
+pub(crate) fn draw(canvas: &mut Canvas, screen: &HomeScreen, layout: &ShelfLayout) {
     let bounds = canvas.bounds();
     canvas.clear(palette::PAPER);
     let content = chrome::draw_status_bar(canvas, "PAPERCLIP", &screen.status);
     let width = bounds.width - MARGIN * 2.0;
 
-    let apps_heading =
-        chrome::draw_section_heading(canvas, "APPS", Point::new(MARGIN, content.y + 40.0), width);
+    chrome::draw_section_heading(canvas, "APPS", Point::new(MARGIN, content.y + 40.0), width);
 
-    let layout = ShelfLayout::compute(
-        shelf::shelf_area(bounds.width, apps_heading + 44.0, 0.0),
-        screen.entries.len(),
-    );
     for (index, entry) in screen.entries.iter().enumerate() {
         let Some(&tile) = layout.tiles().get(index) else {
             continue;
@@ -141,7 +155,14 @@ pub fn render(canvas: &mut Canvas, screen: &HomeScreen) -> ShelfLayout {
             .with_tracking(0.26)
             .centered(),
     );
+}
 
+/// Computes the layout and draws it, for callers that want both — every
+/// existing call site, and every test that predates the split above.
+pub fn render(canvas: &mut Canvas, screen: &HomeScreen) -> ShelfLayout {
+    let bounds = canvas.bounds();
+    let layout = self::layout(Size::new(bounds.width as u32, bounds.height as u32), screen);
+    draw(canvas, screen, &layout);
     layout
 }
 
@@ -176,7 +197,7 @@ fn draw_facts(canvas: &mut Canvas, facts: &[SystemFact], top: f32, width: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{HomeScreen, SystemFact, render};
+    use super::{HomeScreen, SystemFact, layout, render};
     use crate::shelf::{ShelfEntry, ShelfGlyph};
     use paper_sdk::{Canvas, Point, SCREEN};
 
@@ -221,6 +242,13 @@ mod tests {
             screen.facts.last(),
             Some(&SystemFact::new("Battery", "87%"))
         );
+    }
+
+    #[test]
+    fn layout_needs_no_canvas_and_matches_what_render_draws() {
+        let drawn = render(&mut canvas(), &screen());
+        let computed = layout(SCREEN, &screen());
+        assert_eq!(drawn, computed);
     }
 
     #[test]

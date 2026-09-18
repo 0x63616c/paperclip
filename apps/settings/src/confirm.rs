@@ -45,24 +45,55 @@ pub struct ConfirmLayout {
     pub confirm: Rect,
 }
 
-/// Draws the scrim, the card and its two actions.
-pub(crate) fn draw_confirm(canvas: &mut Canvas, dialog: &ConfirmDialog) -> ConfirmLayout {
+/// Where the card and its two actions land over a viewport shaped like
+/// `bounds`, for a dialog with `line_count` lines of body text.
+///
+/// Pure geometry: the card's height depends on how many lines there are, not
+/// on what they say.
+pub(crate) fn layout_confirm(bounds: Rect, line_count: usize) -> ConfirmLayout {
+    let button_height = MIN_TOUCH_TARGET;
+    let card = card_rect(bounds, line_count);
+
+    let gap = 24.0;
+    let usable = card.width - 80.0;
+    let button_width = (usable - gap) / 2.0;
+    let buttons_top = card.bottom() - 40.0 - button_height;
+    let cancel = Rect::new(card.x + 40.0, buttons_top, button_width, button_height);
+    let confirm = Rect::new(
+        cancel.right() + gap,
+        buttons_top,
+        button_width,
+        button_height,
+    );
+    ConfirmLayout { cancel, confirm }
+}
+
+/// The card's own rectangle, for [`draw_confirm`] — not part of
+/// [`ConfirmLayout`], because nothing hit-tests the card itself, only its two
+/// actions.
+fn card_rect(bounds: Rect, line_count: usize) -> Rect {
+    let button_height = MIN_TOUCH_TARGET;
+    let line_height = 46.0;
+    let content_height =
+        56.0 + 60.0 + line_count as f32 * line_height + 40.0 + button_height + 40.0;
+    let card_height = content_height.min(bounds.height - 240.0);
+    Rect::new(
+        MARGIN,
+        (bounds.height - card_height) / 2.0,
+        bounds.width - MARGIN * 2.0,
+        card_height,
+    )
+}
+
+/// Draws the scrim, the card and its two actions, against a layout
+/// [`layout_confirm`] already computed.
+pub(crate) fn draw_confirm(canvas: &mut Canvas, dialog: &ConfirmDialog, layout: &ConfirmLayout) {
     let bounds = canvas.bounds();
     // A translucent scrim rather than clearing the page: what the dialog
     // interrupts should still read as present, not as gone.
     canvas.fill_rect(bounds, palette::INK.with_alpha(160));
 
-    let button_height = MIN_TOUCH_TARGET;
-    let line_height = 46.0;
-    let content_height =
-        56.0 + 60.0 + dialog.lines.len() as f32 * line_height + 40.0 + button_height + 40.0;
-    let card_height = content_height.min(bounds.height - 240.0);
-    let card = Rect::new(
-        MARGIN,
-        (bounds.height - card_height) / 2.0,
-        bounds.width - MARGIN * 2.0,
-        card_height,
-    );
+    let card = card_rect(bounds, dialog.lines.len());
     canvas.fill_round_rect(card, 28.0, palette::PAPER);
     canvas.stroke_round_rect(card, 28.0, palette::INK, 4.0);
 
@@ -82,32 +113,18 @@ pub(crate) fn draw_confirm(canvas: &mut Canvas, dialog: &ConfirmDialog) -> Confi
             Point::new(text_x, y),
             TextStyle::new(30.0, palette::INK_SOFT).with_tracking(0.04),
         );
-        y += line_height;
+        y += 46.0;
     }
-
-    let gap = 24.0;
-    let usable = card.width - 80.0;
-    let button_width = (usable - gap) / 2.0;
-    let buttons_top = card.bottom() - 40.0 - button_height;
-    let cancel = Rect::new(card.x + 40.0, buttons_top, button_width, button_height);
-    let confirm = Rect::new(
-        cancel.right() + gap,
-        buttons_top,
-        button_width,
-        button_height,
-    );
 
     // CANCEL is the emphasised (filled) button, not the destructive one: the
     // heavier target under a thumb should be the one that backs out.
-    chrome::draw_action(canvas, cancel, "CANCEL", true);
-    chrome::draw_action(canvas, confirm, &dialog.confirm_label, false);
-
-    ConfirmLayout { cancel, confirm }
+    chrome::draw_action(canvas, layout.cancel, "CANCEL", true);
+    chrome::draw_action(canvas, layout.confirm, &dialog.confirm_label, false);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfirmDialog, draw_confirm};
+    use super::{ConfirmDialog, draw_confirm, layout_confirm};
     use paper_sdk::chrome::MIN_TOUCH_TARGET;
     use paper_sdk::{Canvas, SCREEN};
 
@@ -127,9 +144,20 @@ mod tests {
     }
 
     #[test]
+    fn layout_needs_no_canvas_and_matches_what_drawing_returns() {
+        let dialog = dialog();
+        let bounds = canvas().bounds();
+        assert_eq!(layout_confirm(bounds, dialog.lines.len()), {
+            let mut probe = canvas();
+            let layout = layout_confirm(probe.bounds(), dialog.lines.len());
+            draw_confirm(&mut probe, &dialog, &layout);
+            layout
+        });
+    }
+
+    #[test]
     fn the_two_actions_are_big_enough_and_do_not_overlap() {
-        let mut canvas = canvas();
-        let layout = draw_confirm(&mut canvas, &dialog());
+        let layout = layout_confirm(canvas().bounds(), dialog().lines.len());
         assert!(layout.cancel.shortest_side() >= MIN_TOUCH_TARGET);
         assert!(layout.confirm.shortest_side() >= MIN_TOUCH_TARGET);
         assert!(layout.cancel.right() <= layout.confirm.x);
@@ -137,8 +165,7 @@ mod tests {
 
     #[test]
     fn both_actions_land_inside_the_screen() {
-        let mut canvas = canvas();
-        let layout = draw_confirm(&mut canvas, &dialog());
+        let layout = layout_confirm(canvas().bounds(), dialog().lines.len());
         for rect in [layout.cancel, layout.confirm] {
             assert!(rect.x >= 0.0 && rect.right() <= SCREEN.width as f32);
             assert!(rect.y >= 0.0 && rect.bottom() <= SCREEN.height as f32);
@@ -149,14 +176,15 @@ mod tests {
     fn the_dialog_covers_more_of_the_page_than_a_bare_page_would() {
         let plain = canvas();
         let mut confirming = canvas();
-        draw_confirm(&mut confirming, &dialog());
+        let dialog = dialog();
+        let layout = layout_confirm(confirming.bounds(), dialog.lines.len());
+        draw_confirm(&mut confirming, &dialog, &layout);
         assert!(confirming.ink_coverage() > plain.ink_coverage());
         assert!(confirming.ink_coverage() > 0.05);
     }
 
     #[test]
     fn a_dialog_with_more_lines_gets_a_taller_card_without_pushing_actions_off_screen() {
-        let mut canvas = canvas();
         let long = ConfirmDialog::new(
             "REVOKE STORAGE",
             (0..10)
@@ -164,7 +192,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             "REVOKE",
         );
-        let layout = draw_confirm(&mut canvas, &long);
+        let layout = layout_confirm(canvas().bounds(), long.lines.len());
         assert!(layout.confirm.bottom() <= SCREEN.height as f32);
     }
 }

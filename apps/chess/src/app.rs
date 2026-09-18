@@ -9,7 +9,7 @@ use std::convert::Infallible;
 use paper_chess_rules::Game;
 use paper_sdk::{Action, App, Canvas, Context, Event, SaveError};
 
-use crate::screen::{ChessLayout, ChessScreen};
+use crate::screen::ChessScreen;
 
 /// The file name a game is saved under, inside the app's own private
 /// storage. Not a path: [`paper_sdk::Storage`] resolves names relative to
@@ -22,7 +22,6 @@ const SAVE_FILE: &str = "game.toml";
 pub struct ChessApp {
     game: Game,
     screen: ChessScreen,
-    layout: Option<ChessLayout>,
     /// Whether the saved game has been loaded yet.
     ///
     /// Loading needs [`Context::storage`], and the only callback guaranteed
@@ -43,7 +42,6 @@ impl ChessApp {
         Self {
             game: Game::new(),
             screen: ChessScreen::new(),
-            layout: None,
             loaded: false,
         }
     }
@@ -93,9 +91,10 @@ impl App for ChessApp {
         let Event::Pointer(pointer) = event else {
             return Action::None;
         };
-        let Some(layout) = self.layout else {
-            return Action::None;
-        };
+        // Pure and cheap: no canvas, no drawn frame to wait for. A tap is
+        // hit-testable the instant a game exists, not only after the first
+        // `draw` — see `crate::screen::layout`'s own doc.
+        let layout = crate::screen::layout(context.viewport(), &self.screen, &self.game);
         let ply_before = self.game.ply();
         let action = self.screen.press(&mut self.game, &layout, pointer);
         // `Action::Redraw` also covers a tap that only changed the
@@ -114,7 +113,7 @@ impl App for ChessApp {
         if !self.loaded {
             self.load(context);
         }
-        self.layout = Some(crate::screen::render(canvas, &self.screen, &self.game));
+        crate::screen::render(canvas, &self.screen, &self.game);
     }
 
     fn save(&mut self, context: &mut Context<'_, Self::Completion>) -> Result<(), SaveError> {
@@ -255,12 +254,12 @@ mod tests {
         ))
     }
 
-    /// Where a square lands, computed the same way the screen's own tests
-    /// do: a real render, not a guessed pixel.
+    /// Where a square lands, computed the same pure way
+    /// [`ChessApp::event`](super::ChessApp) does — no canvas needed, since
+    /// [`crate::screen::layout`] does not draw anything.
     fn square_center(file: u8, rank: u8) -> paper_protocol::Point {
-        let mut probe = paper_sdk::Canvas::new(paper_sdk::SCREEN).unwrap();
-        let layout = crate::screen::render(
-            &mut probe,
+        let layout = crate::screen::layout(
+            paper_sdk::SCREEN,
             &crate::screen::ChessScreen::new(),
             &paper_chess_rules::Game::new(),
         );

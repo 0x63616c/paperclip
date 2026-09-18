@@ -1,0 +1,16 @@
+# Counter's manifest. Parsed by `paper-packages`, the way every catalog app's
+# is — see `apps/sudoku/paper.toml` for the fuller comment on why the fields
+# here are the source of truth rather than a copy of something in code.
+#
+# `dev.calum.counter` is this example's own id, not a template placeholder:
+# `paperctl new app <name>` copies this whole directory and rewrites it (and
+# the crate name, and the `[[bin]]` name) to the new app's own, so what ships
+# here also has to be a real, valid manifest in its own right.
+
+[app]
+id = "dev.calum.counter"
+name = "Counter"
+version = "0.1.0"
+protocol = "1.1"
+entrypoint = "bin/counter"
+assets = []

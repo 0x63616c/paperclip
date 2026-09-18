@@ -87,23 +87,58 @@ impl AppsLayout {
     }
 }
 
-/// Draws the installed-apps page.
+/// Where each row's buttons land for `apps`, inside `area`.
+///
+/// Pure geometry: whether a row gets a rollback button depends on
+/// [`InstalledAppSummary::has_previous_release`], a plain data question, not
+/// on anything drawn.
+pub(crate) fn layout_apps(area: Rect, apps: &[InstalledAppSummary]) -> AppsLayout {
+    let rows = apps
+        .iter()
+        .enumerate()
+        .map(|(index, app)| {
+            let rect = row_rect(area, index);
+            let uninstall = Rect::new(
+                rect.right() - 32.0 - BUTTON_WIDTH,
+                rect.center().y - BUTTON_HEIGHT / 2.0,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+            );
+            let rollback = app.has_previous_release().then(|| {
+                Rect::new(
+                    uninstall.x - 20.0 - BUTTON_WIDTH,
+                    uninstall.y,
+                    BUTTON_WIDTH,
+                    BUTTON_HEIGHT,
+                )
+            });
+            AppRowLayout {
+                rollback,
+                uninstall,
+            }
+        })
+        .collect();
+    AppsLayout { rows }
+}
+
+/// Draws the installed-apps page against a layout [`layout_apps`] already
+/// computed.
 pub(crate) fn draw_apps(
     canvas: &mut Canvas,
     area: Rect,
     apps: &[InstalledAppSummary],
-) -> AppsLayout {
+    layout: &AppsLayout,
+) {
     if apps.is_empty() {
         canvas.draw_text(
             "NOTHING INSTALLED FROM THE CATALOG YET.",
             Point::new(area.x, area.y + 8.0),
             TextStyle::new(30.0, palette::INK_SOFT),
         );
-        return AppsLayout { rows: Vec::new() };
+        return;
     }
 
-    let mut rows = Vec::with_capacity(apps.len());
-    for (index, app) in apps.iter().enumerate() {
+    for (index, (app, row)) in apps.iter().zip(&layout.rows).enumerate() {
         let rect = row_rect(area, index);
         draw_row_frame(canvas, rect);
         let detail = match &app.previous_version {
@@ -118,31 +153,11 @@ pub(crate) fn draw_apps(
         };
         draw_row_text(canvas, rect, &app.name.to_uppercase(), &detail);
 
-        let uninstall = Rect::new(
-            rect.right() - 32.0 - BUTTON_WIDTH,
-            rect.center().y - BUTTON_HEIGHT / 2.0,
-            BUTTON_WIDTH,
-            BUTTON_HEIGHT,
-        );
-        let rollback = if app.has_previous_release() {
-            let rect = Rect::new(
-                uninstall.x - 20.0 - BUTTON_WIDTH,
-                uninstall.y,
-                BUTTON_WIDTH,
-                BUTTON_HEIGHT,
-            );
-            chrome::draw_action(canvas, rect, "ROLLBACK", false);
-            Some(rect)
-        } else {
-            None
-        };
-        chrome::draw_action(canvas, uninstall, "UNINSTALL", false);
-        rows.push(AppRowLayout {
-            rollback,
-            uninstall,
-        });
+        if let Some(rollback) = row.rollback {
+            chrome::draw_action(canvas, rollback, "ROLLBACK", false);
+        }
+        chrome::draw_action(canvas, row.uninstall, "UNINSTALL", false);
     }
-    AppsLayout { rows }
 }
 
 /// The interactive layout of the grants page.
@@ -159,23 +174,42 @@ impl GrantsLayout {
     }
 }
 
-/// Draws the grants page.
+/// Where each row's revoke button lands for `grants`, inside `area`.
+///
+/// Pure geometry: one button per grant, at a position that only depends on
+/// its row index.
+pub(crate) fn layout_grants(area: Rect, grants: &[GrantSummary]) -> GrantsLayout {
+    let revoke = (0..grants.len())
+        .map(|index| {
+            let rect = row_rect(area, index);
+            Rect::new(
+                rect.right() - 32.0 - BUTTON_WIDTH,
+                rect.center().y - BUTTON_HEIGHT / 2.0,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+            )
+        })
+        .collect();
+    GrantsLayout { revoke }
+}
+
+/// Draws the grants page against a layout [`layout_grants`] already computed.
 pub(crate) fn draw_grants(
     canvas: &mut Canvas,
     area: Rect,
     grants: &[GrantSummary],
-) -> GrantsLayout {
+    layout: &GrantsLayout,
+) {
     if grants.is_empty() {
         canvas.draw_text(
             "NO CAPABILITIES ARE GRANTED.",
             Point::new(area.x, area.y + 8.0),
             TextStyle::new(30.0, palette::INK_SOFT),
         );
-        return GrantsLayout { revoke: Vec::new() };
+        return;
     }
 
-    let mut revoke = Vec::with_capacity(grants.len());
-    for (index, grant) in grants.iter().enumerate() {
+    for (index, (grant, &button)) in grants.iter().zip(&layout.revoke).enumerate() {
         let rect = row_rect(area, index);
         draw_row_frame(canvas, rect);
         let title = format!(
@@ -189,17 +223,8 @@ pub(crate) fn draw_grants(
             "GRANTED, NOT CURRENTLY IN USE"
         };
         draw_row_text(canvas, rect, &title, detail);
-
-        let button = Rect::new(
-            rect.right() - 32.0 - BUTTON_WIDTH,
-            rect.center().y - BUTTON_HEIGHT / 2.0,
-            BUTTON_WIDTH,
-            BUTTON_HEIGHT,
-        );
         chrome::draw_action(canvas, button, "REVOKE", false);
-        revoke.push(button);
     }
-    GrantsLayout { revoke }
 }
 
 /// A read-only label/value row, the shape every non-interactive page uses.
@@ -358,23 +383,20 @@ mod tests {
 
     #[test]
     fn a_row_with_a_previous_release_gets_a_rollback_button() {
-        let mut canvas = canvas();
-        let layout = draw_apps(&mut canvas, area(), &[app(Some("0.1.0"))]);
+        let layout = layout_apps(area(), &[app(Some("0.1.0"))]);
         assert!(layout.rows[0].rollback.is_some());
     }
 
     #[test]
     fn a_row_with_no_previous_release_has_no_rollback_button() {
-        let mut canvas = canvas();
-        let layout = draw_apps(&mut canvas, area(), &[app(None)]);
+        let layout = layout_apps(area(), &[app(None)]);
         assert!(layout.rows[0].rollback.is_none());
         assert_eq!(layout.rollback_hit(Point::new(0.0, 0.0)), None);
     }
 
     #[test]
     fn every_row_button_is_big_enough_to_tap() {
-        let mut canvas = canvas();
-        let layout = draw_apps(&mut canvas, area(), &[app(Some("0.1.0")), app(None)]);
+        let layout = layout_apps(area(), &[app(Some("0.1.0")), app(None)]);
         for row in &layout.rows {
             assert!(row.uninstall.shortest_side() >= MIN_TOUCH_TARGET);
             if let Some(rollback) = row.rollback {
@@ -386,15 +408,23 @@ mod tests {
     #[test]
     fn an_empty_apps_list_still_draws_something() {
         let mut canvas = canvas();
-        let layout = draw_apps(&mut canvas, area(), &[]);
+        let layout = layout_apps(area(), &[]);
+        draw_apps(&mut canvas, area(), &[], &layout);
         assert!(layout.rows.is_empty());
         assert!(canvas.ink_coverage() > 0.0);
     }
 
     #[test]
-    fn grants_hand_back_one_revoke_button_per_row() {
+    fn drawing_matches_the_layout_computed_for_the_same_apps() {
         let mut canvas = canvas();
-        let grants = vec![
+        let apps = [app(Some("0.1.0")), app(None)];
+        let layout = layout_apps(area(), &apps);
+        draw_apps(&mut canvas, area(), &apps, &layout);
+        assert!(canvas.ink_coverage() > 0.0);
+    }
+
+    fn grants() -> Vec<crate::host::GrantSummary> {
+        vec![
             crate::host::GrantSummary {
                 app_id: "dev.calum.chess".parse().unwrap(),
                 app_name: "Chess".to_owned(),
@@ -407,13 +437,27 @@ mod tests {
                 capability: Capability::Sharing,
                 in_use: false,
             },
-        ];
-        let layout = draw_grants(&mut canvas, area(), &grants);
+        ]
+    }
+
+    #[test]
+    fn grants_hand_back_one_revoke_button_per_row() {
+        let grants = grants();
+        let layout = layout_grants(area(), &grants);
         assert_eq!(layout.revoke.len(), 2);
         for rect in &layout.revoke {
             assert!(rect.shortest_side() >= MIN_TOUCH_TARGET);
         }
         assert_eq!(layout.revoke_hit(layout.revoke[1].center()), Some(1));
+    }
+
+    #[test]
+    fn drawing_grants_matches_the_layout_computed_for_the_same_grants() {
+        let mut canvas = canvas();
+        let grants = grants();
+        let layout = layout_grants(area(), &grants);
+        draw_grants(&mut canvas, area(), &grants, &layout);
+        assert!(canvas.ink_coverage() > 0.0);
     }
 
     #[test]

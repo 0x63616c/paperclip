@@ -31,6 +31,21 @@ pub const MARGIN: f32 = 56.0;
 /// gate (WWW-20). The pixel floor is what the code enforces.
 pub const MIN_TOUCH_TARGET: f32 = 120.0;
 
+/// The content rectangle below the status bar, for a viewport shaped like
+/// `bounds`.
+///
+/// Pure geometry: an app computing its own layout (`fn layout(bounds) ->
+/// Layout`, no [`Canvas`]) needs this without drawing anything, which is why
+/// it is split out from [`draw_status_bar`] rather than only living inside it.
+pub fn status_bar_content_area(bounds: Rect) -> Rect {
+    Rect::new(
+        0.0,
+        STATUS_BAR_HEIGHT,
+        bounds.width,
+        bounds.height - STATUS_BAR_HEIGHT,
+    )
+}
+
 /// Draws the top bar and returns the content rectangle below it.
 pub fn draw_status_bar(canvas: &mut Canvas, title: &str, trailing: &str) -> Rect {
     let bounds = canvas.bounds();
@@ -60,12 +75,36 @@ pub fn draw_status_bar(canvas: &mut Canvas, title: &str, trailing: &str) -> Rect
         palette::HAIRLINE,
     );
 
-    Rect::new(
-        0.0,
-        STATUS_BAR_HEIGHT,
-        bounds.width,
-        bounds.height - STATUS_BAR_HEIGHT,
-    )
+    status_bar_content_area(bounds)
+}
+
+/// Where `count` equal-width footer actions land, for a viewport shaped like
+/// `bounds`. Empty for `count == 0`, the same "draw nothing" rather than
+/// dividing by zero [`draw_footer_actions`] returns.
+///
+/// Pure geometry, split out for the same reason as
+/// [`status_bar_content_area`]: an app's own `layout(bounds) -> Layout` needs
+/// these rectangles without a [`Canvas`] to get them from.
+pub fn footer_action_rects(bounds: Rect, count: usize) -> Vec<Rect> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let top = bounds.height - FOOTER_HEIGHT;
+    let usable = bounds.width - MARGIN * 2.0;
+    let gap = 24.0;
+    let width = (usable - gap * (count - 1) as f32) / count as f32;
+    let height = FOOTER_HEIGHT - 48.0;
+
+    (0..count)
+        .map(|index| {
+            Rect::new(
+                MARGIN + index as f32 * (width + gap),
+                top + 24.0,
+                width,
+                height,
+            )
+        })
+        .collect()
 }
 
 /// Draws a row of equal-width actions across the bottom of the screen and
@@ -81,25 +120,11 @@ pub fn draw_footer_actions(canvas: &mut Canvas, labels: &[&str]) -> Vec<Rect> {
     let top = bounds.height - FOOTER_HEIGHT;
     canvas.hairline(Point::new(0.0, top), bounds.width, palette::HAIRLINE);
 
-    let usable = bounds.width - MARGIN * 2.0;
-    let gap = 24.0;
-    let width = (usable - gap * (labels.len() - 1) as f32) / labels.len() as f32;
-    let height = FOOTER_HEIGHT - 48.0;
-
-    labels
-        .iter()
-        .enumerate()
-        .map(|(index, label)| {
-            let rect = Rect::new(
-                MARGIN + index as f32 * (width + gap),
-                top + 24.0,
-                width,
-                height,
-            );
-            draw_action(canvas, rect, label, index == 0);
-            rect
-        })
-        .collect()
+    let rects = footer_action_rects(bounds, labels.len());
+    for (index, (&label, &rect)) in labels.iter().zip(&rects).enumerate() {
+        draw_action(canvas, rect, label, index == 0);
+    }
+    rects
 }
 
 /// Draws one action button.
@@ -147,6 +172,16 @@ pub fn fit_text(label: &str, style: TextStyle, max_width: f32, min_size: f32) ->
     style
 }
 
+/// The `y` below a section heading drawn at `at`, before anything else is
+/// placed under it.
+///
+/// Pure geometry, for the same reason as [`status_bar_content_area`]: it does
+/// not depend on the label or the width drawn, only on where the heading
+/// starts, so an app's own `layout` can call it without a [`Canvas`].
+pub fn section_heading_content_top(at: Point) -> f32 {
+    at.y + 52.0 + 2.0
+}
+
 /// Draws a section heading with a rule under it, returning the `y` below it.
 pub fn draw_section_heading(canvas: &mut Canvas, label: &str, at: Point, width: f32) -> f32 {
     canvas.draw_text(
@@ -158,14 +193,14 @@ pub fn draw_section_heading(canvas: &mut Canvas, label: &str, at: Point, width: 
     );
     let baseline = at.y + 52.0;
     canvas.hairline(Point::new(at.x, baseline), width, palette::HAIRLINE);
-    baseline + 2.0
+    section_heading_content_top(at)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         FOOTER_HEIGHT, MARGIN, MIN_TOUCH_TARGET, STATUS_BAR_HEIGHT, draw_footer_actions,
-        draw_status_bar,
+        draw_status_bar, footer_action_rects, section_heading_content_top, status_bar_content_area,
     };
     use crate::canvas::Canvas;
     use crate::display::SCREEN;
@@ -181,6 +216,35 @@ mod tests {
         assert_eq!(content.y, STATUS_BAR_HEIGHT);
         assert_eq!(content.bottom(), SCREEN.height as f32);
         assert!(canvas.ink_coverage() > 0.0);
+    }
+
+    #[test]
+    fn the_pure_status_bar_area_matches_what_drawing_returns() {
+        let mut canvas = screen();
+        let drawn = draw_status_bar(&mut canvas, "PAPERCLIP", "100%");
+        assert_eq!(status_bar_content_area(canvas.bounds()), drawn);
+    }
+
+    #[test]
+    fn the_pure_footer_rects_match_what_drawing_returns() {
+        let mut canvas = screen();
+        let labels = ["NEW GAME", "FLIP BOARD", "HOME"];
+        let drawn = draw_footer_actions(&mut canvas, &labels);
+        assert_eq!(footer_action_rects(canvas.bounds(), labels.len()), drawn);
+    }
+
+    #[test]
+    fn the_pure_footer_rects_are_empty_for_no_labels() {
+        let bounds = screen().bounds();
+        assert!(footer_action_rects(bounds, 0).is_empty());
+    }
+
+    #[test]
+    fn the_pure_heading_top_matches_what_drawing_returns() {
+        let mut canvas = screen();
+        let at = paper_protocol::Point::new(MARGIN, 40.0);
+        let drawn = super::draw_section_heading(&mut canvas, "GAME", at, 400.0);
+        assert_eq!(section_heading_content_top(at), drawn);
     }
 
     #[test]

@@ -41,10 +41,32 @@ pub(crate) struct GhostingLayout {
 const PATCH_SIZE: f32 = 420.0;
 const BUTTON_HEIGHT: f32 = 120.0;
 
-pub(crate) fn render(canvas: &mut Canvas, content: Rect, state: GhostingState) -> GhostingLayout {
+/// Where this section's patch, control, button and counter land inside
+/// `content`. Pure geometry: nothing here depends on [`GhostingState`], only
+/// on where the section starts.
+pub(crate) fn layout(content: Rect) -> GhostingLayout {
     let gap = 80.0;
     let cycled = Rect::new(content.x, content.y, PATCH_SIZE, PATCH_SIZE);
     let control = Rect::new(cycled.right() + gap, content.y, PATCH_SIZE, PATCH_SIZE);
+    let counter = Rect::new(content.x, cycled.bottom() + 60.0, content.width, 44.0);
+    let button = Rect::new(content.x, counter.bottom() + 24.0, 320.0, BUTTON_HEIGHT);
+
+    GhostingLayout {
+        cycled,
+        control,
+        button,
+        counter,
+    }
+}
+
+/// Draws this section against a layout [`layout`] already computed.
+pub(crate) fn draw(canvas: &mut Canvas, state: GhostingState, layout: &GhostingLayout) {
+    let &GhostingLayout {
+        cycled,
+        control,
+        button,
+        counter,
+    } = layout;
 
     canvas.fill_rect(cycled, state.fill());
     canvas.stroke_rect(cycled, palette::HAIRLINE, 2.0);
@@ -62,14 +84,12 @@ pub(crate) fn render(canvas: &mut Canvas, content: Rect, state: GhostingState) -
         TextStyle::new(26.0, palette::INK).centered(),
     );
 
-    let counter = Rect::new(content.x, cycled.bottom() + 60.0, content.width, 44.0);
     canvas.draw_text(
         &format!("CYCLES: {}", state.cycles),
         Point::new(counter.x, counter.y),
         TextStyle::new(34.0, palette::INK).with_weight(0.12),
     );
 
-    let button = Rect::new(content.x, counter.bottom() + 24.0, 320.0, BUTTON_HEIGHT);
     canvas.fill_round_rect(button, 18.0, palette::EMPHASIS);
     canvas.draw_text(
         "CYCLE",
@@ -81,16 +101,9 @@ pub(crate) fn render(canvas: &mut Canvas, content: Rect, state: GhostingState) -
 
     canvas.draw_text(
         "EACH TAP: ONE PARTIAL-REFRESH PRESENT, NO FULL FLASH (paperctl run)",
-        Point::new(content.x, button.bottom() + 32.0),
+        Point::new(cycled.x, button.bottom() + 32.0),
         TextStyle::new(22.0, palette::INK_FAINT),
     );
-
-    GhostingLayout {
-        cycled,
-        control,
-        button,
-        counter,
-    }
 }
 
 /// Handles a tap. `Some` carries exactly the regions the button press
@@ -110,19 +123,23 @@ pub(crate) fn press(
 
 #[cfg(test)]
 mod tests {
-    use super::{GhostingState, press, render};
+    use super::{GhostingState, draw, layout, press};
     use paper_sdk::{Canvas, Rect, SCREEN};
 
     fn canvas() -> Canvas {
         Canvas::new(SCREEN).expect("a canvas")
     }
 
+    fn content() -> Rect {
+        Rect::new(40.0, 40.0, 1500.0, 1000.0)
+    }
+
     #[test]
     fn a_cycle_toggles_the_patch_and_leaves_the_control_alone() {
         let mut canvas = canvas();
-        let content = Rect::new(40.0, 40.0, 1500.0, 1000.0);
         let mut state = GhostingState::default();
-        let layout = render(&mut canvas, content, state);
+        let layout = layout(content());
+        draw(&mut canvas, state, &layout);
         let before_control = canvas.pixel(
             layout.control.center().x as u32,
             layout.control.center().y as u32,
@@ -132,7 +149,7 @@ mod tests {
         assert_eq!(changed, Some(vec![layout.cycled, layout.counter]));
         assert_eq!(state.cycles, 1);
 
-        render(&mut canvas, content, state);
+        draw(&mut canvas, state, &layout);
         let after_control = canvas.pixel(
             layout.control.center().x as u32,
             layout.control.center().y as u32,
@@ -142,10 +159,8 @@ mod tests {
 
     #[test]
     fn a_tap_off_the_button_changes_nothing() {
-        let mut canvas = canvas();
-        let content = Rect::new(40.0, 40.0, 1500.0, 1000.0);
         let mut state = GhostingState::default();
-        let layout = render(&mut canvas, content, state);
+        let layout = layout(content());
         assert_eq!(press(&mut state, &layout, layout.control.center()), None);
         assert_eq!(state.cycles, 0);
     }

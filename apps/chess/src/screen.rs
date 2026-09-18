@@ -10,7 +10,7 @@
 
 use paper_chess_rules::{ClaimableDraw, Color as RulesColor, Game, Move, Outcome, PieceKind};
 use paper_sdk::chrome::{self, MARGIN};
-use paper_sdk::{Action, Canvas, Point, PointerEvent, Rect, TextStyle, palette};
+use paper_sdk::{Action, Canvas, Point, PointerEvent, Rect, Size, TextStyle, palette};
 
 use crate::board::{BoardLayout, Square};
 use crate::pieces::{self, Piece, Placement, Side};
@@ -219,9 +219,48 @@ pub struct ChessLayout {
     pub promotion: Option<PromotionLayout>,
 }
 
-/// Draws the Chess screen and returns the layout used, so the caller can
-/// hit-test presses against exactly what was drawn.
-pub fn render(canvas: &mut Canvas, screen: &ChessScreen, game: &Game) -> ChessLayout {
+/// Where everything on the Chess screen would land for a viewport shaped
+/// like `bounds`, computed from `screen` and `game` alone — no [`Canvas`].
+///
+/// [`crate::app::ChessApp`] calls this directly from
+/// [`event`](paper_sdk::App::event), so a tap is hit-testable before the
+/// first [`draw`](paper_sdk::App::draw) ever runs rather than only after a
+/// frame has been drawn to cache it from.
+pub(crate) fn layout(bounds: Size, screen: &ChessScreen, game: &Game) -> ChessLayout {
+    let bounds = Rect::new(0.0, 0.0, bounds.width as f32, bounds.height as f32);
+    let content = chrome::status_bar_content_area(bounds);
+    let heading_bottom = chrome::section_heading_content_top(Point::new(MARGIN, content.y + 40.0));
+
+    let board_top = heading_bottom + 152.0;
+    let board_bottom = bounds.height - chrome::FOOTER_HEIGHT - 96.0;
+    let board = BoardLayout::fit(
+        Rect::new(
+            MARGIN + LABEL_GUTTER,
+            board_top,
+            bounds.width - (MARGIN + LABEL_GUTTER) * 2.0,
+            board_bottom - board_top,
+        ),
+        screen.flipped,
+    );
+
+    let claimable = game.outcome().is_none() && game.claimable_draw().is_some();
+    let label_count = if claimable { 4 } else { 3 };
+    let actions = chrome::footer_action_rects(bounds, label_count);
+
+    let promotion = screen.pending_promotion.map(|_| promotion_layout(board));
+
+    ChessLayout {
+        board,
+        new_game: actions[0],
+        flip_board: actions[1],
+        home: actions[2],
+        claim_draw: claimable.then(|| actions[3]),
+        promotion,
+    }
+}
+
+/// Draws the Chess screen against a layout [`layout`] already computed.
+pub(crate) fn draw(canvas: &mut Canvas, screen: &ChessScreen, game: &Game, layout: &ChessLayout) {
     let bounds = canvas.bounds();
     canvas.clear(palette::PAPER);
     let content = chrome::draw_status_bar(canvas, "CHESS", "TWO PLAYER");
@@ -235,51 +274,42 @@ pub fn render(canvas: &mut Canvas, screen: &ChessScreen, game: &Game) -> ChessLa
 
     draw_status_line(canvas, screen, game, heading_bottom);
 
-    let board_top = heading_bottom + 152.0;
-    let board_bottom = bounds.height - chrome::FOOTER_HEIGHT - 96.0;
-    let layout = BoardLayout::fit(
-        Rect::new(
-            MARGIN + LABEL_GUTTER,
-            board_top,
-            bounds.width - (MARGIN + LABEL_GUTTER) * 2.0,
-            board_bottom - board_top,
-        ),
-        screen.flipped,
-    );
-
     let legal_destinations = screen
         .selected
         .map(|from| game.legal_destinations(to_rules_square(from)))
         .unwrap_or_default();
 
-    draw_squares(canvas, layout, screen.selected, &legal_destinations);
-    draw_coordinates(canvas, layout);
-    draw_position(canvas, layout, game);
+    draw_squares(canvas, layout.board, screen.selected, &legal_destinations);
+    draw_coordinates(canvas, layout.board);
+    draw_position(canvas, layout.board, game);
 
-    let claimable = game.outcome().is_none() && game.claimable_draw().is_some();
     let new_game_label = if screen.new_game_armed {
         "CONFIRM NEW GAME?"
     } else {
         "NEW GAME"
     };
     let mut labels = vec![new_game_label, "FLIP BOARD", "HOME"];
-    if claimable {
+    if layout.claim_draw.is_some() {
         labels.push("CLAIM DRAW");
     }
-    let actions = chrome::draw_footer_actions(canvas, &labels);
+    chrome::draw_footer_actions(canvas, &labels);
 
-    let promotion = screen
-        .pending_promotion
-        .map(|_| draw_promotion_picker(canvas, layout, game.side_to_move()));
-
-    ChessLayout {
-        board: layout,
-        new_game: actions[0],
-        flip_board: actions[1],
-        home: actions[2],
-        claim_draw: claimable.then(|| actions[3]),
-        promotion,
+    if let Some(promotion) = &layout.promotion {
+        draw_promotion_picker(canvas, game.side_to_move(), promotion);
     }
+}
+
+/// Computes the layout and draws it, for callers that want both — every
+/// existing call site, and every test that predates the split above.
+pub fn render(canvas: &mut Canvas, screen: &ChessScreen, game: &Game) -> ChessLayout {
+    let bounds = canvas.bounds();
+    let layout = self::layout(
+        Size::new(bounds.width as u32, bounds.height as u32),
+        screen,
+        game,
+    );
+    draw(canvas, screen, game, &layout);
+    layout
 }
 
 fn draw_status_line(canvas: &mut Canvas, screen: &ChessScreen, game: &Game, heading_bottom: f32) {
@@ -424,19 +454,19 @@ fn draw_position(canvas: &mut Canvas, layout: BoardLayout, game: &Game) {
     }
 }
 
-/// Draws the four-choice promotion picker over the board and returns where
-/// each choice landed.
-fn draw_promotion_picker(
-    canvas: &mut Canvas,
-    layout: BoardLayout,
-    side: RulesColor,
-) -> PromotionLayout {
-    const CHOICES: [PieceKind; 4] = [
-        PieceKind::Queen,
-        PieceKind::Rook,
-        PieceKind::Bishop,
-        PieceKind::Knight,
-    ];
+/// The four promotion choices, in the order drawn.
+const PROMOTION_CHOICES: [PieceKind; 4] = [
+    PieceKind::Queen,
+    PieceKind::Rook,
+    PieceKind::Bishop,
+    PieceKind::Knight,
+];
+
+/// Where the promotion picker's panel and four boxes land over `board`.
+///
+/// Pure geometry: which piece is drawn in each box is a question for
+/// [`draw_promotion_picker`], not for where the boxes are.
+fn promotion_layout(layout: BoardLayout) -> PromotionLayout {
     let board = layout.board();
     let gap = 24.0;
     let box_side = ((board.width - gap * 3.0) / 4.0).min(board.height * 0.32);
@@ -444,30 +474,43 @@ fn draw_promotion_picker(
     let left = board.center().x - total_width / 2.0;
     let top = board.center().y - box_side / 2.0;
 
-    let panel = Rect::new(left - 32.0, top - 32.0, total_width + 64.0, box_side + 64.0);
-    canvas.fill_round_rect(panel, 20.0, palette::PAPER);
-    canvas.stroke_round_rect(panel, 20.0, palette::INK, 5.0);
-
-    let mut boxes = [(CHOICES[0], Rect::new(0.0, 0.0, 0.0, 0.0)); 4];
-    for (index, &kind) in CHOICES.iter().enumerate() {
+    let mut boxes = [(PROMOTION_CHOICES[0], Rect::new(0.0, 0.0, 0.0, 0.0)); 4];
+    for (index, &kind) in PROMOTION_CHOICES.iter().enumerate() {
         let rect = Rect::new(
             left + index as f32 * (box_side + gap),
             top,
             box_side,
             box_side,
         );
+        boxes[index] = (kind, rect);
+    }
+    PromotionLayout { boxes }
+}
+
+/// Draws the four-choice promotion picker over the board, against a layout
+/// [`promotion_layout`] already computed.
+fn draw_promotion_picker(canvas: &mut Canvas, side: RulesColor, promotion: &PromotionLayout) {
+    let first = promotion.boxes[0].1;
+    let last = promotion.boxes[3].1;
+    let panel = Rect::new(
+        first.x - 32.0,
+        first.y - 32.0,
+        last.right() - first.x + 64.0,
+        first.height + 64.0,
+    );
+    canvas.fill_round_rect(panel, 20.0, palette::PAPER);
+    canvas.stroke_round_rect(panel, 20.0, palette::INK, 5.0);
+
+    for &(kind, rect) in &promotion.boxes {
         canvas.fill_round_rect(rect, 12.0, palette::TILE);
         canvas.stroke_round_rect(rect, 12.0, palette::INK, 4.0);
         pieces::draw(canvas, rect, Placement::new(to_side(side), to_piece(kind)));
-        boxes[index] = (kind, rect);
     }
-
-    PromotionLayout { boxes }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ChessScreen, render};
+    use super::{ChessScreen, layout, render};
     use crate::board::Square;
     use paper_chess_rules::{Color, Game, Move, PieceKind};
     use paper_sdk::chrome::MIN_TOUCH_TARGET;
@@ -483,6 +526,15 @@ mod tests {
 
     fn sq(file: u8, rank: u8) -> Square {
         Square::new(file, rank).expect("a square on the board")
+    }
+
+    #[test]
+    fn layout_needs_no_canvas_and_matches_what_render_draws() {
+        let game = Game::new();
+        let screen = ChessScreen::new();
+        let drawn = render(&mut screen_canvas(), &screen, &game);
+        let computed = layout(SCREEN, &screen, &game);
+        assert_eq!(drawn, computed);
     }
 
     #[test]

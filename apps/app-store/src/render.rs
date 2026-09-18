@@ -8,7 +8,7 @@
 
 use paper_packages::AppId;
 use paper_packages::inventory::{AppEntry, AppState};
-use paper_sdk::{Canvas, Point, Rect, TextStyle, chrome, palette};
+use paper_sdk::{Canvas, Point, Rect, Size, TextStyle, chrome, palette};
 
 use crate::screen::{AppStoreScreen, View};
 
@@ -20,6 +20,8 @@ const ROW_GAP: f32 = 20.0;
 const BUTTON_WIDTH: f32 = 248.0;
 /// Height of a row's action button, at least one touch target.
 const BUTTON_HEIGHT: f32 = 128.0;
+/// Height of the banner shown above the list, whatever it says.
+const BANNER_HEIGHT: f32 = 96.0;
 
 /// Where the list view put everything interactive.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,8 +75,27 @@ pub enum StoreLayout {
     Detail(DetailLayout),
 }
 
-/// Draws whichever view the screen is showing.
-pub fn render(canvas: &mut Canvas, screen: &AppStoreScreen) -> StoreLayout {
+/// Where everything on whichever view is showing would land for a viewport
+/// shaped like `bounds`, computed from `screen` alone — no [`Canvas`].
+///
+/// [`crate::app::AppStoreApp`] calls this directly from
+/// [`event`](paper_sdk::App::event), so a tap is hit-testable before the
+/// first [`draw`](paper_sdk::App::draw) ever runs rather than only after a
+/// frame has been drawn to cache it from.
+pub(crate) fn layout(bounds: Size, screen: &AppStoreScreen) -> StoreLayout {
+    let bounds = Rect::new(0.0, 0.0, bounds.width as f32, bounds.height as f32);
+    let content = chrome::status_bar_content_area(bounds);
+    let area = content_area(content);
+
+    match screen.view() {
+        View::List => StoreLayout::List(layout_list(area, screen)),
+        View::Detail(app) => StoreLayout::Detail(layout_detail(area, screen, app)),
+    }
+}
+
+/// Draws whichever view the screen is showing, against a layout [`layout`]
+/// already computed.
+pub(crate) fn draw(canvas: &mut Canvas, screen: &AppStoreScreen, layout: &StoreLayout) {
     canvas.clear(palette::PAPER);
     // `draw_status_bar` returns the content rectangle *below* the bar, not the
     // bar itself. Treating it as the bar pushes every row off the bottom of
@@ -82,10 +103,26 @@ pub fn render(canvas: &mut Canvas, screen: &AppStoreScreen) -> StoreLayout {
     let content = chrome::draw_status_bar(canvas, "APP STORE", &screen.catalog_summary());
     let area = content_area(content);
 
-    match screen.view() {
-        View::List => StoreLayout::List(draw_list(canvas, area, screen)),
-        View::Detail(app) => StoreLayout::Detail(draw_detail(canvas, area, screen, app)),
+    match (screen.view(), layout) {
+        (View::List, StoreLayout::List(list_layout)) => {
+            draw_list(canvas, area, screen, list_layout)
+        }
+        (View::Detail(app), StoreLayout::Detail(detail_layout)) => {
+            draw_detail(canvas, area, screen, app, detail_layout);
+        }
+        // `layout` was computed from the same `screen` `draw` is being asked
+        // to draw, so the view always matches.
+        _ => unreachable!("layout() and draw() were called with different AppStoreScreen values"),
     }
+}
+
+/// Computes the layout and draws it, for callers that want both — every
+/// existing call site, and every test that predates the split above.
+pub fn render(canvas: &mut Canvas, screen: &AppStoreScreen) -> StoreLayout {
+    let bounds = canvas.bounds();
+    let layout = self::layout(Size::new(bounds.width as u32, bounds.height as u32), screen);
+    draw(canvas, screen, &layout);
+    layout
 }
 
 /// The drawable area, inside the margins.
@@ -98,11 +135,16 @@ fn content_area(content: Rect) -> Rect {
     )
 }
 
-fn draw_list(canvas: &mut Canvas, area: Rect, screen: &AppStoreScreen) -> ListLayout {
+/// Where the list view's rows and the refresh button land, inside `area`.
+///
+/// Pure geometry: [`banner_text`] shifts every row down by a fixed amount
+/// whenever it is `Some`, whatever it says, and a row in flight
+/// ([`AppStoreScreen::working`]) or without a primary action
+/// ([`AppStoreScreen::primary_label`]) is a data question, not a drawing one.
+fn layout_list(area: Rect, screen: &AppStoreScreen) -> ListLayout {
     let mut cursor = area.y;
-
-    if let Some(banner) = banner_text(screen) {
-        cursor = draw_banner(canvas, area, cursor, &banner);
+    if banner_text(screen).is_some() {
+        cursor += BANNER_HEIGHT + ROW_GAP;
     }
 
     let refresh = Rect::new(
@@ -112,19 +154,6 @@ fn draw_list(canvas: &mut Canvas, area: Rect, screen: &AppStoreScreen) -> ListLa
         BUTTON_HEIGHT,
     );
 
-    if screen.rows().is_empty() {
-        canvas.draw_text(
-            "NOTHING INSTALLED, AND THE CATALOG OFFERS NOTHING.",
-            Point::new(area.x, cursor + 8.0),
-            TextStyle::new(30.0, palette::INK_SOFT),
-        );
-        chrome::draw_action(canvas, refresh, "REFRESH", false);
-        return ListLayout {
-            rows: Vec::new(),
-            refresh,
-        };
-    }
-
     let mut rows = Vec::with_capacity(screen.rows().len());
     for entry in screen.rows() {
         let body = Rect::new(area.x, cursor, area.width, ROW_HEIGHT);
@@ -132,20 +161,57 @@ fn draw_list(canvas: &mut Canvas, area: Rect, screen: &AppStoreScreen) -> ListLa
         if body.y + body.height > refresh.y - ROW_GAP {
             break;
         }
-        rows.push(draw_row(canvas, body, screen, entry));
+        rows.push(layout_row(body, screen, entry));
         cursor += ROW_HEIGHT + ROW_GAP;
     }
 
-    chrome::draw_action(canvas, refresh, "REFRESH", false);
     ListLayout { rows, refresh }
 }
 
-fn draw_row(
-    canvas: &mut Canvas,
-    body: Rect,
-    screen: &AppStoreScreen,
-    entry: &AppEntry,
-) -> RowLayout {
+fn layout_row(body: Rect, screen: &AppStoreScreen, entry: &AppEntry) -> RowLayout {
+    // The row in flight shows its step where its button would be, so progress
+    // appears next to the thing it is about rather than in a corner.
+    let in_flight = screen
+        .working()
+        .is_some_and(|working| working.app == entry.app);
+    let action = (!in_flight)
+        .then(|| screen.primary_label(&entry.app))
+        .flatten()
+        .map(|_| {
+            Rect::new(
+                body.x + body.width - BUTTON_WIDTH - 24.0,
+                body.y + (body.height - BUTTON_HEIGHT) / 2.0,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+            )
+        });
+    RowLayout { body, action }
+}
+
+/// Draws the list view against a layout [`layout_list`] already computed.
+fn draw_list(canvas: &mut Canvas, area: Rect, screen: &AppStoreScreen, layout: &ListLayout) {
+    let mut cursor = area.y;
+    if let Some(banner) = banner_text(screen) {
+        cursor = draw_banner(canvas, area, cursor, &banner);
+    }
+
+    if screen.rows().is_empty() {
+        canvas.draw_text(
+            "NOTHING INSTALLED, AND THE CATALOG OFFERS NOTHING.",
+            Point::new(area.x, cursor + 8.0),
+            TextStyle::new(30.0, palette::INK_SOFT),
+        );
+    }
+
+    for (entry, row) in screen.rows().iter().zip(&layout.rows) {
+        draw_row(canvas, screen, entry, row);
+    }
+
+    chrome::draw_action(canvas, layout.refresh, "REFRESH", false);
+}
+
+fn draw_row(canvas: &mut Canvas, screen: &AppStoreScreen, entry: &AppEntry, layout: &RowLayout) {
+    let body = layout.body;
     canvas.fill_round_rect(body, 20.0, palette::TILE);
     canvas.stroke_round_rect(body, 20.0, palette::HAIRLINE, 2.0);
 
@@ -167,8 +233,6 @@ fn draw_row(
         TextStyle::new(24.0, state_ink(entry.state)).with_tracking(0.08),
     );
 
-    // The row in flight shows its step where its button would be, so progress
-    // appears next to the thing it is about rather than in a corner.
     if let Some(working) = screen.working()
         && working.app == entry.app
     {
@@ -179,46 +243,79 @@ fn draw_row(
             BUTTON_HEIGHT,
         );
         draw_progress(canvas, where_button_was, &working.step, working.percent);
-        return RowLayout { body, action: None };
+        return;
     }
 
-    let action = screen.primary_label(&entry.app).map(|label| {
-        let rect = Rect::new(
-            body.x + body.width - BUTTON_WIDTH - 24.0,
-            body.y + (body.height - BUTTON_HEIGHT) / 2.0,
-            BUTTON_WIDTH,
-            BUTTON_HEIGHT,
-        );
+    if let (Some(label), Some(rect)) = (screen.primary_label(&entry.app), layout.action) {
         chrome::draw_action(canvas, rect, label, entry.state == AppState::Failing);
-        rect
-    });
-
-    RowLayout { body, action }
+    }
 }
 
-fn draw_detail(
-    canvas: &mut Canvas,
-    area: Rect,
-    screen: &AppStoreScreen,
-    app: &AppId,
-) -> DetailLayout {
+/// Where the detail view's back, primary and rollback actions land, inside
+/// `area`.
+///
+/// Pure geometry: all three are anchored to `area`'s corners, never to the
+/// cursor the informational text above them advances — [`draw_detail`] is
+/// the only thing that needs to know how far that cursor got.
+fn layout_detail(area: Rect, screen: &AppStoreScreen, app: &AppId) -> DetailLayout {
     let back = Rect::new(area.x, area.y, BUTTON_WIDTH, BUTTON_HEIGHT);
-    chrome::draw_action(canvas, back, "BACK", false);
-
-    let Some(entry) = screen.detail() else {
-        canvas.draw_text(
-            "THAT APP IS NO LONGER HERE.",
-            Point::new(area.x, back.y + BUTTON_HEIGHT + 48.0),
-            TextStyle::new(30.0, palette::INK_SOFT),
-        );
+    if screen.detail().is_none() {
         return DetailLayout {
             back,
             primary: None,
             rollback: None,
         };
+    }
+
+    let row = area.y + area.height - BUTTON_HEIGHT;
+    let in_flight = screen.working().is_some_and(|working| &working.app == app);
+    if in_flight {
+        return DetailLayout {
+            back,
+            primary: None,
+            rollback: None,
+        };
+    }
+
+    let primary = screen
+        .primary_label(app)
+        .map(|_| Rect::new(area.x, row, BUTTON_WIDTH, BUTTON_HEIGHT));
+    let rollback = screen.can_roll_back(app).then(|| {
+        Rect::new(
+            area.x + BUTTON_WIDTH + 24.0,
+            row,
+            BUTTON_WIDTH,
+            BUTTON_HEIGHT,
+        )
+    });
+
+    DetailLayout {
+        back,
+        primary,
+        rollback,
+    }
+}
+
+/// Draws the detail view against a layout [`layout_detail`] already computed.
+fn draw_detail(
+    canvas: &mut Canvas,
+    area: Rect,
+    screen: &AppStoreScreen,
+    app: &AppId,
+    layout: &DetailLayout,
+) {
+    chrome::draw_action(canvas, layout.back, "BACK", false);
+
+    let Some(entry) = screen.detail() else {
+        canvas.draw_text(
+            "THAT APP IS NO LONGER HERE.",
+            Point::new(area.x, layout.back.y + BUTTON_HEIGHT + 48.0),
+            TextStyle::new(30.0, palette::INK_SOFT),
+        );
+        return;
     };
 
-    let mut cursor = back.y + BUTTON_HEIGHT + 56.0;
+    let mut cursor = layout.back.y + BUTTON_HEIGHT + 56.0;
     canvas.draw_text(
         &entry.name.as_str().to_uppercase(),
         Point::new(area.x, cursor),
@@ -311,33 +408,14 @@ fn draw_detail(
     {
         let rect = Rect::new(area.x, row, BUTTON_WIDTH * 2.0, BUTTON_HEIGHT);
         draw_progress(canvas, rect, &working.step, working.percent);
-        return DetailLayout {
-            back,
-            primary: None,
-            rollback: None,
-        };
+        return;
     }
 
-    let primary = screen.primary_label(app).map(|label| {
-        let rect = Rect::new(area.x, row, BUTTON_WIDTH, BUTTON_HEIGHT);
+    if let (Some(label), Some(rect)) = (screen.primary_label(app), layout.primary) {
         chrome::draw_action(canvas, rect, label, true);
-        rect
-    });
-    let rollback = screen.can_roll_back(app).then(|| {
-        let rect = Rect::new(
-            area.x + BUTTON_WIDTH + 24.0,
-            row,
-            BUTTON_WIDTH,
-            BUTTON_HEIGHT,
-        );
+    }
+    if let Some(rect) = layout.rollback {
         chrome::draw_action(canvas, rect, "ROLL BACK", false);
-        rect
-    });
-
-    DetailLayout {
-        back,
-        primary,
-        rollback,
     }
 }
 
@@ -399,7 +477,7 @@ fn banner_text(screen: &AppStoreScreen) -> Option<String> {
 }
 
 fn draw_banner(canvas: &mut Canvas, area: Rect, cursor: f32, text: &str) -> f32 {
-    let rect = Rect::new(area.x, cursor, area.width, 96.0);
+    let rect = Rect::new(area.x, cursor, area.width, BANNER_HEIGHT);
     canvas.fill_round_rect(rect, 16.0, palette::TILE);
     canvas.stroke_round_rect(rect, 16.0, palette::INK_FAINT, 2.0);
     let style = chrome::fit_text(
@@ -491,6 +569,13 @@ mod tests {
         AppStoreScreen::new(
             Inventory::survey(&layout, None, &Ledger::new(layout.clone())).expect("a survey"),
         )
+    }
+
+    #[test]
+    fn layout_needs_no_canvas_and_matches_what_render_draws() {
+        let screen = screen();
+        let drawn = render(&mut Canvas::new(SCREEN).expect("a canvas"), &screen);
+        assert_eq!(super::layout(SCREEN, &screen), drawn);
     }
 
     #[test]

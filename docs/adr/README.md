@@ -37,3 +37,4 @@ device survey and several of these are bets.
 | [0028](0028-system-services-over-the-protocol.md) | System services over the protocol, and what stays out of this pass |
 | [0029](0029-https-catalog-transport-and-cross-compiling-ring-for-the-device.md) | HTTPS catalog transport, and cross-compiling ring for the device |
 | [0030](0030-signing-off-the-build-machine.md) | Signing off the build machine |
+| [0031](0031-layout-as-a-value-and-one-damage-accumulator.md) | Layout as a value, and one damage accumulator |

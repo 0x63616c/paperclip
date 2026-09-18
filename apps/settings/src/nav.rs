@@ -81,10 +81,12 @@ impl NavLayout {
     }
 }
 
-/// Draws the tab strip below the status bar and returns the content rectangle
-/// under it.
-pub(crate) fn draw_nav(canvas: &mut Canvas, current: SettingsPage, top: f32) -> (NavLayout, Rect) {
-    let bounds = canvas.bounds();
+/// Where the tab strip and the content rectangle under it land, for a
+/// viewport shaped like `bounds` with the strip starting at `top`.
+///
+/// Pure geometry: which tab is `current` does not change where any tab is,
+/// only how it is drawn, so [`draw_nav`] is the only thing that needs it.
+pub(crate) fn layout_nav(bounds: Rect, top: f32) -> (NavLayout, Rect) {
     let count = SettingsPage::ALL.len();
     let width = bounds.width / count as f32;
 
@@ -92,7 +94,21 @@ pub(crate) fn draw_nav(canvas: &mut Canvas, current: SettingsPage, top: f32) -> 
         .map(|index| Rect::new(index as f32 * width, top, width, NAV_HEIGHT))
         .collect();
 
-    for (page, tab) in SettingsPage::ALL.into_iter().zip(&tabs) {
+    let content = Rect::new(
+        MARGIN,
+        top + NAV_HEIGHT + 32.0,
+        bounds.width - MARGIN * 2.0,
+        bounds.height - (top + NAV_HEIGHT + 32.0),
+    );
+    (NavLayout { tabs }, content)
+}
+
+/// Draws the tab strip against a layout [`layout_nav`] already computed.
+pub(crate) fn draw(canvas: &mut Canvas, current: SettingsPage, nav: &NavLayout) {
+    let bounds = canvas.bounds();
+    let tabs = &nav.tabs;
+
+    for (page, tab) in SettingsPage::ALL.into_iter().zip(tabs) {
         let active = page == current;
         if active {
             canvas.fill_rect(*tab, palette::TILE);
@@ -125,35 +141,28 @@ pub(crate) fn draw_nav(canvas: &mut Canvas, current: SettingsPage, top: f32) -> 
             );
         }
     }
-    canvas.hairline(
-        Point::new(0.0, top + NAV_HEIGHT),
-        bounds.width,
-        palette::HAIRLINE,
-    );
-
-    let content = Rect::new(
-        MARGIN,
-        top + NAV_HEIGHT + 32.0,
-        bounds.width - MARGIN * 2.0,
-        bounds.height - (top + NAV_HEIGHT + 32.0),
-    );
-    (NavLayout { tabs }, content)
+    if let Some(top) = tabs.first().map(|tab| tab.y) {
+        canvas.hairline(
+            Point::new(0.0, top + NAV_HEIGHT),
+            bounds.width,
+            palette::HAIRLINE,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{NAV_HEIGHT, SettingsPage, draw_nav};
+    use super::{NAV_HEIGHT, SettingsPage, layout_nav};
     use paper_sdk::chrome::MIN_TOUCH_TARGET;
-    use paper_sdk::{Canvas, Point, SCREEN};
+    use paper_sdk::{Canvas, Point, Rect, SCREEN};
 
-    fn canvas() -> Canvas {
-        Canvas::new(SCREEN).expect("screen-sized canvas")
+    fn bounds() -> Rect {
+        Canvas::new(SCREEN).expect("screen-sized canvas").bounds()
     }
 
     #[test]
     fn tabs_tile_the_full_width_without_overlapping() {
-        let mut canvas = canvas();
-        let (nav, _content) = draw_nav(&mut canvas, SettingsPage::Apps, 132.0);
+        let (nav, _content) = layout_nav(bounds(), 132.0);
         let tabs = nav.tabs();
         assert_eq!(tabs.len(), SettingsPage::ALL.len());
         assert!((tabs[0].x - 0.0).abs() < 1e-3);
@@ -165,8 +174,7 @@ mod tests {
 
     #[test]
     fn every_tab_is_tall_enough_to_tap() {
-        let mut canvas = canvas();
-        let (nav, _content) = draw_nav(&mut canvas, SettingsPage::Apps, 132.0);
+        let (nav, _content) = layout_nav(bounds(), 132.0);
         for tab in nav.tabs() {
             assert!(tab.height >= MIN_TOUCH_TARGET.min(NAV_HEIGHT));
         }
@@ -174,8 +182,7 @@ mod tests {
 
     #[test]
     fn hit_test_finds_the_page_under_a_tab() {
-        let mut canvas = canvas();
-        let (nav, _content) = draw_nav(&mut canvas, SettingsPage::Apps, 132.0);
+        let (nav, _content) = layout_nav(bounds(), 132.0);
         for (page, tab) in SettingsPage::ALL.into_iter().zip(nav.tabs()) {
             assert_eq!(nav.hit_test(tab.center()), Some(page));
         }
@@ -184,8 +191,7 @@ mod tests {
 
     #[test]
     fn content_starts_below_the_nav_and_never_goes_negative() {
-        let mut canvas = canvas();
-        let (_nav, content) = draw_nav(&mut canvas, SettingsPage::Apps, 132.0);
+        let (_nav, content) = layout_nav(bounds(), 132.0);
         assert!(content.y > 132.0 + NAV_HEIGHT);
         assert!(content.height > 0.0);
         assert!(content.bottom() <= SCREEN.height as f32);

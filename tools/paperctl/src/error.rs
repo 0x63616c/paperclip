@@ -334,6 +334,11 @@ pub(crate) enum CommandError {
         /// What went wrong.
         detail: String,
     },
+
+    /// `paperctl new app` could not scaffold a new app.
+    #[cfg(not(target_os = "linux"))]
+    #[error("could not create the new app")]
+    NewApp(#[from] crate::new_app::NewAppError),
 }
 
 impl CommandError {

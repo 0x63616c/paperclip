@@ -38,6 +38,7 @@
 mod app;
 mod canvas;
 mod color;
+mod damage;
 mod display;
 mod runtime;
 mod storage;
@@ -53,6 +54,7 @@ pub mod chrome;
 pub use app::{App, Context, Event, SaveError};
 pub use canvas::Canvas;
 pub use color::{Color, palette};
+pub use damage::DamageAccumulator;
 pub use display::{DisplayMapping, SCREEN};
 pub use runtime::{Outcome, RuntimeError, run};
 pub use storage::{Storage, StorageError};
