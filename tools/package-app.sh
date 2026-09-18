@@ -4,7 +4,13 @@
 # it.
 #
 #   ./tools/package-app.sh chess
-#   ./tools/package-app.sh sudoku
+#   ./tools/package-app.sh render-test-card
+#
+# Takes the app's directory name under `apps/`. The crate and binary names are
+# read from the app's own `Cargo.toml` and `paper.toml` rather than held in a
+# list here: a list means adding a catalog app silently breaks the release
+# workflow, which is exactly what happened when WWW-47 added the render test
+# card and `.github/workflows/release.yml` tried to package it (WWW-62).
 #
 # Leaves `<app>/bin/<app>` in place so `paperctl package apps/<app>` — the
 # command `docs/packaging.md` names — can be run directly afterwards.
@@ -19,28 +25,46 @@
 
 set -eu
 
-app=${1:?"usage: package-app.sh <chess|sudoku>"}
+app=${1:?"usage: package-app.sh <app-directory-name>"}
 target=aarch64-unknown-linux-gnu
 here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 source="$here/apps/$app"
 
-case "$app" in
-    chess) crate=paper-chess ;;
-    sudoku) crate=paper-sudoku ;;
-    *)
-        echo "package-app.sh: don't know how to build \`$app\` — try chess or sudoku" >&2
-        exit 2
-        ;;
-esac
+[ -d "$source" ] || {
+    echo "package-app.sh: no app directory at $source" >&2
+    exit 2
+}
 
 [ -f "$source/paper.toml" ] || {
     echo "package-app.sh: no $source/paper.toml" >&2
     exit 2
 }
 
-cargo build --release --target "$target" --manifest-path "$here/Cargo.toml" -p "$crate" --bin "$app"
+[ -f "$source/Cargo.toml" ] || {
+    echo "package-app.sh: no $source/Cargo.toml" >&2
+    exit 2
+}
 
-built="$here/target/$target/release/$app"
+# The `[package] name`, which is the first `name =` in the file — `[[bin]]`'s
+# own name comes later and must not win here.
+crate=$(sed -n 's/^name *= *"\(.*\)"/\1/p' "$source/Cargo.toml" | head -n 1)
+[ -n "$crate" ] || {
+    echo "package-app.sh: no [package] name in $source/Cargo.toml" >&2
+    exit 2
+}
+
+# The manifest says where the entrypoint must land, so it is also what the
+# binary has to be called. Deriving it from the manifest rather than assuming
+# it matches the directory keeps the two from drifting apart silently.
+bin=$(sed -n 's|^entrypoint *= *"bin/\(.*\)"|\1|p' "$source/paper.toml" | head -n 1)
+[ -n "$bin" ] || {
+    echo "package-app.sh: $source/paper.toml has no \`entrypoint = \"bin/<name>\"\`" >&2
+    exit 2
+}
+
+cargo build --release --target "$target" --manifest-path "$here/Cargo.toml" -p "$crate" --bin "$bin"
+
+built="$here/target/$target/release/$bin"
 [ -f "$built" ] || {
     # The output file from a previous run survives a failed build, so its mere
     # existence proves nothing — `cargo build`'s own non-zero exit above is
@@ -52,6 +76,6 @@ built="$here/target/$target/release/$app"
 }
 
 mkdir -p "$source/bin"
-cp "$built" "$source/bin/$app"
-chmod +x "$source/bin/$app"
-echo "staged: $source/bin/$app (aarch64 ELF)"
+cp "$built" "$source/bin/$bin"
+chmod +x "$source/bin/$bin"
+echo "staged: $source/bin/$bin (aarch64 ELF)"
