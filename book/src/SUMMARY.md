@@ -45,3 +45,4 @@
 - [ADR-0038: Sleep and lock as a compositor overlay, not a session hack](./decisions/0038-sleep-and-lock-as-a-compositor-overlay.md)
 - [ADR-0039: Everything is an app: the compositor as a long-running service](./decisions/0039-everything-is-an-app-the-compositor-as-a-service.md)
 - [ADR-0040: Staging the compositor into the platform release](./decisions/0040-staging-the-compositor-into-the-platform-release.md)
+- [ADR-0041: Signing in CI](./decisions/0041-signing-in-ci.md)

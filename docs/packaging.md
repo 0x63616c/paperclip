@@ -30,9 +30,11 @@ below work from a clean checkout.
 | `paperctl check` | `paperctl recover` |
 | `paperctl sign-release` | |
 
-The signing key never leaves the Mac. The device build of `paper-packages` is
-compiled with `default-features = false`, which removes the `publishing`
-feature and with it every code path that can hold one.
+The signing key lives on the Mac, the Mac mini, and (as of ADR-0041) the
+`PAPERCLIP_SIGNING_KEY` GitHub Actions secret on this repository — never on
+the device. The device build of `paper-packages` is compiled with
+`default-features = false`, which removes the `publishing` feature and with
+it every code path that can hold one.
 
 ## One-time setup
 
@@ -76,13 +78,17 @@ immutable as anything else. That is what makes them safe to iterate with.
 ## Signing a CI-built release
 
 `.github/workflows/release.yml` (WWW-62) builds and uploads app archives and
-platform components to GitHub, unsigned — CI never holds the signing key
-(§12). `paperctl sign-release` is the other half: it downloads what CI
-published for one release tag, decides how much of that it can independently
-vouch for, signs with a local key, and uploads the result back to the same
-release as new assets. Like `key`, `package`, `publish` and `check`, it is
-behind the `publishing` feature and requires `gh` and `tar` on `PATH`; unlike
-them it also needs network access to GitHub (`gh auth status` first).
+platform components to GitHub, then signs them itself in the same job, keyed
+by the `PAPERCLIP_SIGNING_KEY` repository secret (ADR-0041, superseding
+ADR-0030's rule that CI must never hold the key). `paperctl sign-release` is
+the command either CI or a person runs: given a release tag, it downloads
+what was published, decides how much of that it can independently vouch for,
+signs with the given key, and uploads the result back to the same release as
+new assets. Like `key`, `package`, `publish` and `check`, it is behind the
+`publishing` feature and requires `gh` and `tar` on `PATH`; unlike them it
+also needs network access to GitHub (`gh auth status` first).
+
+Run by hand it looks the same as it always has:
 
 ```sh
 paperctl sign-release dev.calum.chess-v0.2.0 \
@@ -110,9 +116,11 @@ downloaded components against their own `SHA256SUMS` before signing. See
 [ADR-0030](adr/0030-signing-off-the-build-machine.md) for why both of those
 are deliberate, not shortfalls waiting to be closed.
 
-This is a manual command a person runs once per release; nothing polls
-GitHub or triggers it automatically (§12 — the signing key is never reachable
-from anywhere that could).
+CI now runs this automatically, once per newly published tag, as the `Sign`
+step immediately after `Publish` in `release.yml`'s `app` and `platform`
+jobs. Running it by hand is still exactly this same command — useful for
+re-signing, for a release CI's automatic pass rejected, or for verifying
+independently with a local key.
 
 ### Verifying a signed release on the tablet
 

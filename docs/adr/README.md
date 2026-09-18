@@ -47,3 +47,4 @@ device survey and several of these are bets.
 | [0038](0038-sleep-and-lock-as-a-compositor-overlay.md) | Sleep and lock as a compositor overlay, not a session hack |
 | [0039](0039-everything-is-an-app-the-compositor-as-a-service.md) | Everything is an app: the compositor as a long-running service |
 | [0040](0040-staging-the-compositor-into-the-platform-release.md) | Staging the compositor into the platform release |
+| [0041](0041-signing-in-ci.md) | Signing in CI |

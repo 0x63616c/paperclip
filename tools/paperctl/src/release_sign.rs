@@ -1,12 +1,16 @@
-//! `paperctl sign-release` — signing a GitHub release off the build machine
-//! (§12, WWW-63, ADR-0030).
+//! `paperctl sign-release` — signing a published GitHub release
+//! (WWW-63, ADR-0030; now also invoked from CI itself, ADR-0041).
 //!
 //! `.github/workflows/release.yml` (WWW-62) builds and publishes app
-//! archives and platform components to GitHub, unsigned — CI never holds the
-//! signing key. This command is the other half: given a release tag, it
-//! downloads what CI published, decides how much of that it can
-//! independently vouch for, signs the rest with a local key, and uploads the
-//! result back to the same release as new assets. Behind the `publishing`
+//! archives and platform components to GitHub, then — as of ADR-0041 — runs
+//! this same command in the same job, keyed by the `PAPERCLIP_SIGNING_KEY`
+//! repository secret, superseding ADR-0030's rule that CI must never hold
+//! the key. A person can still run it by hand from a local `--key`, which is
+//! all `run` ever assumes about where the key file came from. Given a
+//! release tag, it downloads (or, given `--archive`, reuses) what was
+//! published, decides how much of that it can independently vouch for, signs
+//! the rest with the given key, and uploads the result back to the same
+//! release as new assets. Behind the `publishing`
 //! feature with everything else here that can hold a [`SecretKey`], for the
 //! reason every one of them is: the device build must not carry a code path
 //! that can sign a release, and `tools/assert-no-signing-path.sh` /
@@ -37,7 +41,11 @@
 //! and signs CI's bytes as-is, the trust decision
 //! `docs/device/www-69-preflight.md` already recorded by hand for the
 //! releases signed before this command existed. See ADR-0030 for why this
-//! refuses by default rather than skipping the check quietly.
+//! refuses by default rather than skipping the check quietly. Invoked from
+//! `release.yml` itself (ADR-0041), no flag is needed: the runner has the
+//! real `gcc-aarch64-linux-gnu` `apt-get`-installed a few steps earlier, so
+//! the rebuild-and-compare genuinely matches rather than needing to be
+//! skipped.
 //!
 //! The platform half is never rebuilt: four cross-compiled binaries is a
 //! full workspace release build, and the Mac mini this normally runs on is

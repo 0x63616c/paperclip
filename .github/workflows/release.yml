@@ -8,10 +8,12 @@
 # a revert, or a re-run after a red build all break a `git diff HEAD^` trigger,
 # and none of them break this one. Running it twice is harmless.
 #
-# Everything here is unsigned. Signing happens on a machine that holds the key,
-# which is never a GitHub runner (§12, WWW-63). What that machine needs is small
-# — ADR-0013 signs a few hundred bytes of TOML, detached, never the archives —
-# so this workflow doing the building costs nothing in separation.
+# Signing happens in this workflow too, via the `PAPERCLIP_SIGNING_KEY`
+# repository secret (ADR-0041, superseding ADR-0030's off-CI-only rule). Each
+# publish step is immediately followed by a sign step in the same job, using
+# the archive/components already on disk rather than re-downloading them.
+# ADR-0013 keeps the signing surface small regardless — a few hundred bytes of
+# TOML, detached, never the archives themselves.
 #
 # Nothing proprietary is needed. `vendor-engine` can only be enabled by
 # `platform/device` and `tools/paperctl`; `paper-host` has no `[features]` table
@@ -101,12 +103,32 @@ jobs:
         run: |
           printf '%s\n\n%s\n' \
             'paperclip-digest: ${{ matrix.app.expected_digest }}' \
-            'Unsigned. The catalog entry and its signature are produced off-CI.' \
+            'Signed by the next step in this same job (ADR-0041).' \
             > notes.md
           gh release create '${{ matrix.app.tag }}' \
             --title '${{ matrix.app.name }} ${{ matrix.app.version }}' \
             --notes-file notes.md \
             '${{ matrix.app.name }}-${{ matrix.app.version }}.paperpkg'
+      - name: Sign
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # `sign-release` rebuilds from source and refuses unless the result
+        # byte-matches the archive just published — a real independent check,
+        # not a formality, since this runner has the same real cross GCC that
+        # built it (unlike a Mac, which needs `--trust-ci-build`; ADR-0030).
+        # `--archive` points at that already-built file so the Publish step's
+        # upload isn't redundantly re-downloaded.
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/paperclip.key"
+          catalog="$RUNNER_TEMP/catalog"
+          printf '%s' '${{ secrets.PAPERCLIP_SIGNING_KEY }}' > "$key"
+          mkdir -p "$catalog"
+          cargo run -p paperctl -- sign-release '${{ matrix.app.tag }}' \
+            --catalog "$catalog" \
+            --key "$key" \
+            --archive '${{ matrix.app.name }}-${{ matrix.app.version }}.paperpkg'
+          rm -f "$key"
 
   platform:
     needs: plan
@@ -145,9 +167,23 @@ jobs:
           digest=$(jq -r .expected_digest <<<"$plan")
           printf '%s\n\n%s\n' \
             "paperclip-digest: $digest" \
-            'Unsigned platform components. `paperctl upgrade package` assembles and signs the bundle from these, on a machine holding the key.' \
+            'Signed by the next step in this same job (ADR-0041): `paperctl sign-release` assembles and signs the bundle from these components.' \
             > notes.md
           gh release create "$tag" \
             --title "Paperclip $version" \
             --notes-file notes.md \
             platform-components.tar.gz bundle/SHA256SUMS
+      - name: Sign
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The platform half is never rebuilt (WWW-63: four cross-compiled
+        # binaries is a full workspace build); `sign-release` instead checks
+        # the downloaded components against their own SHA256SUMS and signs
+        # what this job built, same as it always has.
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/paperclip.key"
+          printf '%s' '${{ secrets.PAPERCLIP_SIGNING_KEY }}' > "$key"
+          tag=$(jq -r .tag <<<'${{ needs.plan.outputs.platform }}')
+          cargo run -p paperctl -- sign-release "$tag" --key "$key"
+          rm -f "$key"

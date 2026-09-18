@@ -1,6 +1,11 @@
 # ADR-0030 — Signing off the build machine
 
-**Status:** accepted (WWW-63)
+**Status:** accepted (WWW-63), **the "never a GitHub runner" rule superseded
+by ADR-0041** — Calum made an informed decision to move the key into a GitHub
+Actions secret, after being told this ADR's tradeoff in so many words. The
+`paperctl sign-release` command this ADR built, its rebuild-and-compare
+refusal, and `--trust-ci-build` are all unchanged and still exactly what
+ADR-0041 invokes — only *where* the key is allowed to live changed.
 
 ## Context
 
