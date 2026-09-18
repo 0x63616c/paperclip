@@ -409,6 +409,18 @@ impl Supervisor {
     /// without it there is nowhere to record a diagnosis.
     pub fn run(&mut self) -> std::io::Result<Outcome> {
         fs::create_dir_all(&self.config.paths.state)?;
+        // The witness directory, created here rather than when a session is
+        // about to be started, because by then it is already too late:
+        // `paperclip-app@.service` carries `ReadWritePaths=` for it
+        // (`units::app_service`), and systemd resolves that while building the
+        // unit's mount namespace — before any of our code runs. A missing
+        // directory is not an empty one there; it is
+        // `226/NAMESPACE`, and the supervisor sees only "systemd refused to
+        // start paperclip-app@home.service" with no reason attached. WWW-55
+        // found it on the first boot the launcher ever drove, because
+        // `paperctl run` hosts the app in-process and never starts that unit,
+        // so nothing before it had exercised this path on a device.
+        fs::create_dir_all(self.config.paths.progress())?;
         self.write_status();
         self.climb();
         // Sent whatever the ladder reached. A supervisor that withheld
@@ -659,23 +671,6 @@ impl Supervisor {
                     self.config.paths.progress().join(other.label()),
                 ));
                 self.session_unit = Some(unit.clone());
-                // The compositor is the one process that opens the panel
-                // while Paperclip owns the display (WWW-81): started here,
-                // ahead of the app unit, so it is already accepting
-                // connections by the time the app tries to become its
-                // client. Idempotent against a unit already active from a
-                // previous app-to-app switch in the same session — `start`
-                // on an active `Type=simple` unit is a no-op success, the
-                // same property `SESSION_TARGET`'s own unconditional start
-                // below already relies on.
-                if let Err(error) = self.units.start(COMPOSITOR_UNIT) {
-                    tracing::warn!("systemd refused to start {COMPOSITOR_UNIT}: {error}");
-                    self.queued.push(Event::SessionExited {
-                        owner: other.clone(),
-                        status: ExitKind::Error,
-                    });
-                    return;
-                }
                 // Starting the session target is how stock is taken down: the
                 // target `Conflicts=` the stock unit, so systemd stops it
                 // cleanly and in the right order. Paperclip never issues a
@@ -694,6 +689,35 @@ impl Supervisor {
                 // the same signal a refused `StartBudget` produces above.
                 if let Err(error) = self.units.start(SESSION_TARGET) {
                     tracing::warn!("systemd refused to start {SESSION_TARGET}: {error}");
+                    self.queued.push(Event::SessionExited {
+                        owner: other.clone(),
+                        status: ExitKind::Error,
+                    });
+                    return;
+                }
+                // The compositor is the one process that opens the panel
+                // while Paperclip owns the display (WWW-81): started after
+                // the target above and ahead of the app unit below, which is
+                // the only window that satisfies both of its ordering
+                // requirements at once.
+                //
+                // *After* the target, because opening the panel means opening
+                // the vendor waveform engine, and stock still owns it until
+                // the target's `Conflicts=` has stopped stock. WWW-55 started
+                // this first and the engine died on the contention:
+                // `Unable to load primary devconfig` / `Failed to initialize
+                // SWTCON`, then `SIGSEGV` inside the vendor library. The
+                // compositor had never been started on a device before that
+                // run, so nothing had exercised this order.
+                //
+                // *Before* the app, so it is already accepting connections by
+                // the time the app tries to become its client. Idempotent
+                // against a unit already active from a previous app-to-app
+                // switch in the same session — `start` on an active
+                // `Type=simple` unit is a no-op success, the same property
+                // the target's own unconditional start relies on.
+                if let Err(error) = self.units.start(COMPOSITOR_UNIT) {
+                    tracing::warn!("systemd refused to start {COMPOSITOR_UNIT}: {error}");
                     self.queued.push(Event::SessionExited {
                         owner: other.clone(),
                         status: ExitKind::Error,

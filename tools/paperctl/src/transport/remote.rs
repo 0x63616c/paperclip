@@ -211,8 +211,21 @@ fn ssh_target(host: &str) -> String {
 
 impl SshRunner for SystemSsh {
     fn run_blocking(&self, host: &str, remote_argv: &[String]) -> Result<i32, TransportError> {
+        // Quoted as one command line, exactly as `start_detached` below does
+        // it, and for the same reason: `ssh` does not forward argv. It joins
+        // whatever it is given with spaces and hands the result to a shell on
+        // the far side, so a token containing a space arrives as two tokens.
+        // Passing `args(remote_argv)` looks like it preserves argument
+        // boundaries and does not — `autostart disable`'s default
+        // `--reason "operator request"` reached the device as `--reason
+        // operator request` and was rejected as an unexpected argument, which
+        // made the one escape hatch WWW-53 requires work over SSH fail
+        // whenever its reason held a space, i.e. by default.
+        let mut full = Vec::with_capacity(remote_argv.len() + 1);
+        full.push(REMOTE_PAPERCTL.to_owned());
+        full.extend(remote_argv.iter().cloned());
         let mut command = Self::base(host);
-        command.arg("--").arg(REMOTE_PAPERCTL).args(remote_argv);
+        command.arg(shell_join(full.iter()));
         let status = command.status().map_err(Self::spawn_err)?;
         Ok(status.code().unwrap_or(-1))
     }
@@ -489,6 +502,31 @@ mod tests {
     #[test]
     fn shell_quoting_survives_a_single_quote() {
         assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn a_blocking_argument_containing_a_space_stays_one_argument() {
+        // The regression this exists for: `ssh` does not forward argv, so a
+        // blocking command built with `args(remote_argv)` let `--reason
+        // "operator request"` split on the far side and `autostart disable`
+        // — WWW-53's escape hatch, and the only one that works without the
+        // panel — was rejected as `unexpected argument 'request'` by its own
+        // default. Asserted on the joined command line rather than through
+        // `FakeSsh`, because the fake captures argv above the layer that
+        // hands it to `ssh`, which is exactly where the boundary was lost.
+        let argv = [
+            REMOTE_PAPERCTL.to_owned(),
+            "autostart".to_owned(),
+            "disable".to_owned(),
+            "--reason".to_owned(),
+            "operator request".to_owned(),
+        ];
+
+        assert_eq!(
+            shell_join(argv.iter()),
+            "'/home/root/paperclip/bin/paperctl' 'autostart' 'disable' \
+             '--reason' 'operator request'"
+        );
     }
 
     #[test]

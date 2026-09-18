@@ -165,6 +165,72 @@ impl PlatformLayout {
         if !marker.exists() {
             store::atomic_write(&marker, b"paperclip platform root\n")?;
         }
+        self.ensure_traversable()?;
+        Ok(())
+    }
+
+    /// Give every ancestor of the platform root the execute bit for "other".
+    ///
+    /// `paperclip-app@.service` runs as `User=xochitl` (uid 500) with
+    /// `WorkingDirectory=` inside this root, and on a stock tablet
+    /// `/home/root` is `drwx------ root root`. An unprivileged app therefore
+    /// cannot *traverse* to its own working directory, and systemd fails the
+    /// unit with `200/CHDIR` before the app's `main` is ever entered — which
+    /// the supervisor can only report as "systemd refused to start
+    /// paperclip-app@home.service", with no reason attached.
+    ///
+    /// Execute-without-read is the whole of what is granted: `0o111` permits
+    /// walking *through* a directory to a path already known, and still
+    /// refuses listing it. `/home/root`'s own contents — the notebooks this
+    /// device exists for — stay as unreadable to uid 500 as they were.
+    ///
+    /// Here rather than in a setup script because it has to be true on every
+    /// device Paperclip is ever installed on, not just the one it was first
+    /// debugged on: WWW-55 found it by hand-fixing a tablet, and a hand fix
+    /// is exactly what does not survive the next install.
+    #[cfg(unix)]
+    fn ensure_traversable(&self) -> Result<(), UpdateError> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        for ancestor in self.root.ancestors().skip(1) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            let Ok(metadata) = fs::metadata(ancestor) else {
+                // An ancestor we cannot stat is one we also cannot fix, and
+                // it is not this function's business to invent it.
+                continue;
+            };
+            let mode = metadata.permissions().mode();
+            if mode & 0o001 != 0 {
+                continue;
+            }
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(mode | 0o001);
+            // Best effort, and deliberately not fatal. The ancestors of a
+            // platform root are not all ours to change: under a test's
+            // temporary directory they belong to the system, and a root
+            // somewhere unexpected on a real machine may sit below a
+            // directory this process has no business widening. Failing
+            // `ensure` over one of those would turn "the layout is
+            // established" into "the layout is established only where every
+            // parent happened to be writable", which is a worse contract
+            // than doing what can be done and saying what could not. The
+            // symptom this prevents — `200/CHDIR` — is reported clearly by
+            // systemd if a parent really was the blocker.
+            if let Err(error) = fs::set_permissions(ancestor, permissions) {
+                tracing::debug!(
+                    path = %ancestor.display(),
+                    %error,
+                    "could not add the traversal bit; an unprivileged app may not reach the root"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn ensure_traversable(&self) -> Result<(), UpdateError> {
         Ok(())
     }
 

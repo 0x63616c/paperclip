@@ -40,4 +40,14 @@ pub enum BootError {
         #[source]
         source: paper_packages::store::StoreError,
     },
+    /// Installing or removing the persistent units did not complete.
+    ///
+    /// A string rather than a structured variant because the things that go
+    /// wrong here are not one shape: a `mount` that refused, a `systemctl`
+    /// that failed, a write to a root filesystem that is full. What the
+    /// caller does with any of them is identical — report it and leave the
+    /// device alone — so the detail is for a person to read, not for code to
+    /// match on.
+    #[error("{0}")]
+    Install(String),
 }

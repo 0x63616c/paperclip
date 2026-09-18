@@ -137,6 +137,7 @@ mod linux {
         // a specific app's `SessionGrants`, which `bring_up` has no app to
         // derive. Write it here, before `bring_up`, so its one `daemon-reload`
         // picks up both sets in a single pass.
+        materialise_shipped_apps(paths)?;
         install_home_unit(paths)?;
 
         let recovery = RecoveryConfig::default();
@@ -168,6 +169,90 @@ mod linux {
             }
         }
         Ok(())
+    }
+
+    /// Put the apps a platform release ships with where their unit expects to
+    /// find them: `apps/<label>/bin/<label>`.
+    ///
+    /// `paperclip-app@.service` is a template whose `ExecStart=` is
+    /// `{root}/apps/%i/bin/%i` (`paper_host::units`), which is the layout an
+    /// app *installed from a catalog* has. Home, Settings and the App Store
+    /// are not installed from a catalog — they ship inside the platform
+    /// release, under `current/bin/`, and nothing until now copied them
+    /// across. On a device that had never installed an app from a catalog the
+    /// result was `203/EXEC`: a unit pointing at a path no release had ever
+    /// written.
+    ///
+    /// Driven from `current/` on every boot rather than once at install, so
+    /// that a platform upgrade — which is a `current` symlink swap
+    /// (ADR-0019) — brings the app binaries forward with it instead of
+    /// leaving last release's copies behind to be executed by this release's
+    /// units.
+    ///
+    /// Platform binaries are skipped by their `paperclip-` prefix: they are
+    /// named in units by absolute path and are not apps, so copying them into
+    /// the app layout would only create a second, staler copy of each.
+    fn materialise_shipped_apps(paths: &SessionPaths) -> Result<(), String> {
+        let shipped = paths.current().join("bin");
+        let entries = match std::fs::read_dir(&shipped) {
+            Ok(entries) => entries,
+            // No selected release is a real state — a device set up but never
+            // upgraded — and it is the supervisor's job to report it, not
+            // this function's to fail the boot over.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tracing::warn!("no shipped apps at {}: {error}", shipped.display());
+                return Ok(());
+            }
+            Err(error) => return Err(format!("reading {}: {error}", shipped.display())),
+        };
+
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("reading {}: {error}", shipped.display()))?;
+            let label = entry.file_name().to_string_lossy().into_owned();
+            if label.starts_with("paperclip-") {
+                continue;
+            }
+            let source = entry.path();
+            if !source.is_file() {
+                continue;
+            }
+            let bin_dir = paths.root.join("apps").join(&label).join("bin");
+            let destination = bin_dir.join(&label);
+            if same_file(&source, &destination) {
+                continue;
+            }
+            std::fs::create_dir_all(&bin_dir)
+                .map_err(|error| format!("creating {}: {error}", bin_dir.display()))?;
+            // Copied via a temporary name and renamed, so a binary that is
+            // mid-copy is never the one a unit execs: `rename` within the
+            // directory is atomic, an interrupted `copy` onto the live path
+            // is not. `fs::copy` carries the mode across, so the execute bit
+            // the release shipped is the execute bit that lands.
+            let staged = bin_dir.join(format!(".{label}.new"));
+            std::fs::copy(&source, &staged)
+                .map_err(|error| format!("copying {}: {error}", source.display()))?;
+            std::fs::rename(&staged, &destination)
+                .map_err(|error| format!("installing {}: {error}", destination.display()))?;
+            tracing::info!("materialised {label} from {}", source.display());
+        }
+        Ok(())
+    }
+
+    /// Whether `destination` is already a byte-for-byte copy of `source`.
+    ///
+    /// Length first because it settles almost every call without reading
+    /// either file, and this runs on the boot path for every shipped app.
+    fn same_file(source: &std::path::Path, destination: &std::path::Path) -> bool {
+        let (Ok(from), Ok(to)) = (source.metadata(), destination.metadata()) else {
+            return false;
+        };
+        if from.len() != to.len() {
+            return false;
+        }
+        match (std::fs::read(source), std::fs::read(destination)) {
+            (Ok(from), Ok(to)) => from == to,
+            _ => false,
+        }
     }
 
     /// Writes `paperclip-app@home.service`, the one unit `bring_up`

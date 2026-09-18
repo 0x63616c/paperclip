@@ -12,7 +12,7 @@
 # (ADR-0026).
 
 [release]
-version = "0.1.0"
+version = "0.1.4"
 protocol = "1.0"
 
 # `writes` and `readable_back_to` are spelled out rather than shortened to

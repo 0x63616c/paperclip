@@ -4,6 +4,7 @@
 #   ./tools/cross/build-device.sh <example-name>                    # a paper-device example
 #   ./tools/cross/build-device.sh --bin paperctl                    # the command line itself
 #   ./tools/cross/build-device.sh --bin paperclip-compositor paper-compositor
+#   ./tools/cross/build-device.sh --bin paperclip-launcher paper-boot --features ''
 #
 # `--bin <bin-name> [<package-name>]` builds one binary; `<package-name>`
 # defaults to `<bin-name>` (right for `paperctl`, whose package and binary
@@ -45,11 +46,26 @@
 kind=example
 target=takeover
 package=""
+# The device feature set for a `--bin`. `vendor-engine` is right for anything
+# that reaches the panel, and wrong for anything that cannot: `paper-boot` does
+# not declare the feature at all, because `paperclip-launcher` decides whether
+# a boot starts a session and never opens the display itself. Asking for a
+# feature a package does not have is a hard cargo error, so the set is
+# overridable rather than assumed — `--features ''` builds with none.
+features=vendor-engine
 case "${1:-}" in
     --bin) kind=bin; target=${2:?--bin needs a name}; package=${3:-$target} ;;
     "") ;;
     *) target=$1 ;;
 esac
+# `--features <list>` may follow the form above, for a binary whose device
+# build is not the vendor-engine one.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --features) features=${2?--features needs a value}; shift 2 ;;
+        *) shift ;;
+    esac
+done
 
 qt=${PAPERCLIP_QT_INCLUDE:-$HOME/paperclip-qt/include}
 vendor=${PAPERCLIP_VENDOR_LIB_DIR:-$HOME/paperclip-vendor/lib}
@@ -66,7 +82,7 @@ docker run --rm --platform linux/arm64 \
     -v "$qt:/qt:ro" \
     -v "$vendor:/vendor:ro" \
     -v "$HOME/.cargo/registry:/root/.cargo/registry" \
-    -e "KIND=$kind" -e "TARGET=$target" -e "PACKAGE=$package" \
+    -e "KIND=$kind" -e "TARGET=$target" -e "PACKAGE=$package" -e "FEATURES=$features" \
     debian:bookworm-slim sh -euc '
         export DEBIAN_FRONTEND=noninteractive
         apt-get -qq update >/dev/null
@@ -83,8 +99,9 @@ docker run --rm --platform linux/arm64 \
         export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=cc
         cd /src
         if [ "$KIND" = bin ]; then
+            if [ -n "$FEATURES" ]; then set -- --features "$FEATURES"; else set --; fi
             cargo build --release -p "$PACKAGE" --bin "$TARGET" \
-                --no-default-features --features vendor-engine \
+                --no-default-features "$@" \
                 --target-dir /src/target/device-container
         else
             cargo build --release -p paper-device --example "$TARGET" \

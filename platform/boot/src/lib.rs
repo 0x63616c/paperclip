@@ -52,6 +52,7 @@
 pub mod autostart;
 pub mod counter;
 pub mod error;
+pub mod install;
 pub mod policy;
 pub mod units;
 

@@ -146,6 +146,23 @@ impl SessionPaths {
         self.root.join("bin/paperclip-launcher")
     }
 
+    /// `paperclip-compositor`, resolved through the selected release.
+    ///
+    /// Through `current/`, like [`Self::host`] and unlike [`Self::paperctl`]
+    /// and [`Self::launcher`]: WWW-86 staged the compositor *into* the
+    /// platform release (ADR-0039 makes it the one process that opens the
+    /// panel), so it moves with a release the way the supervisor does. The
+    /// two binaries outside `releases/` are the ones that must survive an
+    /// update in order to recover from it; the compositor is not one of them.
+    ///
+    /// This read `root/bin/paperclip-compositor` until WWW-55 booted the
+    /// supervisor on a device for the first time and got `203/EXEC` — a unit
+    /// naming a path no release had ever written, which took down
+    /// `paperclip-session.target` and with it every app start behind it.
+    pub fn compositor(&self) -> PathBuf {
+        self.current().join("bin/paperclip-compositor")
+    }
+
     /// The supervisor binary, resolved through the selected release.
     ///
     /// `current` is a symlink into `releases/<version>/`, so activating a
@@ -572,7 +589,7 @@ fn compositor_service(spec: &SessionSpec) -> UnitFile {
          RemoveIPC=yes\n\
          LockPersonality=yes\n\
          DevicePolicy=closed\n",
-        bin = paths.root.join("bin/paperclip-compositor").display(),
+        bin = paths.compositor().display(),
         socket = paths.compositor_socket().display(),
         status = paths.compositor_status().display(),
         root = paths.root.display(),
