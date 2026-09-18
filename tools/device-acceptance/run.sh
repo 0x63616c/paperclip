@@ -249,14 +249,40 @@ build_release() {
         --key "$key" --out "$workdir/paperclip-$version.tar.gz"
 }
 
+# `paperctl upgrade run` forwards the bundle path to the tablet's own
+# `paperctl` verbatim and reads it there — "nothing is staged across the
+# link" (`tools/paperctl/src/upgrade.rs`). So the bundle has to already exist
+# at the identical path on the device before every `upgrade run` call, the
+# same manual step `docs/device/www-69-preflight.md` scps by hand.
+stage_bundle() {
+    bundle=$1
+    ssh_raw "mkdir -p $(dirname "$bundle")"
+    scp -q "$bundle" "$ssh_host:$bundle"
+}
+
 log "building $to"
 (cd "$here" && cargo build --release --target aarch64-unknown-linux-gnu \
     -p paper-host -p paper-home -p paper-app-store -p paper-settings -p paper-fault-app)
 build_release "$to" paperclip-host ""
 
+# `docs/updating.md` names this as the first step on any tablet ("no
+# bootstrap step beyond setup above is needed") and it is idempotent
+# ("running it twice changes nothing"), so it belongs in this script rather
+# than in a separate manual step the script would otherwise silently depend
+# on. It also finds and reverts a transaction a previous run left interrupted
+# — real evidence a previous attempt left `current`/`releases/` pointed at a
+# release the journal never committed (WWW-55). It does NOT write
+# `paperclip-host.service` into `/run/systemd/system` — nothing in the
+# product does that yet (`platform/updater/src/linux.rs`'s `bring_up` assumes
+# the unit already exists); that gap is why `upgrade run` below still fails
+# on a tablet nothing has ever been installed on, and is unresolved.
+log "setup"
+$paperctl setup --device "$ssh_host"
+
 # --- step 1: healthy -------------------------------------------------------
 
 log "step 1/3: healthy upgrade $from -> $to"
+stage_bundle "$workdir/paperclip-$to.tar.gz"
 $paperctl upgrade run "$workdir/paperclip-$to.tar.gz" --trust "$trust" --device "$ssh_host"
 current=$($paperctl upgrade status --device "$ssh_host" | awk '/^current/{print $2}')
 last=$($paperctl upgrade status --device "$ssh_host" | awk '/^last/{$1=""; print}')
@@ -280,6 +306,7 @@ with open(path, 'r+b') as f:
     f.seek(-64, 2)
     f.write(bytes([b[0] ^ 0xff]))
 " "$corrupt"
+stage_bundle "$corrupt"
 if $paperctl upgrade run "$corrupt" --trust "$trust" --device "$ssh_host"; then
     fail "step 2: a damaged package was accepted"
 fi
@@ -297,6 +324,7 @@ log "step 3/3: a candidate that panics on start must be rolled back"
 # CLI error — `paperctl upgrade run` exits 0 having rolled it back and
 # reports the refusal in its own output, the same shape
 # `upgrade-panics`/`upgrade-never-ready` assert against in the VM harness.
+stage_bundle "$workdir/paperclip-$fail_to.tar.gz"
 report=$($paperctl upgrade run "$workdir/paperclip-$fail_to.tar.gz" --trust "$trust" --device "$ssh_host")
 case "$report" in *refused*) ;; *) fail "step 3: the report never said the candidate was refused: $report" ;; esac
 current=$($paperctl upgrade status --device "$ssh_host" | awk '/^current/{print $2}')
