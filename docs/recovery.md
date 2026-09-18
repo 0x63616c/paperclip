@@ -35,11 +35,19 @@ something.
   residue**.
 - **Presentation goes through the vendor waveform engine**, never raw DRM
   (ADR-0007).
-- **Paperclip installs nothing on the root filesystem.** Binaries under
-  `/home/root/paperclip`, units runtime-only in `/run/systemd/system`
-  (ADR-0008).
+- **Paperclip installs nothing on the root filesystem, with one deliberate
+  exception.** Binaries under `/home/root/paperclip`, units runtime-only in
+  `/run/systemd/system` (ADR-0008) — except `paperclip-launcher.service`,
+  which ADR-0008's WWW-53 amendment permits to be written to the root
+  filesystem exactly once, by a human at the tablet, because it is the one
+  unit whose job is deciding whether autostart gets to run at all and so
+  cannot itself live somewhere a boot erases. Nothing else gets this
+  exception, and no update or agent run performs the write.
 - **Never write to `/data`** — device identity state — or to any read-only
-  filesystem.
+  filesystem. The autostart disable marker is **not** there: it lives at
+  `/home/root/paperclip/autostart-disabled` (ADR-0008's WWW-53 amendment
+  resolves the conflict between this rule and that ADR's original `/data`
+  proposal).
 
 ## Standing constraints
 
@@ -138,7 +146,7 @@ Each row demonstrated in the VM harness; see the report for what was observed.
 | Failures repeat | Three inside two minutes and the supervisor stops relaunching: it returns to stock, records the diagnosis, and *refuses the next request*. Recording exhaustion while still honouring requests is a restart loop with extra steps. |
 | Xochitl will not start | `Failed`, explicitly. Logs preserved under the diagnostics directory, `paperctl stock` exits non-zero with `stock Xochitl was NOT restored`, and nothing claims a recovery happened. The wakelock is deliberately **kept**, so the tablet stays awake and reachable over SSH instead of suspending into a state nobody can diagnose. |
 | Stock is near its start limit | The supervisor refuses to take the display at all, rather than starting a session it may not be able to hand back. WWW-3 measured the cost on the tablet: a Xochitl restart it did not survive cleanly consumed two of its four permitted starts. The refusal is counted as a session that failed to start, so repeated refusals spend the failure budget and stop. |
-| Reboot | Stock. Units live only in `/run/systemd/system`, which is a tmpfs; nothing is enabled and nothing is installed on the root filesystem (ADR-0008). |
+| Reboot | Once the launcher unit is installed (ADR-0008's WWW-53 amendment): `paperclip-launcher` decides — disabled or three prior boots already failed to reach Home means straight to stock, otherwise it starts Paperclip and grades it against `state=home`, leaving the durable boot counter incremented on anything short of that. Session units are still written fresh into `/run/systemd/system`, a tmpfs, every boot (ADR-0008). Before the launcher unit is installed, or with autostart disabled: plain stock, as before. |
 
 ## The independent path
 
@@ -231,6 +239,11 @@ been run against a real service manager — in a VM, on a stand-in for Xochitl:
   responding as expected.~~ Written above. Never needed in anger, which is the
   only test that counts.
 - Evidence. Every row in the table above that says "never run".
+- Boot-time autostart's own VM-harness proof: `paperclip-launcher` is
+  Mac-tested (the decision core) and cross-compiled clippy-clean, but
+  `tests/failure-harness` does not yet exercise it end to end — three failed
+  renders actually rolling back to stock, the counter actually surviving a VM
+  power cut, safe mode actually reachable. See ADR-0008's WWW-53 amendment.
 
 Until those are written from evidence on the device, treat recovery as
 unproven. A passing test in this repository is not device qualification, and a

@@ -33,6 +33,13 @@ then, entries below are grouped by project stage rather than by release tag.
   (WWW-62) on a machine holding the key, rebuilding and byte-comparing the
   app half before signing where the local toolchain allows it (WWW-63,
   ADR-0030).
+- `platform/boot` (`paper-boot`) and `paperclip-launcher`: boot-time
+  autostart, gated on a durable, power-loss-surviving counter that stops
+  trying after three consecutive boots fail to reach Home, plus `paperctl
+  autostart enable|disable|status|reset` as the SSH escape hatch (WWW-53,
+  ADR-0008 amendment). Reuses the existing platform-release A/B switch
+  (`paper_updater::PlatformLayout`) and `paper_updater::linux::SystemdSession`
+  rather than duplicating either.
 
 ### Fixed
 

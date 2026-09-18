@@ -1,0 +1,45 @@
+# Boot-time autostart (§10, WWW-53).
+#
+# Split the same way `paper-host` and `paper-updater` are:
+#
+#   * `policy`, `counter`, `autostart`, `units` are platform-free. They decide
+#     what this boot should do, and are tested on the Mac.
+#   * `bin/paperclip-launcher` drives systemd and the real session, compiles
+#     only on Linux, and is proven by `tests/failure-harness` in a VM.
+#
+# `default-features = false` on `paper-packages` and `paper-updater`: the
+# launcher runs on the device and must not carry a path that can sign a
+# release (§12) — the same reason `paperctl`'s device build turns them off.
+[package]
+name = "paper-boot"
+description = "Boot-time autostart: the decision core for whether this boot starts Paperclip, and the durable counter behind it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lib]
+name = "paper_boot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "paperclip-launcher"
+path = "src/bin/paperclip-launcher.rs"
+
+[dependencies]
+paper-device = { workspace = true }
+paper-host = { workspace = true }
+paper-packages = { workspace = true, default-features = false }
+paper-sys = { workspace = true }
+paper-telemetry = { workspace = true }
+paper-updater = { workspace = true, default-features = false }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

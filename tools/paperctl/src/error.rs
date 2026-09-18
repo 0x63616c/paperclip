@@ -261,6 +261,11 @@ pub(crate) enum CommandError {
     #[error("the platform operation did not complete")]
     Platform(#[from] paper_updater::UpdateError),
 
+    /// `paperctl autostart` could not read or write the boot counter or the
+    /// disable marker.
+    #[error("the autostart state could not be read or written")]
+    Boot(#[from] paper_boot::BootError),
+
     /// A protocol version on the command line did not parse.
     #[cfg(feature = "publishing")]
     #[error("`{value}` is not a protocol version")]

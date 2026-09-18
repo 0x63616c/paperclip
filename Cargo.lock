@@ -1597,6 +1597,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "paper-boot"
+version = "0.1.0"
+dependencies = [
+ "paper-device",
+ "paper-host",
+ "paper-packages",
+ "paper-sys",
+ "paper-telemetry",
+ "paper-updater",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
 name = "paper-chess"
 version = "0.1.0"
 dependencies = [
@@ -1860,6 +1875,7 @@ dependencies = [
  "mdns-sd",
  "notify",
  "paper-app-store",
+ "paper-boot",
  "paper-chess",
  "paper-chess-rules",
  "paper-device",

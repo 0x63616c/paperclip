@@ -12,6 +12,7 @@ members = [
     "platform/sdk",
     "platform/device",
     "platform/host",
+    "platform/boot",
     "platform/sys",
     "platform/telemetry",
     "platform/testing",
@@ -54,6 +55,7 @@ paper-device = { path = "platform/device" }
 paper-app-store = { path = "apps/app-store" }
 paper-home = { path = "apps/home" }
 paper-host = { path = "platform/host" }
+paper-boot = { path = "platform/boot" }
 # `default-features = false` here for the reason `paper-packages` has it: the
 # default feature renders the document a signature is made over, and the
 # device build must not contain it. `paperctl` turns it on behind its own

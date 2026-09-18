@@ -96,3 +96,17 @@ Paperclip's own record of what a Mac-initiated run against the tablet did,
 kept next to the device config so `paperctl doctor` and `paperctl logs` have
 something to read even with no device reachable right now
 (`tools/paperctl/src/transport/runlog.rs`, WWW-34).
+
+**Boot counter** — the durable, power-loss-surviving count of consecutive
+boots that failed to reach `SessionState::Home`, distinct from a systemd
+restart count (which resets every boot) and from the platform updater's own
+one-attempt grading (which answers "did this transaction commit", not "does
+this boot"). Three failures and autostart stops trying until reset
+(`platform/boot/src/counter.rs`, ADR-0008's WWW-53 amendment).
+
+**Autostart** — starting Paperclip at boot without the Mac, through the one
+unit in this project installed to the device's root filesystem rather than
+generated at session start (`paperclip-launcher.service`). Bounded by the
+*boot counter* above; disabled with `paperctl autostart disable` over SSH,
+which is also the boot-time skip's other half
+(`platform/boot/src/units.rs`, ADR-0008's WWW-53 amendment).

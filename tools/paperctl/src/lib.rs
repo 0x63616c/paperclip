@@ -123,6 +123,8 @@ enum Command {
     Units(device::UnitsArgs),
     /// Return the display to stock — the independent recovery path (§10).
     Stock(device::StockArgs),
+    /// Enable, disable or inspect boot-time autostart (§10, WWW-53).
+    Autostart(device::AutostartArgs),
     /// Manage publishing keys.
     #[cfg(feature = "publishing")]
     Key {
@@ -196,6 +198,7 @@ impl Command {
             Command::Isolation(_) => "isolation",
             Command::Units(_) => "units",
             Command::Stock(_) => "stock",
+            Command::Autostart(_) => "autostart",
             #[cfg(feature = "publishing")]
             Command::Key { .. } => "key",
             #[cfg(feature = "publishing")]
@@ -346,6 +349,7 @@ fn run_cli(cli: Cli) -> Result<u8, CommandError> {
         Command::Isolation(args) => device::run(device::DeviceCommand::Isolation(args)).map(|()| 0),
         Command::Units(args) => device::run(device::DeviceCommand::Units(args)).map(|()| 0),
         Command::Stock(args) => device::run(device::DeviceCommand::Stock(args)).map(|()| 0),
+        Command::Autostart(args) => device::run(device::DeviceCommand::Autostart(args)).map(|()| 0),
         #[cfg(feature = "publishing")]
         Command::Key { command } => packaging::key(command).map(|()| 0),
         #[cfg(feature = "publishing")]

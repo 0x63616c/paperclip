@@ -51,6 +51,7 @@ clap = { workspace = true }
 mdns-sd = { version = "0.21", default-features = false, optional = true }
 notify = { workspace = true, optional = true }
 paper-app-store = { workspace = true, optional = true }
+paper-boot = { workspace = true }
 paper-chess = { workspace = true, optional = true }
 paper-chess-rules = { workspace = true, optional = true }
 paper-device = { workspace = true }

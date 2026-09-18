@@ -100,6 +100,68 @@ impl crate::transport::dispatch::RemoteCommand for StockArgs {
     }
 }
 
+/// `paperctl autostart`.
+///
+/// The escape hatch WWW-53 asks for: it must work over SSH without the
+/// tablet's own UI, so it goes through the same remote dispatch as `stock`
+/// rather than depending on anything Paperclip itself renders.
+#[derive(Debug, Args)]
+pub(crate) struct AutostartArgs {
+    #[command(subcommand)]
+    command: AutostartCommand,
+    #[command(flatten)]
+    device: crate::transport::DeviceArgs,
+}
+
+/// Boot-time autostart (WWW-53, §10).
+#[derive(Debug, Subcommand)]
+pub(crate) enum AutostartCommand {
+    /// Start Paperclip at boot. The default, once the persistent launcher
+    /// unit is installed on the device's root filesystem.
+    Enable,
+    /// Boot straight to stock, every boot, until re-enabled. Sets the exact
+    /// marker `paperclip-launcher.service`'s `ConditionPathExists=!` checks
+    /// — the boot-time skip and this command are the same mechanism.
+    Disable {
+        /// Recorded alongside the marker, for `status` and for the next
+        /// person following `docs/recovery.md`'s manual-recovery steps.
+        #[arg(long, default_value = "operator request")]
+        reason: String,
+    },
+    /// Whether autostart is enabled, and the durable boot-attempt count.
+    Status,
+    /// Clear the durable boot-attempt counter and re-enable autostart.
+    ///
+    /// For after a fix has landed — a new release, or `paperctl upgrade
+    /// rollback` — on a device that safe-moded itself and needs to be told
+    /// it may try again. Not automatic: §10's "a spent failure budget
+    /// refuses requests" applies to a boot budget the same way it applies to
+    /// the supervisor's session budget, and only a human clears either.
+    Reset,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl crate::transport::dispatch::RemoteCommand for AutostartArgs {
+    fn remote_argv(&self) -> Vec<String> {
+        let mut argv = vec!["autostart".to_owned()];
+        match &self.command {
+            AutostartCommand::Enable => argv.push("enable".to_owned()),
+            AutostartCommand::Disable { reason } => {
+                argv.push("disable".to_owned());
+                argv.push("--reason".to_owned());
+                argv.push(reason.clone());
+            }
+            AutostartCommand::Status => argv.push("status".to_owned()),
+            AutostartCommand::Reset => argv.push("reset".to_owned()),
+        }
+        argv
+    }
+
+    fn shape(&self) -> crate::transport::dispatch::RemoteShape {
+        crate::transport::dispatch::RemoteShape::Blocking
+    }
+}
+
 /// The device-facing subcommands.
 #[derive(Debug, Subcommand)]
 pub(crate) enum DeviceCommand {
@@ -109,6 +171,8 @@ pub(crate) enum DeviceCommand {
     Units(UnitsArgs),
     /// Return the display to stock. The independent recovery path (§10).
     Stock(StockArgs),
+    /// Enable, disable or inspect boot-time autostart (§10, WWW-53).
+    Autostart(AutostartArgs),
 }
 
 pub(crate) fn run(command: DeviceCommand) -> Result<(), CommandError> {
@@ -116,6 +180,7 @@ pub(crate) fn run(command: DeviceCommand) -> Result<(), CommandError> {
         DeviceCommand::Isolation(args) => isolation(&args),
         DeviceCommand::Units(args) => units(&args),
         DeviceCommand::Stock(args) => stock(&args),
+        DeviceCommand::Autostart(args) => autostart(&args),
     }
 }
 
@@ -240,6 +305,47 @@ fn stock(args: &StockArgs) -> Result<(), CommandError> {
             })
         }
     }
+}
+
+/// On a Mac, this is a forward to the tablet's own `paperctl autostart` over
+/// SSH — the escape hatch must never depend on anything Paperclip itself
+/// renders, so it reaches the device the same way `stock` does.
+#[cfg(not(target_os = "linux"))]
+fn autostart(args: &AutostartArgs) -> Result<(), CommandError> {
+    crate::transport::dispatch::dispatch(args.device.as_deref(), args)
+}
+
+#[cfg(target_os = "linux")]
+fn autostart(args: &AutostartArgs) -> Result<(), CommandError> {
+    let root = paper_host::units::SessionPaths::device().root;
+    match &args.command {
+        AutostartCommand::Enable => {
+            paper_boot::autostart::enable(&root)?;
+            println!("autostart enabled");
+        }
+        AutostartCommand::Disable { reason } => {
+            paper_boot::autostart::disable(&root, reason)?;
+            println!("autostart disabled: {reason}");
+        }
+        AutostartCommand::Status => {
+            match paper_boot::autostart::reason(&root)? {
+                Some(reason) => println!("autostart: disabled ({reason})"),
+                None => println!("autostart: enabled"),
+            }
+            let counter = paper_boot::BootCounter::read(&root)?;
+            println!(
+                "boot attempts since the last time Home was reached: {} of {}",
+                counter.attempts,
+                paper_boot::MAX_BOOT_ATTEMPTS
+            );
+        }
+        AutostartCommand::Reset => {
+            paper_boot::counter::mark_good(&root)?;
+            paper_boot::autostart::enable(&root)?;
+            println!("boot counter cleared and autostart enabled");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(all(test, not(target_os = "linux")))]

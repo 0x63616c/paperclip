@@ -1,7 +1,10 @@
 # ADR-0008 — Runtime-only units, and nothing on the root filesystem
 
 **Status:** accepted (Stage 2, WWW-11). Recorded here by WWW-3, which is the
-first stage to need the rule.
+first stage to need the rule. **Amended by WWW-53** (Stage 3): autostart,
+deferred below as out of scope for v1, is bought back deliberately — see the
+amendment at the end of this file for what changed and, as importantly, what
+did not.
 
 ## Context
 
@@ -150,3 +153,105 @@ start-limit burst.** Every run that touches `xochitl.service` inherits this.
 - If §10's independence requirement were ever read to mean "recovers across a
   reboot without the Mac", this answer would not meet it. WWW-11's reading is
   that it is not, and §10's own reboot row is the evidence.
+
+## Amendment (WWW-53): autostart, bought back with a durable boot counter
+
+The "Deferred" precondition above — a writable persistent unit path — has not
+changed; remounting `/` read-write and writing to it is exactly as possible,
+and exactly as erased by an OS update, as WWW-11 found. What changed is the
+other half of the trade this ADR made: "certainly erased by every OS update"
+was the cost that made the deferral easy, and WWW-44 established that OS
+auto-update is verified disabled and Calum has locked the image version. The
+recurring cost is gone; only the one-time write remains.
+
+What this amendment does **not** reopen is the reboot guarantee itself — "no
+Paperclip defect can survive a power cycle" — because that guarantee is what
+makes every other recovery path in this project cheap to reason about. Losing
+it outright to buy autostart would be the bad trade this ADR originally
+declined. So autostart is bought back *bounded*, not unconditionally:
+
+- **A durable, power-loss-surviving boot-attempt counter** —
+  `paper_boot::counter`, under `/home/root/paperclip/boot/attempts` — durable
+  for the same reason the platform's `current`/`previous` selection is:
+  `/etc`, `/var/lib` and `/var/cache` are tmpfs-overlaid, `/home/root` is not.
+  A boot that never reaches `SessionState::Home` — "mark good" is that state,
+  not merely the supervisor's own readiness ladder reaching `ready`, because
+  the ladder climbs and sends `READY=1` *before* a foreground switch to Home
+  is even requested (`platform/host/src/linux/runtime.rs`'s `Supervisor::run`)
+  — leaves the counter incremented. Three such boots (greenboot, RAUC and
+  barebox precedent) and the launcher stops trying: the device settles at
+  stock, exactly the state a reboot has always guaranteed, just reached after
+  up to three boots instead of one. A wedged release cannot persist forever;
+  it can persist for a bounded, recorded number of boots, which is the
+  guarantee this ADR actually needs to keep making the rest of the project's
+  reasoning hold.
+- **One persistent unit, `paperclip-launcher.service`, and nothing else.**
+  Everything downstream of the launcher's decision — the session units, the
+  supervisor, the recovery path — is still written into `/run/systemd/system`
+  at boot and still evaporates on a crash mid-boot or an unrelated reboot
+  reason. Only the one unit whose job *is* deciding whether this boot gets a
+  chance at all has to survive the boot it is deciding about; see
+  `paper_boot::units` for the generated text and why each line is there.
+- **The thing that picks the slot must not live in a slot.** The persistent
+  unit execs `paperclip-launcher` (`paper_boot`'s own binary, `bin/`, not
+  `current/bin/`), never a binary under `releases/`, for the reason
+  `SessionPaths::paperctl` is already placed the same way: an ordinary
+  platform update must never be able to replace the thing deciding whether it
+  gets to run.
+
+### Reusing the A/B switch, not inventing one
+
+The ticket that requested this (WWW-53) asked for "A/B slots and an atomic
+switch". That already exists: `paper_updater::PlatformLayout`'s `current` and
+`previous` symlinks, swapped by `symlink(new, tmp); rename(tmp, current)`
+(`platform/updater/src/layout.rs`, `PlatformLayout::select`), predating this
+amendment by several stages (ADR-0019). `paper_boot` selects nothing and
+swaps nothing — it only decides *whether* to start whatever `current` already
+names, and durably records how that went. A second A/B mechanism next to a
+working one would be exactly the kind of redundancy WWW-3/WWW-4 already paid
+for once (ADR-0012, "On not re-implementing stock control") and decided not
+to repeat.
+
+### The `/data` marker, resolved
+
+This ADR's original "Deferred" text proposed a `/data` marker as the kill
+switch, following the vendor's own
+`ConditionPathExists=/data/internal/rm_enable_ssh_wifi_marker` precedent.
+`docs/recovery.md`'s hard rule is "never write to `/data` — device identity
+state." The two were never reconciled in writing until now:
+
+**The marker does not live in `/data`.** It lives at
+`/home/root/paperclip/autostart-disabled` — a plain file,
+`paper_boot::autostart::disable`/`enable`, checked twice: by
+`ConditionPathExists=!` on `paperclip-launcher.service` itself, and again
+inside the binary, so `paperctl autostart disable` over SSH takes effect
+without a unit reload. The vendor's marker motivated the *pattern* — a
+`ConditionPathExists=` kill switch checked before a persistent unit does
+anything — not the location. `/data` is device identity state that predates
+Paperclip and will exist after it is removed; the autostart marker is
+Paperclip's own state, already durable at `/home/root/paperclip`, and has no
+reason to be anywhere `docs/recovery.md`'s hard rule forbids. `docs/recovery.md`
+is amended alongside this file to say so explicitly instead of leaving the
+two documents in tension.
+
+### What is proven here, and what still needs a device session
+
+Mac-tested: the decision core (`paper_boot::policy`, `::counter`,
+`::autostart`) — every combination of disabled/exhausted/fresh, and the
+counter surviving a simulated process restart against the same durable
+primitive (`paper_packages::store::atomic_write`) the platform's own
+`current`/`previous` selection uses. Cross-compiled and clippy-clean for
+`aarch64-unknown-linux-gnu`: the full orchestration in
+`paperclip-launcher` — writing the session units, starting the supervisor via
+`paper_updater::linux::SystemdSession` (reused, not reimplemented), polling
+`state=home`.
+
+**Not proven here:** the VM harness does not yet exercise
+`paperclip-launcher` end to end — three failed renders actually rolling back
+to stock, the counter actually surviving a `qemu-system` power cut, safe mode
+actually reachable without the panel. See WWW-53's result comment for exactly
+what a follow-up run needs to add to `tests/failure-harness`/`tools/vm-harness`
+before this amendment's claims are backed by more than a compiler. And per
+this ticket's own scope boundary: writing `paperclip-launcher.service` to a
+real device's root filesystem — the one action this amendment newly permits —
+is a human action at the tablet, not something any agent run performs.

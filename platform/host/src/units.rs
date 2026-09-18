@@ -127,6 +127,20 @@ impl SessionPaths {
         self.root.join("bin/paperctl")
     }
 
+    /// `paperclip-launcher`, the boot-time entry point (WWW-53).
+    ///
+    /// Beside `paperctl`, outside `releases/`, for exactly the reason
+    /// [`Self::paperctl`] is: the thing that decides whether a session gets
+    /// started this boot must not be one of the files an update to that
+    /// session can replace. Unlike `paperctl`, this binary is never run by
+    /// hand — `paperclip-launcher.service` is the only thing that execs it,
+    /// and that unit is the one file in this project installed to the
+    /// device's root filesystem rather than generated at runtime; see
+    /// `paper_boot::units` and ADR-0008's WWW-53 amendment.
+    pub fn launcher(&self) -> PathBuf {
+        self.root.join("bin/paperclip-launcher")
+    }
+
     /// The supervisor binary, resolved through the selected release.
     ///
     /// `current` is a symlink into `releases/<version>/`, so activating a
