@@ -19,6 +19,17 @@
 [target.aarch64-unknown-linux-gnu]
 linker = "tools/cross/aarch64-linux-gnu-cc"
 
+# `ring` (WWW-68, the HTTPS catalog transport's TLS) is the first device-build
+# dependency with C sources of its own, so `cc-rs` needs a *compiler* for this
+# target, not just the linker above. Without this it falls back to guessing
+# `aarch64-linux-gnu-gcc`, which is not installed here (or on CI) — the whole
+# point of the `zig cc` wrapper is not needing a real cross toolchain.
+[env]
+# `relative = true`: a build script's working directory is its own crate's
+# manifest directory, not the workspace root, unlike `[target.*].linker`
+# above (which cargo resolves relative to this file itself either way).
+CC_aarch64_unknown_linux_gnu = { value = "tools/cross/aarch64-linux-gnu-cc", relative = true }
+
 # The recipes with real logic behind `just device-bundle` and `just new-adr`
 # (WWW-45): `cargo xtask <recipe>` rather than `cargo run -p xtask --
 # <recipe>`, the standard shape for a workspace's own dev-tool crate.

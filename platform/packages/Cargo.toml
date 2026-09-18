@@ -20,17 +20,37 @@ tar = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
+ureq = { workspace = true, optional = true }
 
 [features]
 # Everything a *publisher* needs: secret keys, key generation, archive building,
 # catalog rendering. On by default because the Mac is where this crate is
 # built; the device host turns it off (`default-features = false`) so the
 # tablet cannot link a code path that holds a signing key (§12).
-default = ["publishing"]
+default = ["publishing", "http-transport"]
 publishing = ["dep:getrandom"]
+# `HttpsTransport` (WWW-68). Not wired to any consumer yet — no crate that
+# depends on `paper-packages` requests this feature, so it costs every
+# existing binary nothing (`default-features = false` at the workspace
+# dependency, same as `publishing`). It is part of *this crate's own*
+# defaults so `cargo test --workspace` exercises it, the same trick
+# `publishing` already relies on.
+http-transport = ["dep:ureq"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# A local static-file server for `HttpsTransport` tests (WWW-68) — no test
+# touches the network. Plain, not `ssl-rustls`: that feature pulls rustls
+# 0.20, a second major version alongside the 0.23 `ureq`'s `rustls` feature
+# already brings in. The one test that needs a TLS *server* drives `rustls`
+# directly instead (below), reusing that same 0.23.
+tiny_http = "0.12"
+# Only for the certificate-verification test: a bare-bones TLS server
+# presenting a self-signed certificate, to prove `HttpsTransport` refuses it.
+# Same major version `ureq`'s `rustls` feature already resolves to, so this
+# adds no second copy.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rustls-pki-types = "1"
 
 [lints]
 workspace = true

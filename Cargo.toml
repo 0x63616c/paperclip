@@ -88,6 +88,12 @@ tiny-skia = "0.12"
 toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+# `default-features = false` here: the defaults pull in cookies, gzip,
+# multipart and a SOCKS client, none of which a catalog fetch needs. `rustls`
+# brings its own crypto provider (`ring`) and a baked-in Mozilla root store
+# (`rustls-webpki-roots`) rather than trusting whatever CA bundle the device
+# image happens to ship, or lack (platform/packages/src/catalog.rs).
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 winit = "0.30.13"
 
 [workspace.lints.rust]

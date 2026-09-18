@@ -135,6 +135,123 @@ impl Transport for FileTransport {
     }
 }
 
+/// A catalog served over HTTP(S) — GitHub Releases, or any other static host
+/// reachable that way (WWW-68, ADR-0026).
+///
+/// The same warning [`Transport`]'s module doc makes applies doubled here:
+/// this type has no way to turn certificate verification off, on purpose. It
+/// verifies *that a channel is intact*, nothing about who put the bytes at
+/// the other end of it — a signature checked against [`TrustedKeys`] is still
+/// the only thing that says so, exactly as it is for [`FileTransport`].
+///
+/// Built on [`ureq`] with its `rustls` backend: synchronous, matching the rest
+/// of this codebase (no crate here pulls in an async runtime), and rustls
+/// carries its own certificate verifier and its own compiled-in Mozilla root
+/// store (the `rustls-webpki-roots` feature) rather than trusting whatever CA
+/// bundle the device image happens to ship — or lack. That store, plus
+/// `ring` as the crypto provider, is the actual cost of this type: on top of
+/// the ed25519/sha2 this crate already links for signature verification, a
+/// TLS stack is a second cryptographic implementation in the same binary.
+/// There is no way to have HTTPS without one; the trade this type makes is
+/// only *which* one, and rustls/ring is the pair `ureq` documents as its
+/// best-supported default. Cargo.lock has the exact crate list; nothing here
+/// is optional or swappable per build.
+///
+/// Never linked by accident: `http-transport` is a `paper-packages` feature
+/// that ships in nobody's default features but this crate's own
+/// (`platform/packages/Cargo.toml`), the same trick `publishing` already
+/// relies on to reach `cargo test --workspace` without reaching every
+/// consumer. Nothing in this repository constructs one outside this crate's
+/// own tests today — see the ticket for why that is deliberate.
+#[cfg(feature = "http-transport")]
+#[derive(Debug, Clone)]
+pub struct HttpsTransport {
+    base: String,
+    agent: ureq::Agent,
+}
+
+#[cfg(feature = "http-transport")]
+impl HttpsTransport {
+    /// A transport rooted at `base` — an `https://host/path` URL (or, in
+    /// tests, a plain `http://` one) with no trailing slash.
+    ///
+    /// A finite timeout on the whole exchange, not just the connect: an
+    /// unreachable catalog must become [`TransportError::Unavailable`] in
+    /// bounded time, because that is what lets [`Catalog::view`] fall back to
+    /// the cache and say the view is stale, rather than a caller blocking
+    /// forever on a network that dropped a packet somewhere.
+    pub fn new(base: impl Into<String>) -> Self {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build();
+        Self {
+            base: base.into(),
+            agent: config.into(),
+        }
+    }
+
+    /// The URL this transport is rooted at.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
+    fn url(&self, path: &str) -> Result<String, TransportError> {
+        // Parsed for the same reason `FileTransport::resolve` parses it: a
+        // path is not trusted just because it is about to leave this
+        // process rather than stay inside it. `..` in a URL path is a
+        // request smuggled past whatever the host meant to serve, same as
+        // `..` on a filesystem.
+        let relative: RelativePath = path.parse().map_err(|_| TransportError::UnsafePath {
+            path: path.to_owned(),
+        })?;
+        Ok(format!(
+            "{}/{}",
+            self.base.trim_end_matches('/'),
+            relative.as_str()
+        ))
+    }
+
+    fn unavailable(path: &str, source: ureq::Error) -> TransportError {
+        TransportError::Unavailable {
+            path: path.to_owned(),
+            source: std::io::Error::other(source),
+        }
+    }
+}
+
+#[cfg(feature = "http-transport")]
+impl Transport for HttpsTransport {
+    fn fetch(&self, path: &str, limit: u64) -> Result<Vec<u8>, TransportError> {
+        let mut reader = self.open(path, limit)?;
+        let mut bytes = Vec::new();
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(|source| TransportError::Unavailable {
+                path: path.to_owned(),
+                source,
+            })?;
+        Ok(bytes)
+    }
+
+    fn open(&self, path: &str, limit: u64) -> Result<Box<dyn Read + '_>, TransportError> {
+        let url = self.url(path)?;
+        let response = self
+            .agent
+            .get(&url)
+            .call()
+            .map_err(|source| Self::unavailable(path, source))?;
+        // Same `limit + 1` convention as `FileTransport::open`: stop one byte
+        // past the limit rather than at it, so a file of exactly `limit`
+        // bytes is not indistinguishable from one truncated at the boundary.
+        Ok(Box::new(
+            response
+                .into_body()
+                .into_reader()
+                .take(limit.saturating_add(1)),
+        ))
+    }
+}
+
 /// What a catalog is offering, and how fresh the answer is.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -731,5 +848,293 @@ mod tests {
     fn a_catalog_name_cannot_choose_where_its_cache_is_written() {
         assert_eq!(cache_name("../../etc/shadow"), "______etc_shadow.toml");
         assert_eq!(cache_name("calum-home"), "calum-home.toml");
+    }
+}
+
+/// [`HttpsTransport`] against a real local server, not GitHub — the ticket
+/// (WWW-68) is explicit that nothing here touches the network. What changes
+/// between this module and `tests` above is only how the bytes travel; every
+/// scenario reruns the same [`Catalog`] behaviour, which is the point —
+/// verification, rollback and offline fallback do not know or care which
+/// [`Transport`] fetched the bytes they are checking.
+#[cfg(all(test, feature = "publishing", feature = "http-transport"))]
+mod https_tests {
+    use std::fs;
+    use std::net::TcpListener;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::thread;
+
+    use rustls::{ServerConfig, ServerConnection};
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+    use tiny_http::{Response, Server};
+
+    use super::{Catalog, CatalogError, HttpsTransport, Transport};
+    use crate::digest::Digest;
+    use crate::manifest::Manifest;
+    use crate::release::{
+        CatalogIndex, INDEX_FILE_NAME, IndexEntry, MAX_INDEX_BYTES, Release, SIGNATURE_SUFFIX,
+    };
+    use crate::signing::{Domain, SecretKey, TrustedKeys};
+    use crate::store::Layout;
+
+    fn manifest(version: &str) -> Manifest {
+        Manifest::parse(&format!(
+            r#"
+            [app]
+            id = "dev.calum.chess"
+            name = "Chess"
+            version = "{version}"
+            protocol = "1.0"
+            entrypoint = "bin/chess"
+            "#
+        ))
+        .unwrap()
+    }
+
+    /// Writes a catalog holding one release of Chess at `version` — the same
+    /// fixture shape `tests::publish` builds, so an `HttpsTransport` and a
+    /// `FileTransport` are proven against identical bytes.
+    fn publish(root: &Path, secret: &SecretKey, serial: u64, version: &str) {
+        let descriptor_dir = format!("apps/dev.calum.chess/{version}");
+        fs::create_dir_all(root.join(&descriptor_dir)).unwrap();
+        fs::write(
+            root.join(&descriptor_dir).join("chess.paperpkg"),
+            b"archive",
+        )
+        .unwrap();
+
+        let release = Release::new(
+            &manifest(version),
+            "chess.paperpkg".parse().unwrap(),
+            7,
+            Digest::of_bytes(b"archive"),
+            0,
+            "",
+        )
+        .unwrap();
+        let document = release.to_document();
+        let path = root.join(&descriptor_dir).join("release.toml");
+        fs::write(&path, &document).unwrap();
+        fs::write(
+            path.with_extension("toml.sig"),
+            secret
+                .sign(Domain::RELEASE, document.as_bytes())
+                .to_armoured(),
+        )
+        .unwrap();
+
+        let index = CatalogIndex::new(
+            "calum-home",
+            serial,
+            0,
+            vec![IndexEntry::new(
+                "dev.calum.chess".parse().unwrap(),
+                "Chess".parse().unwrap(),
+                version.parse().unwrap(),
+                format!("{descriptor_dir}/release.toml").parse().unwrap(),
+            )],
+        )
+        .unwrap();
+        let document = index.to_document();
+        fs::write(root.join("index.toml"), &document).unwrap();
+        fs::write(
+            root.join(format!("index.toml{SIGNATURE_SUFFIX}")),
+            secret
+                .sign(Domain::CATALOG, document.as_bytes())
+                .to_armoured(),
+        )
+        .unwrap();
+    }
+
+    fn trusting(secret: &SecretKey) -> TrustedKeys {
+        let mut keys = TrustedKeys::none();
+        keys.trust(secret.public_key());
+        keys
+    }
+
+    /// Serves `root` as static files over plain HTTP on an ephemeral port,
+    /// until `Server::unblock` is called on the returned handle. `paperctl`
+    /// serves a real catalog the same way (`python3 -m http.server`,
+    /// `catalog.rs`'s own module doc) — this is that, in-process.
+    fn serve(root: PathBuf) -> (Arc<Server>, thread::JoinHandle<()>, String) {
+        let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
+        let base = format!("http://{}", server.server_addr().to_ip().unwrap());
+        let handle = {
+            let server = Arc::clone(&server);
+            thread::spawn(move || {
+                for request in server.incoming_requests() {
+                    let path = root.join(request.url().trim_start_matches('/'));
+                    let response = match fs::read(&path) {
+                        Ok(bytes) => Response::from_data(bytes).with_status_code(200),
+                        Err(_) => Response::from_data(Vec::new()).with_status_code(404),
+                    };
+                    let _ = request.respond(response);
+                }
+            })
+        };
+        (server, handle, base)
+    }
+
+    fn stop(server: &Server, handle: thread::JoinHandle<()>) {
+        server.unblock();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn reads_a_published_catalog_over_http() {
+        let secret = SecretKey::generate().unwrap();
+        let served = tempfile::tempdir().unwrap();
+        publish(served.path(), &secret, 1, "0.1.0");
+        let (server, handle, base) = serve(served.path().to_path_buf());
+
+        let catalog = Catalog::new(HttpsTransport::new(base), trusting(&secret));
+        let view = catalog.view().unwrap();
+        assert!(!view.stale);
+        assert_eq!(view.index.serial(), 1);
+
+        let entry = &view.index.entries()[0];
+        let release = catalog.release(entry).unwrap();
+        assert_eq!(release.release().version().to_string(), "0.1.0");
+
+        let mut archive = catalog.open_archive(entry, &release).unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut archive, &mut bytes).unwrap();
+        assert_eq!(bytes, b"archive");
+
+        stop(&server, handle);
+    }
+
+    #[test]
+    fn a_tampered_index_is_refused_over_http() {
+        let secret = SecretKey::generate().unwrap();
+        let served = tempfile::tempdir().unwrap();
+        publish(served.path(), &secret, 1, "0.1.0");
+
+        let index = served.path().join("index.toml");
+        let text = fs::read_to_string(&index).unwrap();
+        fs::write(&index, text.replace("0.1.0", "9.9.9")).unwrap();
+
+        let (server, handle, base) = serve(served.path().to_path_buf());
+        let catalog = Catalog::new(HttpsTransport::new(base), trusting(&secret));
+        assert!(matches!(catalog.view(), Err(CatalogError::Signature(_))));
+
+        stop(&server, handle);
+    }
+
+    #[test]
+    fn an_older_serial_cannot_replace_a_newer_one_over_http() {
+        let secret = SecretKey::generate().unwrap();
+        let served = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let layout = Layout::new(state.path());
+
+        publish(served.path(), &secret, 5, "0.2.0");
+        let (server, handle, base) = serve(served.path().to_path_buf());
+        let catalog = Catalog::new(HttpsTransport::new(base), trusting(&secret)).with_cache(layout);
+        assert_eq!(catalog.view().unwrap().index.serial(), 5);
+
+        // A correctly signed older index — the replay an attacker on the LAN
+        // (or a stale mirror, over HTTPS) gets for free by keeping a copy of
+        // yesterday's catalog. Rollback protection is `Catalog::accept`,
+        // which has no idea which `Transport` handed it these bytes.
+        publish(served.path(), &secret, 4, "0.1.0");
+        assert!(matches!(
+            catalog.view(),
+            Err(CatalogError::Rollback {
+                offered: 4,
+                accepted: 5,
+                ..
+            })
+        ));
+
+        stop(&server, handle);
+    }
+
+    #[test]
+    fn an_unreachable_host_falls_back_to_the_cache_and_says_so() {
+        let secret = SecretKey::generate().unwrap();
+        let served = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let layout = Layout::new(state.path());
+        publish(served.path(), &secret, 2, "0.1.0");
+
+        let (server, handle, base) = serve(served.path().to_path_buf());
+        let reachable =
+            Catalog::new(HttpsTransport::new(base), trusting(&secret)).with_cache(layout.clone());
+        assert!(!reachable.view().unwrap().stale);
+        stop(&server, handle);
+
+        // Nothing is listening on this port; a fresh transport pointed at it
+        // stands in for the catalog going offline mid-session. The cache is
+        // shared with `reachable` above, which is what makes this "the same
+        // catalog, unreachable" rather than "a different, empty one".
+        let unreachable = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_port = unreachable.local_addr().unwrap().port();
+        drop(unreachable);
+        let offline = Catalog::new(
+            HttpsTransport::new(format!("http://127.0.0.1:{dead_port}")),
+            trusting(&secret),
+        )
+        .with_cache(layout);
+
+        let view = offline.view().unwrap();
+        assert!(view.stale);
+        assert_eq!(view.index.serial(), 2);
+        assert_eq!(view.index.entries().len(), 1);
+    }
+
+    // A self-signed certificate for `127.0.0.1`, generated once with
+    // `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1
+    // -nodes -days 3650 -subj "/CN=127.0.0.1" -addext
+    // "subjectAltName=IP:127.0.0.1"`. It exists only so the test below can
+    // present a certificate no trust store anywhere accepts; the private key
+    // guards nothing and is committed on purpose.
+    const SELF_SIGNED_CERT: &str = include_str!("../testdata/self-signed-cert.pem");
+    const SELF_SIGNED_KEY: &str = include_str!("../testdata/self-signed-key.pem");
+
+    /// Accepts exactly one TLS connection with a self-signed certificate,
+    /// then stops. Whether the handshake *completes* is not the point — a
+    /// client that verifies certificates rejects this one before it would
+    /// ever ask for catalog bytes, and `complete_io` returning an error
+    /// because the client hung up mid-handshake is exactly that rejection,
+    /// not a test failure.
+    fn serve_one_self_signed_connection() -> (thread::JoinHandle<()>, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cert = CertificateDer::from_pem_slice(SELF_SIGNED_CERT.as_bytes()).unwrap();
+        let key = PrivateKeyDer::from_pem_slice(SELF_SIGNED_KEY.as_bytes()).unwrap();
+        let config = Arc::new(
+            ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .unwrap(),
+        );
+
+        let handle = thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            if let Ok(mut conn) = ServerConnection::new(config) {
+                let _ = conn.complete_io(&mut stream);
+            }
+        });
+        (handle, format!("https://{addr}"))
+    }
+
+    #[test]
+    fn certificate_verification_is_on() {
+        let (handle, base) = serve_one_self_signed_connection();
+
+        let transport = HttpsTransport::new(base);
+        let result = transport.fetch(INDEX_FILE_NAME, MAX_INDEX_BYTES);
+
+        assert!(
+            result.is_err(),
+            "a self-signed certificate must not be accepted"
+        );
+
+        handle.join().unwrap();
     }
 }

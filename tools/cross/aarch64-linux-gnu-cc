@@ -15,4 +15,23 @@
 # Not a substitute for the SDK. `platform/device`'s `vendor-engine` feature
 # needs Qt 6.10.3 headers and the vendor library; see
 # platform/device/native/README.md.
+#
+# Only ever a *linker* until WWW-68 (`ring`, for the HTTPS catalog
+# transport's TLS): the first real C dependency in the device build, so this
+# is the first time `cc-rs` invokes this script to *compile* rather than
+# link. `cc-rs` appends its own `--target=aarch64-unknown-linux-gnu` (the
+# rustc triple, four components) when it detects a clang-family compiler,
+# and zig's target parser rejects that outright — it wants the three-component
+# form above, not a triple with an "unknown" vendor. Left in place, the two
+# `-target` flags both reach zig and the last one wins, which is the broken
+# one. Strip any incoming `--target=` before ours, so ours stays the only one
+# zig sees.
+args=
+for arg do
+    case $arg in
+        --target=*) continue ;;
+    esac
+    args="$args${args:+ }'$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
+done
+eval "set -- $args"
 exec zig cc -target aarch64-linux-gnu.2.36 "$@"
