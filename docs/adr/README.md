@@ -43,3 +43,4 @@ device survey and several of these are bets.
 | [0034](0034-gesture-arbitration-the-escape-pinch-edge-swipes-and-app-vs-system.md) | Gesture arbitration: the escape pinch, edge swipes, and app-vs-system |
 | [0035](0035-system-chrome-a-drawing-order-guarantee-not-a-permission-check.md) | System chrome: a drawing-order guarantee, not a permission check |
 | [0036](0036-why-takeover-not-in-process.md) | Why takeover, not in-process |
+| [0037](0037-compositor-accept-loop-and-crash-hang-isolation.md) | The compositor accept loop, its client wire, and crash/hang isolation |

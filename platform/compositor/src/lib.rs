@@ -1,17 +1,26 @@
-//! The compositor core: shared-memory client pools, and the pending/current
-//! buffer lifecycle that keeps a commit atomic (WWW-52, WWW-77).
+//! The compositor: shared-memory client pools, the pending/current buffer
+//! lifecycle that keeps a commit atomic, the socket accept loop, and
+//! crash/hang isolation (WWW-52, WWW-77, WWW-78).
 //!
-//! Two pieces, deliberately kept apart:
+//! Four pieces:
 //!
-//! - [`pool`] is the only place this crate touches real memory: it owns an
-//!   `mmap`ed `MAP_SHARED` region and hands out bounds-checked slices into
-//!   its two [`BufferSlot`](paper_protocol::BufferSlot)s.
+//! - [`pool`] is the only place that touches real memory directly: it owns
+//!   an `mmap`ed `MAP_SHARED` region and hands out bounds-checked slices
+//!   into its two [`BufferSlot`](paper_protocol::BufferSlot)s.
 //! - [`surface`] is pure state: attach, damage and commit rules, validated
 //!   against a [`Size`](paper_protocol::Size) and a slot's release state,
 //!   with no `unsafe` and no I/O anywhere in it.
+//! - [`wire`] and [`fdpass`] are the client protocol: a small message set
+//!   distinct from [`paper_protocol::HostMessage`]/[`paper_protocol::AppMessage`]
+//!   (ADR-0033 left that decision open; this crate makes it), and the
+//!   `SCM_RIGHTS` plumbing a client's pool fd arrives through.
+//! - [`server`] is the accept loop: [`server::Compositor`] owns the panel
+//!   exclusively, is non-blocking on every fd it ever touches, and tears
+//!   down exactly the client that dies or hangs — see its own module doc
+//!   for how.
 //!
-//! A malformed damage rect is therefore rejected by [`surface`] alone,
-//! before [`pool`] is ever asked to hand out a slice for it — see
+//! A malformed damage rect is rejected by [`surface`] alone, before [`pool`]
+//! is ever asked to hand out a slice for it — see
 //! `surface::tests::an_out_of_bounds_rect_never_reaches_the_pool` for the
 //! test that pins this ordering down.
 //!
@@ -27,21 +36,37 @@
 //!
 //! ## What this crate does not do yet
 //!
-//! There is no socket, no client connection, and no running process here.
-//! WWW-52 split those out deliberately: the non-blocking accept loop and
-//! crash/hang teardown are WWW-78, and moving a real client (Home, the test
-//! card, ...) onto this wire is WWW-81. Both need the state this crate
-//! defines to exist first, which is what makes this the foundation rather
-//! than a partial version of either. [`gesture`] is wired into that same
-//! event loop by WWW-78 too — this crate only classifies events, it does
-//! not read them off a socket.
+//! [`server::Compositor`] is a library, not a running system service: it has
+//! no `[[bin]]`, no well-known socket path, and no wiring to the vendor
+//! panel or to a real client. Moving a real client (Home, the test card,
+//! ...) onto this wire, and turning this into something the supervisor
+//! starts at boot, are later work (WWW-81 and beyond) — this ticket proves
+//! the accept loop and crash/hang isolation against `MemoryPanel` and real
+//! Unix-socket peers, not against a boot-time service.
+//!
+//! [`gesture`]'s own doc says it "is wired into that same event loop by
+//! WWW-78 too" — it is not, yet: [`server::Compositor`]'s wire
+//! ([`wire::ClientRequest`]) carries `Attach`/`Commit` only, nothing about
+//! pointer input, so [`gesture::GestureDetector`] has no event loop feeding
+//! it here. That wiring, and [`chrome`]'s composition into a presented
+//! frame, are left for whichever ticket moves a real client (with real
+//! pointer events) onto this wire.
 
 pub mod chrome;
+pub mod fdpass;
 pub mod gesture;
 pub mod pool;
+pub mod present;
+pub mod server;
+pub mod stopped;
 pub mod surface;
+pub mod wire;
 
 pub use chrome::{ChromeState, content_rect, draw as draw_chrome, reserved_rect};
 pub use gesture::{Edge, GestureDetector, SystemGesture, Verdict};
 pub use pool::{Pool, PoolError};
+pub use present::present_pool_slot;
+pub use server::{BindError, ClientId, Compositor, CompositorEvent, HELLO_DEADLINE};
+pub use stopped::render_stopped_frame;
 pub use surface::{Committed, Surface, SurfaceError};
+pub use wire::{ClientHello, ClientRequest, ClientRole, HostEvent};

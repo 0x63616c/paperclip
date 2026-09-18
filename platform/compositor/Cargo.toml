@@ -1,16 +1,17 @@
-# The compositor core (§WWW-52, WWW-77): shared-memory client pools, the
-# pending/current buffer lifecycle, and the validation that keeps a
-# malformed message from ever reaching a memory access. Also the system
-# chrome layer (WWW-79) the compositor draws outside any client's surface.
+# The compositor core (§WWW-52, WWW-77, WWW-78, WWW-79, WWW-80): shared-memory
+# client pools, the pending/current buffer lifecycle, the socket accept loop
+# and crash/hang isolation, the system chrome layer drawn outside any
+# client's surface, and gesture arbitration.
 #
-# Deliberately not a `[[bin]]` yet. The socket accept loop that turns this
-# into a running process — non-blocking client I/O, EOF teardown on a crash —
-# is WWW-78's job, staged behind this one so a wedged-client mechanism is not
-# designed before the state it has to protect exists. This crate is the state
-# `platform/compositor`'s eventual event loop will drive.
+# Deliberately not a `[[bin]]` yet. This crate's `Compositor` is a library any
+# caller can drive against a real `UnixListener` and any `paper_device::Panel`
+# — wiring a socket path, a real client, and the vendor panel into a running
+# system service the supervisor starts is later work (WWW-81 and beyond); this
+# ticket proves the accept loop and crash/hang isolation against `MemoryPanel`
+# and real Unix-socket peers, not against a boot-time service.
 [package]
 name = "paper-compositor"
-description = "The Paperclip compositor core: shared-memory pools, buffer lifecycle, atomic surface commit and system chrome."
+description = "The Paperclip compositor: shared-memory pools, buffer lifecycle, atomic surface commit, the accept loop that isolates a crashed or hung client, system chrome, and gesture arbitration."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,14 +20,18 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+paper-device = { workspace = true }
 paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
