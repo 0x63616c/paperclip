@@ -93,6 +93,29 @@ impl RuntimeConfig {
         }
     }
 
+    /// [`Self::load`], but a `path` that does not exist is `Self::device()`
+    /// rather than an error.
+    ///
+    /// The unit `bring_up()` writes always names this path (WWW-75), and
+    /// nothing writes the file itself for a first install or a post-reboot
+    /// start — `session()` (`tools/paperctl/src/upgrade.rs`) and `stock()`
+    /// (`tools/paperctl/src/device.rs`) already treat a missing config this
+    /// way; this is the same tolerance for the supervisor's own `run`, which
+    /// used to treat it as fatal.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a read failure that is not "the file does not exist" —
+    /// permissions, for instance, still deserve a loud failure rather than a
+    /// silent fallback to defaults.
+    pub fn load_or_device(path: &Path) -> std::io::Result<Self> {
+        match Self::load(path) {
+            Ok(config) => Ok(config),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::device()),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Reads overrides from a `key = value` file.
     ///
     /// Unknown keys are ignored rather than rejected: this file is written by
@@ -103,7 +126,7 @@ impl RuntimeConfig {
     /// # Errors
     ///
     /// Propagates the read failure if the file cannot be opened.
-    pub fn load(path: &PathBuf) -> std::io::Result<Self> {
+    pub fn load(path: &Path) -> std::io::Result<Self> {
         let mut config = Self::device();
         let raw = fs::read_to_string(path)?;
         for line in raw.lines() {
@@ -904,6 +927,45 @@ mod tests {
         let mut config = RuntimeConfig::device();
         config.start_budget = dir.path().join("starts");
         (config, dir)
+    }
+
+    #[test]
+    fn load_or_device_falls_back_when_the_file_does_not_exist() {
+        // WWW-75: `bring_up()`'s unit always names this path, and nothing
+        // writes it for a first install. A missing file must be `device()`,
+        // not the startup failure `load` alone would give.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config");
+
+        let config = RuntimeConfig::load_or_device(&path).expect("a missing file is not fatal");
+
+        assert_eq!(config.stock_unit, RuntimeConfig::device().stock_unit);
+        assert_eq!(config.paths.root, RuntimeConfig::device().paths.root);
+    }
+
+    #[test]
+    fn load_or_device_reads_the_file_when_it_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config");
+        fs::write(&path, "stock_unit = harness-stock.service\n").expect("write");
+
+        let config = RuntimeConfig::load_or_device(&path).expect("an existing file loads");
+
+        assert_eq!(config.stock_unit, "harness-stock.service");
+    }
+
+    #[test]
+    fn load_or_device_still_propagates_a_real_read_failure() {
+        // Not found is tolerated; anything else — permissions, for instance
+        // — is not, and must reach the caller exactly as `load` reports it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A directory where a file is expected: not-found, but not the
+        // not-found `load_or_device` forgives.
+        let path = dir.path().join("config");
+        fs::create_dir(&path).expect("mkdir");
+
+        let error = RuntimeConfig::load_or_device(&path).expect_err("a directory is not a file");
+        assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

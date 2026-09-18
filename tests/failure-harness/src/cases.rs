@@ -16,6 +16,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use paper_host::readiness::{self, Rung};
 use paper_host::units::{HOST_UNIT, RESTORE_UNIT, SESSION_TARGET};
 use paper_packages::AppId;
 use semver::Version;
@@ -1264,7 +1265,8 @@ fn upgrade_reboot(fixture: &Fixture) -> Outcome {
     Ok(evidence)
 }
 
-/// WWW-74: `bring_up()` starting a unit nothing wrote.
+/// WWW-74: `bring_up()` starting a unit nothing wrote. WWW-75: the config the
+/// unit's `ExecStart` names is the same kind of gap.
 ///
 /// Every other §13 case runs against units [`Fixture::build`] already wrote,
 /// which is exactly what let this ship — the real transaction was never
@@ -1276,6 +1278,8 @@ fn upgrade_reboot(fixture: &Fixture) -> Outcome {
 /// then drives the real `paperctl upgrade run` and checks the supervisor
 /// comes up anyway.
 fn upgrade_without_preinstalled_units(fixture: &Fixture) -> Outcome {
+    let mut evidence = vec![config_climbs_with_nothing_written_for_it(fixture)?];
+
     for unit in fixture.unit_names() {
         let _ = fs::remove_file(fixture.paths.runtime_units.join(unit));
     }
@@ -1305,13 +1309,65 @@ fn upgrade_without_preinstalled_units(fixture: &Fixture) -> Outcome {
             selected(fixture)
         ));
     }
-    Ok(vec![
-        format!(
-            "upgrade with no units pre-written: {}",
-            output.trim().replace('\n', " | ")
-        ),
+
+    evidence.push(format!(
+        "upgrade with no units pre-written: {}",
+        output.trim().replace('\n', " | ")
+    ));
+    evidence.push(
         "the supervisor started having been given nothing to start with ahead of time".to_owned(),
-    ])
+    );
+    Ok(evidence)
+}
+
+/// WWW-75: the generated unit's `ExecStart` also names `{state}/config`, and
+/// nothing pre-writes that either — the fixture's own [`Fixture::write_config`]
+/// had already put one there, which is exactly how this shipped. Removes it
+/// and starts the unit directly rather than through `paperctl upgrade`: that
+/// command's own config resolution (`session()` in
+/// `tools/paperctl/src/upgrade.rs`) needs to know the harness's stand-in
+/// stock unit name, and the config file is the only channel that tells it —
+/// removing it would fail this check for a reason that has nothing to do
+/// with the bug. The supervisor's own climb never touches stock before
+/// `ready` (`platform/host/src/linux/runtime.rs`'s `climb`), so starting the
+/// unit on its own isolates the actual gap.
+///
+/// Run against the baseline release, before the rest of the case swaps
+/// `current` to the `0.2.0` candidate: every candidate bundle in this suite
+/// is `paper-fault-app` playing a scripted ladder (see the module doc), which
+/// never parses `--config` at all and would pass whether or not the real
+/// supervisor's config handling did.
+fn config_climbs_with_nothing_written_for_it(fixture: &Fixture) -> Result<String, String> {
+    let config_path = fixture.paths.state.join("config");
+    fs::remove_file(&config_path).map_err(|error| error.to_string())?;
+
+    let start_result = systemctl(&["start", "--no-block", HOST_UNIT]);
+    let climbed = wait(Duration::from_secs(10), || {
+        fixture
+            .status_field(readiness::STATUS_FIELD)
+            .and_then(|value| value.parse::<Rung>().ok())
+            .is_some_and(|rung| rung >= Rung::DeviceAdapter)
+    });
+    let sub_state = property(HOST_UNIT, "SubState");
+    let status = fixture.status();
+
+    // Restore it, and leave the unit stopped, before anything else in this
+    // case (or the next one) runs — this is the one exception to "the
+    // fixture already did this", same as the units below.
+    systemctl(&["stop", HOST_UNIT])?;
+    let _ = wait(Duration::from_secs(10), || !unit_active(HOST_UNIT));
+    systemctl(&["reset-failed", HOST_UNIT])?;
+    let _ = fs::remove_file(fixture.paths.state.join("status"));
+    fixture.write_config()?;
+    start_result?;
+
+    if !climbed {
+        return Err(format!(
+            "the supervisor did not reach device-adapter with no config file written for \
+             it (unit sub-state: {sub_state}, status file: {status:?})"
+        ));
+    }
+    Ok("a supervisor started with no config file climbed past device-adapter anyway".to_owned())
 }
 
 fn upgrade_cannot_replace_the_bootstrap(fixture: &Fixture) -> Outcome {

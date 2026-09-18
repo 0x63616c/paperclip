@@ -269,16 +269,13 @@ fn stock(args: &StockArgs) -> Result<(), CommandError> {
     let config = match &args.state {
         Some(state) => {
             let path = state.join("config");
-            if path.exists() {
-                RuntimeConfig::load(&path).map_err(|source| CommandError::Read {
+            let mut config =
+                RuntimeConfig::load_or_device(&path).map_err(|source| CommandError::Read {
                     path: path.clone(),
                     source,
-                })?
-            } else {
-                let mut config = RuntimeConfig::device();
-                config.paths.state = state.clone();
-                config
-            }
+                })?;
+            config.paths.state = state.clone();
+            config
         }
         None => RuntimeConfig::device(),
     };

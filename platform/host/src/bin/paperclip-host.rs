@@ -48,7 +48,10 @@ fn main() -> ExitCode {
         }
 
         let mut config = match config_path {
-            Some(path) => match RuntimeConfig::load(&path) {
+            // A missing file is `RuntimeConfig::device()` (WWW-75): nothing
+            // writes this path for a first install or a post-reboot start,
+            // and `--config` naming one is not a promise that it exists.
+            Some(path) => match RuntimeConfig::load_or_device(&path) {
                 Ok(config) => config,
                 Err(error) => {
                     tracing::error!("cannot read {}: {error}", path.display());

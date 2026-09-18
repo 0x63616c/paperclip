@@ -678,7 +678,13 @@ impl Fixture {
         Ok(())
     }
 
-    fn write_config(&self) -> Result<(), String> {
+    /// Writes the harness's own `state/config`.
+    ///
+    /// Called once by [`Self::build`], and again by [`crate::cases`]'s
+    /// WWW-75 case, which removes the file to reproduce a first install —
+    /// nothing else in the harness ever recreates it, and every other case
+    /// after that one needs it back exactly as it was.
+    pub(crate) fn write_config(&self) -> Result<(), String> {
         let config = format!(
             "# Written by the failure harness.\n\
              root = {root}\n\

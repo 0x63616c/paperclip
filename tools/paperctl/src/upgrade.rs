@@ -582,16 +582,12 @@ fn session(
     use paper_host::linux::runtime::RuntimeConfig;
 
     let config_path = state.join("config");
-    let config = if config_path.exists() {
-        RuntimeConfig::load(&config_path).map_err(|source| CommandError::Read {
+    let mut config =
+        RuntimeConfig::load_or_device(&config_path).map_err(|source| CommandError::Read {
             path: config_path,
             source,
-        })?
-    } else {
-        let mut config = RuntimeConfig::device();
-        config.paths.state = state.to_path_buf();
-        config
-    };
+        })?;
+    config.paths.state = state.to_path_buf();
     Ok(paper_updater::linux::SystemdSession::new(
         config.recovery(),
         config.paths.clone(),
