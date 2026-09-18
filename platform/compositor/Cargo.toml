@@ -1,6 +1,7 @@
 # The compositor core (§WWW-52, WWW-77): shared-memory client pools, the
 # pending/current buffer lifecycle, and the validation that keeps a
-# malformed message from ever reaching a memory access.
+# malformed message from ever reaching a memory access. Also the system
+# chrome layer (WWW-79) the compositor draws outside any client's surface.
 #
 # Deliberately not a `[[bin]]` yet. The socket accept loop that turns this
 # into a running process — non-blocking client I/O, EOF teardown on a crash —
@@ -9,7 +10,7 @@
 # `platform/compositor`'s eventual event loop will drive.
 [package]
 name = "paper-compositor"
-description = "The Paperclip compositor core: shared-memory pools, buffer lifecycle and atomic surface commit."
+description = "The Paperclip compositor core: shared-memory pools, buffer lifecycle, atomic surface commit and system chrome."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,6 +20,7 @@ repository.workspace = true
 
 [dependencies]
 paper-protocol = { workspace = true }
+paper-sdk = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

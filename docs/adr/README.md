@@ -41,3 +41,4 @@ device survey and several of these are bets.
 | [0032](0032-refreshing-the-recovery-bootstrap.md) | Refreshing the recovery bootstrap: when it runs, how staleness is surfaced, and closing a no-live-binary window |
 | [0033](0033-compositor-core-buffer-lifecycle.md) | The compositor core: pool descriptor, buffer lifecycle, and what stays out of this stage |
 | [0034](0034-gesture-arbitration-the-escape-pinch-edge-swipes-and-app-vs-system.md) | Gesture arbitration: the escape pinch, edge swipes, and app-vs-system |
+| [0035](0035-system-chrome-a-drawing-order-guarantee-not-a-permission-check.md) | System chrome: a drawing-order guarantee, not a permission check |

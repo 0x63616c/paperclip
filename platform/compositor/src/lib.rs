@@ -20,6 +20,11 @@
 //! Verdict`], with no dependency on `pool` or `surface` and none on a clock
 //! or an event loop (WWW-52, WWW-80).
 //!
+//! [`chrome`] is a fourth, independent piece: the compositor's own status
+//! bar, drawn outside any client's surface and composed on top of one
+//! (WWW-79). It does not depend on `pool`, `surface` or `gesture` — see its
+//! module doc for what still has to drive it.
+//!
 //! ## What this crate does not do yet
 //!
 //! There is no socket, no client connection, and no running process here.
@@ -31,10 +36,12 @@
 //! event loop by WWW-78 too — this crate only classifies events, it does
 //! not read them off a socket.
 
+pub mod chrome;
 pub mod gesture;
 pub mod pool;
 pub mod surface;
 
+pub use chrome::{ChromeState, content_rect, draw as draw_chrome, reserved_rect};
 pub use gesture::{Edge, GestureDetector, SystemGesture, Verdict};
 pub use pool::{Pool, PoolError};
 pub use surface::{Committed, Surface, SurfaceError};
