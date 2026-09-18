@@ -255,7 +255,10 @@ get wrong.
   not block WWW-74 because VERIFY only starts the supervisor, never a session,
   but it is the same shape of gap and belongs to whatever ticket makes a
   production launch request go through these units rather than the in-process
-  bridge `paperctl run`/`open` use today.
+  bridge `paperctl run`/`open` use today. **Closed for the boot-autostart
+  path by WWW-53:** `paperclip-launcher` writes `paperclip-app@home.service`
+  before calling `bring_up()`. `paperctl run`/`open`'s in-process bridge is
+  untouched and still does not go through these units at all.
 - Tablet-initiated updates stay deferred, per §13, until this is proven on the
   device.
 - A catalog-driven platform update is not implemented; `paperctl upgrade run`
