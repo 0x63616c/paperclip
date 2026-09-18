@@ -43,6 +43,22 @@ test:
 doc:
     RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --workspace --no-deps --keep-going --target aarch64-unknown-linux-gnu
 
+# The docs site under book/: stages the API reference `cargo doc` just built
+# into book/src/api (a build artefact, gitignored — the introduction's rustdoc
+# link resolves against it), then `mdbook build`, which also runs
+# mdbook-linkcheck (WWW-18). `tools/check-book-includes.sh` runs first because
+# mdbook 0.4's `{{#include}}` preprocessor only *warns* on a missing target and
+# still exits 0 — verified locally — so it is not a gate on its own.
+# Needs `cargo install mdbook --version "^0.4"` and `cargo install
+# mdbook-linkcheck` (0.7.7 is the release that still speaks mdbook 0.4's
+# backend protocol; mdbook 0.5 broke it).
+docs: doc
+    ./tools/check-book-includes.sh
+    rm -rf book/src/api
+    mkdir -p book/src/api
+    cp -r target/aarch64-unknown-linux-gnu/doc/. book/src/api/
+    mdbook build book
+
 # Does the device half compile? Needs nothing but rustup (docs/development.md).
 check-device:
     cargo check --workspace --target aarch64-unknown-linux-gnu
@@ -65,7 +81,7 @@ signing-boundary:
     ./tools/assert-no-signing-path.sh target/release/paperctl
 
 # Exactly the jobs in .github/workflows/ci.yml, in the same order.
-ci: fmt clippy clippy-device test doc check-device check-paperctl-device feature-matrix signing-boundary
+ci: fmt clippy clippy-device test doc docs check-device check-paperctl-device feature-matrix signing-boundary
 
 # Fuzz one of platform/packages/fuzz's targets (`archive` or `manifest`) for
 # SECONDS. Needs a nightly toolchain and `cargo install cargo-fuzz`.

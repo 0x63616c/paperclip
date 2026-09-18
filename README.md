@@ -78,5 +78,7 @@ Crates appear as their functionality lands; the destination layout is in
 From the specification, quoted because they decide when anything here is
 finished:
 
+<!-- ANCHOR: two-rules -->
 - A running process is not proof the screen is usable.
 - Passing mocks or local tests is not device qualification.
+<!-- ANCHOR_END: two-rules -->

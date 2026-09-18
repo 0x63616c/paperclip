@@ -71,6 +71,40 @@ jobs:
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
 
+  docs:
+    # The mdBook site under book/ (WWW-18): the introduction, and the ADR
+    # chapter `{{#include}}`d whole from docs/adr/ so it cannot drift from the
+    # decisions it renders. `check-book-includes.sh` runs first because
+    # mdbook 0.4's `{{#include}}` preprocessor only warns on a missing target
+    # and still exits 0 (verified locally) — it is not a gate by itself. The
+    # API reference is staged under book/src/api before `mdbook build` so the
+    # introduction's rustdoc link is a real file mdbook-linkcheck can find,
+    # not an assumption; `mdbook build` also runs mdbook-linkcheck, configured
+    # in book/book.toml, so a broken link fails this job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - run: cargo doc --workspace --no-deps --keep-going --target aarch64-unknown-linux-gnu
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+      - run: ./tools/check-book-includes.sh
+      - run: |
+          rm -rf book/src/api
+          mkdir -p book/src/api
+          cp -r target/aarch64-unknown-linux-gnu/doc/. book/src/api/
+      # mdbook 0.5 broke mdbook-linkcheck's backend protocol; 0.7.7 is the
+      # last mdbook-linkcheck release built against mdbook 0.4 (verified
+      # locally against both).
+      - run: cargo install mdbook --version "^0.4" --locked
+      - run: cargo install mdbook-linkcheck --locked
+      - run: mdbook build book
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: book/dist/html
+
   device-check:
     # Does the device half compile? Needs nothing but rustup — the target is
     # pinned in rust-toolchain.toml (docs/development.md).

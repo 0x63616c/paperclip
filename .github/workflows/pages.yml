@@ -1,0 +1,61 @@
+# Publishes the mdBook site under book/ to GitHub Pages (WWW-18). Separate
+# from the `docs` job in ci.yml on purpose: that job gates pull requests and
+# never has permission to deploy; this one only ever runs against `main`, and
+# needs the `pages`/`id-token` permissions a PR run must not have.
+#
+# One-time repo setting this workflow depends on and cannot set itself:
+# Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # See ci.yml: a GitHub runner has no zig, so both must point at the real
+  # cross toolchain apt installs below.
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+  CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - run: cargo doc --workspace --no-deps --keep-going --target aarch64-unknown-linux-gnu
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+      - run: ./tools/check-book-includes.sh
+      - run: |
+          rm -rf book/src/api
+          mkdir -p book/src/api
+          cp -r target/aarch64-unknown-linux-gnu/doc/. book/src/api/
+      - run: cargo install mdbook --version "^0.4" --locked
+      - run: cargo install mdbook-linkcheck --locked
+      - run: mdbook build book
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: book/dist/html
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

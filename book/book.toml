@@ -1,0 +1,36 @@
+# The Paperclip OS docs site (WWW-18). Scaffold only: the introduction and the
+# ADR chapter, which are already true. Concept and architecture chapters wait
+# on WWW-43 and WWW-52 — see book/src/introduction.md.
+[book]
+title = "Paperclip OS"
+description = "What Paperclip is, and the decisions behind it."
+authors = ["Calum Webb"]
+language = "en"
+src = "src"
+
+[build]
+# Kept out of `book/src` and out of `/target` on purpose: `book/src/api` is a
+# generated rustdoc tree that `mdbook build` copies into this directory
+# verbatim, so a build-dir under `src` would recurse into its own output.
+build-dir = "dist"
+
+[output.html]
+git-repository-url = "https://github.com/0x63616c/paperclip"
+edit-url-template = "https://github.com/0x63616c/paperclip/edit/main/book/{path}"
+
+[output.linkcheck]
+# `false`: a flaky external host must never fail this build. Every link this
+# gate actually needs to catch — a moved ADR, a moved {{#include}} anchor, the
+# rustdoc path under book/src/api — is local.
+follow-web-links = false
+
+# `{{#include}}` pulls each ADR's body in whole, but does not rewrite the
+# handful of relative links inside them that point outside docs/adr/ (to
+# docs/app-contract.md, to a source file) — those are correct at the ADR's own
+# location and only become unreachable at book/src/decisions/'s depth. Named
+# individually, not by a broad pattern, so a genuinely new dead link still
+# fails the build.
+exclude = [
+  '^\.\./app-contract\.md$',
+  '^\.\./\.\./platform/packages/src/(manifest|signing)\.rs$',
+]

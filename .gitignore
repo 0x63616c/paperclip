@@ -9,3 +9,9 @@
 # `tools/package-app.sh`'s staged entrypoint binaries. Build artefacts, not
 # source — the cross-compiled aarch64 ELF a source tree does not ship with.
 /apps/*/bin/
+
+# The docs site's build output, and the generated `cargo doc` tree `just docs`
+# stages under `book/src/api` so the introduction's rustdoc link is real
+# (WWW-18). Both are build artefacts of `book/src`, not source.
+/book/src/api/
+/book/dist/
