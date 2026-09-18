@@ -1,6 +1,36 @@
 # ADR-0034 — Gesture arbitration: the escape pinch, edge swipes, and app-vs-system
 
-**Status:** accepted (WWW-52, WWW-80)
+**Status:** accepted (WWW-52, WWW-80), **amended to raise the escape pinch's
+finger count** (WWW-84).
+
+> **Amendment, WWW-84.** The escape pinch is now **four or more** live,
+> unclaimed touch contacts (`MIN_PINCH_FINGERS`), not exactly two. This
+> device is rested a hand on while drawing with a stylus, and two contacts
+> landing together in that position is an ordinary accident, not a deliberate
+> gesture — the cost of a false escape is being thrown out of an app
+> mid-stroke. Four is close to deliberate; nobody rests a whole hand flat by
+> accident. Against that, two is easier to perform one-handed, and
+> `PINCH_MIN_CLOSING`'s 150px of *closing* travel already filters out a
+> resting hand that never converges — but Calum decided the false-positive
+> cost outweighs that filter (2026-09-18).
+>
+> This was not a fresh number: the earlier, unmerged
+> `wip/pinch-gesture-and-sleep` branch's `input/pinch.rs` used a four-finger
+> `MIN_FINGERS`, for the same reason (contact bounce and accidental rests),
+> before the compositor existed to arbitrate anything. WWW-80 defined the
+> gesture as exactly two without citing or rejecting that precedent, which
+> is the gap this amendment closes. The rule is `>=`, not `==`: a fifth
+> contact must still confirm escape rather than falling through to the app,
+> so a sixth-finger accident (e.g. a palm edge) never un-confirms a gesture
+> already in progress. The "which two of several converged" ambiguity WWW-80
+> raised does not reappear here — with `>=`, *every* live, unclaimed touch
+> contact is claimed together; there is no subset to choose from.
+>
+> The closing measurement generalises from a two-point distance to the
+> group's diameter — the largest distance between any two of the live
+> contacts, before versus after — which is exactly the old two-contact
+> distance when there are only two. `platform/compositor/src/gesture.rs`'s
+> `confirm_pinch` and `max_pairwise_distance`.
 
 ## Context
 
@@ -70,13 +100,13 @@ handoff contract for whoever wires this in.
   edge does not count — a finger dragged sideways just inside the zone never
   confirms a swipe, because inward distance is the only quantity compared to
   the threshold.
-- **`SystemGesture::Escape`** — exactly two live, unclaimed touch contacts
-  (`Pointer::Touch`; the pen and the desktop preview's mouse never
-  participate) whose separation has closed by at least `PINCH_MIN_CLOSING`
-  (150 px) since both were down. A third live, unclaimed touch contact rules
-  pinch recognition out entirely rather than guessing which two of several
-  fingers the user meant — v1's escape gesture is defined as two fingers,
-  full stop.
+- **`SystemGesture::Escape`** — `MIN_PINCH_FINGERS` (four) or more live,
+  unclaimed touch contacts (`Pointer::Touch`; the pen and the desktop
+  preview's mouse never participate) whose spread has closed by at least
+  `PINCH_MIN_CLOSING` (150 px) since they were all down, measured as the
+  largest distance between any two of them. **Superseded by the WWW-84
+  amendment above** — v1 originally defined this as exactly two fingers, and
+  a third live contact ruled recognition out entirely; both are now wrong.
 
 ### A corner claims no single edge
 
@@ -114,7 +144,7 @@ not read as more than it is.
   contact's own event confirms `Escape`, its partner contact is marked
   claimed in the same call, but the partner's *own* verdict only reads as
   `System` on its own next event — there is no event in flight for the
-  partner to relabel retroactively. `two_fingers_closing_together_is_the_
+  partner to relabel retroactively. `four_fingers_closing_together_is_the_
   escape_pinch` (`platform/compositor/src/gesture.rs`) pins this down rather
   than hiding it.
 - **Fixed pixel constants, not measured ones.** `EDGE_ZONE_DEPTH` (48),

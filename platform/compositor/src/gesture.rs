@@ -46,10 +46,23 @@ pub const EDGE_ZONE_DEPTH: f32 = 48.0;
 /// a tap or a long press held near the edge.
 pub const EDGE_SWIPE_MIN_TRAVEL: f32 = 96.0;
 
-/// How much closer two concurrent touch contacts must move, in canvas
-/// pixels, before they are confirmed as [`SystemGesture::Escape`] rather
-/// than two independent touches that happen to be onscreen together.
+/// How much closer the escape pinch's contacts must draw together, in
+/// canvas pixels — measured as the largest pairwise distance among them,
+/// before versus after — before they are confirmed as
+/// [`SystemGesture::Escape`] rather than independent touches that happen to
+/// be onscreen together.
 pub const PINCH_MIN_CLOSING: f32 = 150.0;
+
+/// How many live, unclaimed touch contacts the escape pinch requires, at
+/// least (ADR-0034 amendment, WWW-84).
+///
+/// Two was the original v1 rule (WWW-80) and is wrong for this device: it is
+/// rested a hand on while drawing with a stylus, and two contacts landing
+/// together is an ordinary accident there, not a gesture. Four is close to
+/// deliberate. This is `>=`, not `==` — a fifth contact must still escape,
+/// not fall through to the app, so [`GestureDetector::confirm_pinch`] never
+/// caps the count above this floor.
+pub const MIN_PINCH_FINGERS: usize = 4;
 
 /// One of the panel's four edges, in canvas space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -67,8 +80,9 @@ pub enum Edge {
 /// A gesture the system claims for itself rather than passing to the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SystemGesture {
-    /// Two touch contacts closing together — the system's own
-    /// return-to-Home gesture, live regardless of which app is focused.
+    /// [`MIN_PINCH_FINGERS`] or more touch contacts closing together — the
+    /// system's own return-to-Home gesture, live regardless of which app is
+    /// focused.
     Escape,
     /// A contact that began within [`EDGE_ZONE_DEPTH`] of `Edge` and has
     /// since travelled inward past [`EDGE_SWIPE_MIN_TRAVEL`].
@@ -180,35 +194,35 @@ impl GestureDetector {
         verdict
     }
 
-    /// If exactly two unclaimed touch contacts are live and have closed by
-    /// [`PINCH_MIN_CLOSING`] since both first appeared, claims
-    /// [`SystemGesture::Escape`] on both. A third live, unclaimed touch
-    /// contact rules pinch recognition out entirely — v1 defines the escape
-    /// gesture as two fingers, not "the two closest of however many are
-    /// down," and guessing which two the user meant is worse than not
-    /// recognising a pinch at all.
+    /// If [`MIN_PINCH_FINGERS`] or more unclaimed touch contacts are live
+    /// and have closed by [`PINCH_MIN_CLOSING`] since they all first
+    /// appeared, claims [`SystemGesture::Escape`] on every one of them.
+    /// "Closed" is measured as the largest distance between any two of the
+    /// contacts — their spread's diameter — shrinking past the threshold,
+    /// which for exactly two contacts is the plain distance between them.
+    /// There is no upper bound: a sixth finger joining a live pinch is still
+    /// claimed along with the rest, per [`MIN_PINCH_FINGERS`]'s own doc.
     fn confirm_pinch(&mut self) {
-        let mut unclaimed_touches = self
+        let unclaimed_touches: Vec<ContactId> = self
             .contacts
             .iter()
             .filter(|(_, track)| track.pointer == Pointer::Touch && track.claimed.is_none())
-            .map(|(id, _)| *id);
-        let (Some(a), Some(b), None) = (
-            unclaimed_touches.next(),
-            unclaimed_touches.next(),
-            unclaimed_touches.next(),
-        ) else {
+            .map(|(id, _)| *id)
+            .collect();
+        if unclaimed_touches.len() < MIN_PINCH_FINGERS {
             return;
-        };
+        }
 
-        let (Some(track_a), Some(track_b)) = (self.contacts.get(&a), self.contacts.get(&b)) else {
-            return;
-        };
-        let initial = distance(track_a.origin, track_b.origin);
-        let current = distance(track_a.last, track_b.last);
+        let tracks: Vec<&Track> = unclaimed_touches
+            .iter()
+            .filter_map(|id| self.contacts.get(id))
+            .collect();
+        let initial = max_pairwise_distance(tracks.iter().map(|track| track.origin));
+        let current = max_pairwise_distance(tracks.iter().map(|track| track.last));
         if initial - current >= PINCH_MIN_CLOSING {
-            self.claim(a, SystemGesture::Escape);
-            self.claim(b, SystemGesture::Escape);
+            for contact in unclaimed_touches {
+                self.claim(contact, SystemGesture::Escape);
+            }
         }
     }
 
@@ -252,11 +266,26 @@ fn distance(a: Point, b: Point) -> f32 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
 
+/// The largest distance between any two of `points` — a set's diameter,
+/// and for exactly two points simply the distance between them. `O(n^2)`,
+/// which is fine at the handful of simultaneous contacts a touch panel
+/// reports.
+fn max_pairwise_distance(points: impl Iterator<Item = Point>) -> f32 {
+    let points: Vec<Point> = points.collect();
+    let mut max = 0.0_f32;
+    for i in 0..points.len() {
+        for &other in &points[i + 1..] {
+            max = max.max(distance(points[i], other));
+        }
+    }
+    max
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        EDGE_SWIPE_MIN_TRAVEL, EDGE_ZONE_DEPTH, Edge, GestureDetector, PINCH_MIN_CLOSING,
-        SystemGesture, Verdict,
+        EDGE_SWIPE_MIN_TRAVEL, EDGE_ZONE_DEPTH, Edge, GestureDetector, MIN_PINCH_FINGERS,
+        PINCH_MIN_CLOSING, SystemGesture, Verdict,
     };
     use paper_protocol::{ContactId, Point, Pointer, PointerEvent, PointerPhase, Size};
 
@@ -363,33 +392,27 @@ mod tests {
         );
     }
 
+    /// Two is exactly the accident this threshold exists to reject: this
+    /// device is rested a hand on while drawing with a stylus, and two
+    /// contacts closing together is an ordinary consequence of that, not a
+    /// deliberate gesture (ADR-0034 amendment, WWW-84). Below
+    /// `MIN_PINCH_FINGERS`, closing all the way never confirms escape.
     #[test]
-    fn two_fingers_closing_together_is_the_escape_pinch() {
+    fn two_fingers_closing_together_no_longer_escapes() {
         let mut arbiter = detector();
         let left_origin = Point::new(400.0, 1080.0);
         let right_origin = Point::new(1200.0, 1080.0);
-        assert_eq!(
-            arbiter.arbitrate(touch(left_origin, PointerPhase::Down, 0)),
-            Verdict::App
-        );
-        assert_eq!(
-            arbiter.arbitrate(touch(right_origin, PointerPhase::Down, 1)),
-            Verdict::App
-        );
+        arbiter.arbitrate(touch(left_origin, PointerPhase::Down, 0));
+        arbiter.arbitrate(touch(right_origin, PointerPhase::Down, 1));
 
-        // Distance starts at 800; close it past PINCH_MIN_CLOSING (150).
+        // Distance starts at 800; close it past PINCH_MIN_CLOSING (150) —
+        // still not a pinch, because there are only two contacts.
         let left_moved = left_origin.offset(PINCH_MIN_CLOSING, 0.0);
         let right_moved = right_origin.offset(-PINCH_MIN_CLOSING, 0.0);
-        assert_eq!(
-            arbiter.arbitrate(touch(left_moved, PointerPhase::Moved, 0)),
-            Verdict::System(SystemGesture::Escape)
-        );
-        // The partner contact flips to `System` on its own next event —
-        // this call is what actually updates its `last` and re-checks the
-        // shared pinch state (see the module docs' note on this lag).
+        arbiter.arbitrate(touch(left_moved, PointerPhase::Moved, 0));
         assert_eq!(
             arbiter.arbitrate(touch(right_moved, PointerPhase::Moved, 1)),
-            Verdict::System(SystemGesture::Escape)
+            Verdict::App
         );
     }
 
@@ -408,25 +431,122 @@ mod tests {
         );
     }
 
-    /// v1's escape gesture is defined as exactly two fingers. A third live
-    /// touch contact makes "which two converged" a guess, so pinch
-    /// recognition is withheld entirely rather than picking a pair.
+    /// Three is still below `MIN_PINCH_FINGERS` (4) — closing all the way
+    /// still doesn't confirm escape. This is the boundary directly below
+    /// the one `four_fingers_closing_together_is_the_escape_pinch` sits
+    /// above.
     #[test]
-    fn a_third_touch_contact_rules_out_pinch_recognition() {
+    fn three_fingers_closing_together_is_not_yet_the_escape_pinch() {
         let mut arbiter = detector();
         let left = Point::new(400.0, 1080.0);
-        let right = Point::new(1200.0, 1080.0);
-        let third = Point::new(810.0, 400.0);
+        let right_a = Point::new(1200.0, 1080.0);
+        let right_b = Point::new(1200.0, 1080.0);
         arbiter.arbitrate(touch(left, PointerPhase::Down, 0));
-        arbiter.arbitrate(touch(right, PointerPhase::Down, 1));
-        arbiter.arbitrate(touch(third, PointerPhase::Down, 2));
+        arbiter.arbitrate(touch(right_a, PointerPhase::Down, 1));
+        arbiter.arbitrate(touch(right_b, PointerPhase::Down, 2));
 
         let left_moved = left.offset(PINCH_MIN_CLOSING, 0.0);
-        let right_moved = right.offset(-PINCH_MIN_CLOSING, 0.0);
+        let right_moved = right_a.offset(-PINCH_MIN_CLOSING, 0.0);
         arbiter.arbitrate(touch(left_moved, PointerPhase::Moved, 0));
+        arbiter.arbitrate(touch(right_moved, PointerPhase::Moved, 1));
+        assert_eq!(
+            arbiter.arbitrate(touch(right_moved, PointerPhase::Moved, 2)),
+            Verdict::App
+        );
+    }
+
+    /// The core rule this ticket changed: `MIN_PINCH_FINGERS` (4) unclaimed
+    /// touch contacts closing together — measured as their spread's
+    /// diameter, the largest distance between any two of them — confirms
+    /// escape. Two contacts sit at each end of the spread so the diameter
+    /// only drops once every contact on the still-unmoved end has moved,
+    /// which is what the two untouched moves below are pinned on.
+    #[test]
+    fn four_fingers_closing_together_is_the_escape_pinch() {
+        let mut arbiter = detector();
+        let left_origin = Point::new(400.0, 1080.0);
+        let right_origin = Point::new(1200.0, 1080.0);
+        for (contact, origin) in [
+            (0, left_origin),
+            (1, right_origin),
+            (2, left_origin),
+            (3, right_origin),
+        ] {
+            assert_eq!(
+                arbiter.arbitrate(touch(origin, PointerPhase::Down, contact)),
+                Verdict::App
+            );
+        }
+
+        // Diameter starts at 800 (either left/right pair). Moving only one
+        // side's contact leaves the other side's untouched pair at 800.
+        let left_moved = left_origin.offset(PINCH_MIN_CLOSING, 0.0);
+        let right_moved = right_origin.offset(-PINCH_MIN_CLOSING, 0.0);
+        assert_eq!(
+            arbiter.arbitrate(touch(left_moved, PointerPhase::Moved, 0)),
+            Verdict::App
+        );
         assert_eq!(
             arbiter.arbitrate(touch(right_moved, PointerPhase::Moved, 1)),
             Verdict::App
+        );
+
+        // Both left contacts have now closed; the diameter drops to 500,
+        // 300px below where it started — past PINCH_MIN_CLOSING (150).
+        assert_eq!(
+            arbiter.arbitrate(touch(left_moved, PointerPhase::Moved, 2)),
+            Verdict::System(SystemGesture::Escape)
+        );
+        // The remaining contact flips to `System` on its own next event —
+        // confirming escape claims every live contact at once, not just
+        // the one whose event triggered it.
+        assert_eq!(
+            arbiter.arbitrate(touch(right_moved, PointerPhase::Moved, 3)),
+            Verdict::System(SystemGesture::Escape)
+        );
+    }
+
+    /// `>= MIN_PINCH_FINGERS`, not `== 4`: a fifth live contact must still
+    /// escape rather than falling through to the app — the test a `== 4`
+    /// regression would fail. The fifth contact sits at the centre and
+    /// never moves at all; it still gets swept into `Escape` once the other
+    /// four confirm the pinch, on its own next event.
+    #[test]
+    fn five_fingers_closing_together_still_escapes() {
+        let mut arbiter = detector();
+        assert_eq!(
+            MIN_PINCH_FINGERS, 4,
+            "this test only proves >= 4 if 5 exceeds it"
+        );
+        let left_origin = Point::new(400.0, 1080.0);
+        let right_origin = Point::new(1200.0, 1080.0);
+        let centre = Point::new(800.0, 1080.0);
+        for (contact, origin) in [
+            (0, left_origin),
+            (1, right_origin),
+            (2, left_origin),
+            (3, right_origin),
+            (4, centre),
+        ] {
+            arbiter.arbitrate(touch(origin, PointerPhase::Down, contact));
+        }
+
+        let left_moved = left_origin.offset(PINCH_MIN_CLOSING, 0.0);
+        let right_moved = right_origin.offset(-PINCH_MIN_CLOSING, 0.0);
+        arbiter.arbitrate(touch(left_moved, PointerPhase::Moved, 0));
+        arbiter.arbitrate(touch(right_moved, PointerPhase::Moved, 1));
+        // Both left contacts have now closed, same as the four-finger case
+        // — the stationary fifth, centred contact never widens the spread
+        // past what the four pinching fingers set.
+        assert_eq!(
+            arbiter.arbitrate(touch(left_moved, PointerPhase::Moved, 2)),
+            Verdict::System(SystemGesture::Escape)
+        );
+        // The fifth contact was swept into the same claim despite never
+        // moving from the centre — this is `>= 4`, not "the four closest".
+        assert_eq!(
+            arbiter.arbitrate(touch(centre, PointerPhase::Moved, 4)),
+            Verdict::System(SystemGesture::Escape)
         );
     }
 
