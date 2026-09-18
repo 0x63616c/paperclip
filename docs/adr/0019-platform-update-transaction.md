@@ -1,8 +1,14 @@
 # ADR-0019 — The platform update transaction
 
-**Status:** accepted, proven in the VM harness, **not yet exercised on
-hardware.** No platform upgrade has been run on the tablet. Everything below is
-a decision plus VM evidence; the §17 acceptance run is still outstanding.
+**Status:** accepted, proven in the VM harness. **Exercised on hardware once**
+(WWW-55, 2026-09-18, the first run of `tools/device-acceptance/run.sh` against
+a real tablet) and it did not reach COMMIT: it staged, ran `paperctl setup`,
+then failed inside VERIFY at `systemctl start paperclip-host.service` — `Unit
+not found` (WWW-74). `xochitl.service` was untouched throughout; the failure
+landed after ACTIVATE confirmed stock was up and before any session took the
+display. WWW-74 fixed the cause (below); a hardware run confirming the fixed
+transaction reaches COMMIT on a clean tablet is still outstanding, and nothing
+here should be cited as evidence that it does.
 
 Implements spec §13 and the setup/removal half of §14.
 
@@ -149,6 +155,27 @@ Ordering decisions, each paid for by a specific failure:
 - *Grade, then commit.* Committing first would mean the journal reached its
   terminal state while the outcome was unknown.
 
+### VERIFY writes the units it starts (WWW-74)
+
+`/run/systemd/system` is a tmpfs (WWW-11), so `paperclip-host.service` and the
+units next to it are gone after *every* reboot, not only before a first
+install — a platform already running yesterday and rebooted today is the same
+starting point, as far as VERIFY is concerned, as a tablet that has never had
+Paperclip on it. Before WWW-74, `bring_up()` assumed something upstream had
+already written them; nothing in the real product ever did; `paperctl units`
+is a manual preview command nothing else invokes, and the only real writer was
+the VM harness's own fixture, which is why the VM never caught this.
+
+`bring_up()` now writes [`UnitSet::for_supervisor`] itself — everything except
+the per-app unit, which needs a specific app's `SessionGrants` that VERIFY
+does not have yet — and calls `daemon-reload` before starting the supervisor.
+The alternative of making the install path call whatever wrote the units
+before was rejected: there is no such call to make, since nothing upstream of
+VERIFY ever wrote them for real. Making the units persistent instead was also
+rejected, on purpose: that is WWW-53's decision to make, and it spends this
+ADR's own reboot-lands-at-stock guarantee (below), not something to reach for
+inside a bug fix here.
+
 ### Rollback, and the loop that is not written
 
 One climb for the candidate, one for the fallback. If neither is healthy the
@@ -219,8 +246,16 @@ get wrong.
 
 ## What is not settled
 
-- **No platform upgrade has run on hardware.** The §17 acceptance sequence is
-  outstanding, and nothing here should be cited as device evidence.
+- **No platform upgrade has reached COMMIT on hardware.** One run (WWW-55) got
+  as far as VERIFY and failed there for the reason WWW-74 fixed; the §17
+  acceptance sequence with the fix applied is still outstanding, and nothing
+  here should be cited as device evidence that the fixed transaction works.
+- Nothing here writes `paperclip-app@.service` before a session actually
+  launches one; that unit is still written nowhere in the real product. It did
+  not block WWW-74 because VERIFY only starts the supervisor, never a session,
+  but it is the same shape of gap and belongs to whatever ticket makes a
+  production launch request go through these units rather than the in-process
+  bridge `paperctl run`/`open` use today.
 - Tablet-initiated updates stay deferred, per §13, until this is proven on the
   device.
 - A catalog-driven platform update is not implemented; `paperctl upgrade run`

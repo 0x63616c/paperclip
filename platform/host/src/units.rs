@@ -1,11 +1,19 @@
 //! Generating the runtime systemd units (WWW-11, §11).
 //!
 //! Paperclip installs nothing on the root filesystem. Units are written into
-//! `/run/systemd/system` by `paperctl session start`, and `/run` is a tmpfs —
-//! so the next boot has never heard of Paperclip and comes up as stock. That
-//! is a stronger guarantee than auto-start is worth, and it is also the §10
-//! "Reboot" row: there is no `[Install]` section anywhere in this module, and
-//! a test asserts it.
+//! `/run/systemd/system`, and `/run` is a tmpfs — so the next boot has never
+//! heard of Paperclip and comes up as stock. That is a stronger guarantee
+//! than auto-start is worth, and it is also the §10 "Reboot" row: there is no
+//! `[Install]` section anywhere in this module, and a test asserts it.
+//!
+//! It also means the units are gone after *every* reboot, not just before the
+//! first install. [`UnitSet::for_supervisor`] is what the platform updater's
+//! `bring_up()` writes before it asks systemd to start the supervisor
+//! (WWW-74) — the transaction is the only real caller that starts it, so the
+//! transaction is what has to make sure it exists first, on a first install
+//! and on every one after a reboot alike. `paperctl units` calls
+//! [`UnitSet::plan`] to preview or dump the complete set including the
+//! per-app unit, but it is a manual inspection command nothing else invokes.
 //!
 //! The other rule here is that a directive is emitted only when
 //! [`Facilities`] says it does something. `MemoryMax=` is the case that
@@ -311,9 +319,29 @@ impl UnitSet {
             files: vec![
                 slice(),
                 session_target(&spec.stock_unit),
-                host_service(spec),
-                restore_service(spec),
+                host_service(&spec.paths),
+                restore_service(&spec.paths),
                 app_service(spec, grants, facilities),
+            ],
+        }
+    }
+
+    /// The units the supervisor itself needs before it can be started:
+    /// everything except the per-app foreground unit.
+    ///
+    /// The app unit is left out on purpose, not as an oversight: it carries
+    /// the isolation `SessionGrants` derives for one specific app, and
+    /// `bring_up()` — the only real caller of this — has no app in play yet.
+    /// Writing it here with placeholder grants would bake a wrong sandbox
+    /// into a file a later launch would trust as already correct, which is
+    /// worse than not writing it at all.
+    pub fn for_supervisor(paths: &SessionPaths, stock_unit: &str) -> Self {
+        Self {
+            files: vec![
+                slice(),
+                session_target(stock_unit),
+                host_service(paths),
+                restore_service(paths),
             ],
         }
     }
@@ -356,8 +384,7 @@ fn session_target(stock: &str) -> UnitFile {
     }
 }
 
-fn host_service(spec: &SessionSpec) -> UnitFile {
-    let paths = &spec.paths;
+fn host_service(paths: &SessionPaths) -> UnitFile {
     let contents = format!(
         "{HEADER}\n\
          [Unit]\n\
@@ -401,8 +428,7 @@ fn host_service(spec: &SessionSpec) -> UnitFile {
     }
 }
 
-fn restore_service(spec: &SessionSpec) -> UnitFile {
-    let paths = &spec.paths;
+fn restore_service(paths: &SessionPaths) -> UnitFile {
     let contents = format!(
         "{HEADER}\n\
          [Unit]\n\

@@ -167,6 +167,11 @@ pub(crate) const CASES: &[Case] = &[
         run: upgrade_reboot,
     },
     Case {
+        name: "upgrade-without-preinstalled-units",
+        row: "§13/§17 — bring_up() writes its own units; a clean tablet and a post-reboot one are the same starting point (WWW-74)",
+        run: upgrade_without_preinstalled_units,
+    },
+    Case {
         name: "setup-is-idempotent",
         row: "§14 — setup inspects real prerequisites, and running it twice changes nothing",
         run: setup_is_idempotent,
@@ -1257,6 +1262,56 @@ fn upgrade_reboot(fixture: &Fixture) -> Outcome {
     let output = fixture.paperctl(&["upgrade", "reconcile", &extra[0], &extra[1]])?;
     evidence.push(format!("reconcile on a clean tree: {}", output.trim()));
     Ok(evidence)
+}
+
+/// WWW-74: `bring_up()` starting a unit nothing wrote.
+///
+/// Every other §13 case runs against units [`Fixture::build`] already wrote,
+/// which is exactly what let this ship — the real transaction was never
+/// asked to prove it could start the supervisor without that head start.
+/// `/run` is a tmpfs, so a clean tablet and a tablet rebooted after Paperclip
+/// was already installed are the same starting point as far as `bring_up()`
+/// is concerned: no units on disk. This reproduces that starting point for
+/// real — remove what the fixture pre-wrote and tell systemd to forget it —
+/// then drives the real `paperctl upgrade run` and checks the supervisor
+/// comes up anyway.
+fn upgrade_without_preinstalled_units(fixture: &Fixture) -> Outcome {
+    for unit in fixture.unit_names() {
+        let _ = fs::remove_file(fixture.paths.runtime_units.join(unit));
+    }
+    // Without this, systemd may still answer from the fragment it already
+    // had loaded and the case would pass whether or not `bring_up()` writes
+    // anything — a reboot is what actually forces this forgetting on the
+    // device, `daemon-reload` is the nearest thing to it here.
+    systemctl(&["daemon-reload"])?;
+
+    let bundle = fixture.bundle("0.2.0", "ready")?;
+    let result = run_upgrade(fixture, &bundle);
+
+    // Whatever happened, put the units back before any later case runs — this
+    // case is the one exception to "the fixture already did this".
+    fixture.install_units()?;
+
+    let output = result?;
+    if !unit_active(HOST_UNIT) {
+        return Err(format!(
+            "the supervisor did not start with no units pre-written for it: {}",
+            property(HOST_UNIT, "SubState")
+        ));
+    }
+    if selected(fixture) != "0.2.0" {
+        return Err(format!(
+            "`current` is {} after an upgrade that should have installed and started the candidate",
+            selected(fixture)
+        ));
+    }
+    Ok(vec![
+        format!(
+            "upgrade with no units pre-written: {}",
+            output.trim().replace('\n', " | ")
+        ),
+        "the supervisor started having been given nothing to start with ahead of time".to_owned(),
+    ])
 }
 
 fn upgrade_cannot_replace_the_bootstrap(fixture: &Fixture) -> Outcome {

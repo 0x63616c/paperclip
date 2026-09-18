@@ -588,7 +588,7 @@ fn session(
     };
     Ok(paper_updater::linux::SystemdSession::new(
         config.recovery(),
-        config.paths.state.clone(),
+        config.paths.clone(),
     ))
 }
 

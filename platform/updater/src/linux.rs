@@ -27,7 +27,7 @@ use std::time::Duration;
 use paper_host::linux::recovery::{RecoveryConfig, StockRecovery};
 use paper_host::linux::systemd::Systemd;
 use paper_host::readiness::{self, Rung};
-use paper_host::units::{HOST_UNIT, SESSION_TARGET};
+use paper_host::units::{HOST_UNIT, SESSION_TARGET, SessionPaths, UnitSet};
 use paper_protocol::ProtocolVersion;
 
 use crate::health::{Observation, SessionControl};
@@ -52,8 +52,9 @@ const SETTLE_BUDGET: Duration = Duration::from_secs(5);
 pub struct SystemdSession {
     systemd: Systemd,
     recovery: StockRecovery,
-    /// Where the supervisor's status and command files are. Under `/run`.
-    state: PathBuf,
+    /// Where the supervisor's files live, including the units this brings up
+    /// before starting it (WWW-74).
+    paths: SessionPaths,
     /// Which unit is stock.
     stock_unit: String,
     /// The name Paperclip's wakelock is taken under.
@@ -64,15 +65,16 @@ pub struct SystemdSession {
 }
 
 impl SystemdSession {
-    /// A session described by a recovery configuration and a state directory.
+    /// A session described by a recovery configuration and the supervisor's
+    /// paths.
     ///
     /// Both come from the supervisor's own `RuntimeConfig`, so the updater and
     /// the supervisor cannot disagree about which unit is stock or where the
     /// status file is.
-    pub fn new(recovery: RecoveryConfig, state: impl Into<PathBuf>) -> Self {
+    pub fn new(recovery: RecoveryConfig, paths: SessionPaths) -> Self {
         Self {
             systemd: Systemd::default(),
-            state: state.into(),
+            paths,
             stock_unit: recovery.stock_unit.clone(),
             wakelock_name: recovery.wakelock_name.clone(),
             wake_lock: recovery.wakelock.lock.clone(),
@@ -83,12 +85,12 @@ impl SystemdSession {
 
     /// The supervisor's status file.
     pub fn status_file(&self) -> PathBuf {
-        self.state.join("status")
+        self.paths.state.join("status")
     }
 
     /// The file whose existence asks the supervisor to exit at stock.
     pub fn stop_file(&self) -> PathBuf {
-        self.state.join("stop")
+        self.paths.state.join("stop")
     }
 
     /// One field out of the status file.
@@ -98,6 +100,27 @@ impl SystemdSession {
                 .filter(|(name, _)| name.trim() == key)
                 .map(|(_, value)| value.trim().to_owned())
         })
+    }
+
+    /// Writes the units the supervisor needs into `/run/systemd/system` and
+    /// tells systemd to notice them, so [`SessionControl::bring_up`] never
+    /// depends on something else having done this first (WWW-74).
+    ///
+    /// Only [`UnitSet::for_supervisor`]'s units: no app has been chosen yet,
+    /// so there is nothing correct to write for the per-app unit here. See
+    /// its doc comment for why that is deliberate rather than a gap.
+    fn write_units(&self) -> Result<(), String> {
+        let set = UnitSet::for_supervisor(&self.paths, &self.stock_unit);
+        fs::create_dir_all(&self.paths.runtime_units)
+            .map_err(|error| format!("creating {}: {error}", self.paths.runtime_units.display()))?;
+        for file in &set.files {
+            let path = self.paths.runtime_units.join(&file.name);
+            fs::write(&path, &file.contents)
+                .map_err(|error| format!("writing {}: {error}", path.display()))?;
+        }
+        self.systemd
+            .daemon_reload()
+            .map_err(|error| format!("daemon-reload: {error}"))
     }
 }
 
@@ -140,9 +163,17 @@ impl SessionControl for SystemdSession {
         let _ = fs::remove_file(self.stop_file());
         let _ = fs::remove_file(self.status_file());
         let _ = self.systemd.reset_failed(HOST_UNIT);
-        // No `daemon-reload`: the unit file has not changed. `ExecStart=`
-        // names `current/bin/paperclip-host`, and the symlink is resolved when
-        // systemd execs, so the swap is already in effect.
+
+        // `/run` is a tmpfs (see `units::SessionPaths::runtime_units`), so the
+        // unit does not merely need writing before the first install — it is
+        // gone again after every reboot. `bring_up()` is the only thing in
+        // the real product that ever asks systemd to start it, so it is the
+        // only thing that can be trusted to have written it first; nothing
+        // upstream of this call does (WWW-74). `daemon-reload` is therefore
+        // not optional the way it once looked: the unit may not merely have
+        // changed, it may not have existed a moment ago.
+        self.write_units()?;
+
         self.systemd
             .start(HOST_UNIT)
             .map_err(|error| format!("starting the supervisor: {error}"))

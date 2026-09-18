@@ -707,7 +707,14 @@ impl Fixture {
         fs::write(self.paths.state.join("config"), config).map_err(|error| error.to_string())
     }
 
-    fn install_units(&self) -> Result<(), String> {
+    /// Writes every generated unit, plus the stand-in stock unit, and tells
+    /// systemd to notice them.
+    ///
+    /// Called once by [`Self::build`], and again by any case that has to
+    /// remove the units to prove something about their absence (WWW-74) —
+    /// such a case must leave the fixture exactly as every other case here
+    /// expects to find it, and this is how.
+    pub(crate) fn install_units(&self) -> Result<(), String> {
         for file in self.units().files {
             let path = self.paths.runtime_units.join(&file.name);
             fs::write(&path, &file.contents)
