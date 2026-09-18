@@ -7,8 +7,9 @@
 default:
     @just --list
 
-# The three checks docs/development.md calls "the loop." All three must pass
-# before anything is pushed.
+# The checks docs/development.md calls "the loop" — fmt, clippy, clippy-device,
+# doc, and test. All must pass before anything is pushed. See the justfile's
+# individual recipe comments and docs/development.md for why each is necessary.
 fmt:
     cargo fmt --all --check
 

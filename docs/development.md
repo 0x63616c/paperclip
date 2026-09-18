@@ -22,22 +22,31 @@ anything that links Qt, the reMarkable SDK as well; see
 ## The loop
 
 ```sh
-cargo test --workspace                       # everything
-cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
+cargo clippy --workspace --all-targets --keep-going -- -D warnings
+cargo clippy --workspace --all-targets --keep-going --target aarch64-unknown-linux-gnu -- -D warnings
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --workspace --no-deps --keep-going --target aarch64-unknown-linux-gnu
+cargo test --workspace
 ```
 
-All three must pass before anything is pushed. Clippy is run with
+All five must pass before anything is pushed. Clippy is run with
 `-D warnings` deliberately: the workspace lints in `Cargo.toml` are the style
 rules from §7, and a warning nobody has to fix is a rule nobody follows.
+
+The device-target clippy and doc are not redundant: `paperctl`'s Mac half is
+`#[cfg(not(target_os = "linux"))]`, so code that is live on a Mac can be dead
+on the tablet — and a Mac-only clippy cannot see it. CI runs on Linux and
+caught six such findings that were invisible locally (WWW-65). The same applies
+to doc: intra-doc links to Linux-only items cannot resolve on a Mac, so
+cross-targeting the build is necessary.
 
 ### Git hooks (WWW-66)
 
 `xtask/build.rs` points this checkout's git hooks at `.githooks/` the first
 time anything in the workspace builds — no separate setup step. `.githooks/
-pre-commit` runs `cargo fmt --all --check`; `.githooks/pre-push` runs all
-three commands above, so a CI failure shows up locally first. Both are plain
-shell, committed, and readable in full before trusting them.
+pre-commit` runs `cargo fmt --all --check`; `.githooks/pre-push` runs the five
+checks from "The loop" above, so a CI failure shows up locally first. Both are
+plain shell, committed, and readable in full before trusting them.
 
 There is no Multica-side checkout hook to install into: a fresh `multica repo
 checkout` is a plain git worktree, and nothing re-runs a setup step for it
