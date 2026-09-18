@@ -135,8 +135,10 @@ fn main() -> ExitCode {
                     *byte = 1;
                 }
                 held.push(block);
-                if let Some(progress) = progress.as_mut() {
-                    let _ = progress.tick();
+                if let Some(progress) = progress.as_mut()
+                    && let Err(error) = progress.tick()
+                {
+                    eprintln!("paper-fault-app: cannot publish progress: {error}");
                 }
             }
         }
@@ -274,8 +276,14 @@ fn loop_forever(progress: &mut Option<MainLoopProgress>, ticks: u64) -> ExitCode
     let mut done = 0;
     while done < ticks {
         if let Some(progress) = progress.as_mut()
-            && progress.tick().is_err()
+            && let Err(error) = progress.tick()
         {
+            // WWW-94: a witness that cannot be written used to fail silently
+            // here, and the supervisor's own diagnosis — "reclaimed as
+            // hung" — looked identical whether the loop was actually stuck
+            // or just could not tell anyone it was not. Loud on stderr,
+            // which the failure harness already captures per session.
+            eprintln!("paper-fault-app: cannot publish progress: {error}");
             return ExitCode::FAILURE;
         }
         done += 1;
@@ -286,8 +294,10 @@ fn loop_forever(progress: &mut Option<MainLoopProgress>, ticks: u64) -> ExitCode
 
 fn spin(progress: &mut Option<MainLoopProgress>, times: u64) {
     for _ in 0..times {
-        if let Some(progress) = progress.as_mut() {
-            let _ = progress.tick();
+        if let Some(progress) = progress.as_mut()
+            && let Err(error) = progress.tick()
+        {
+            eprintln!("paper-fault-app: cannot publish progress: {error}");
         }
         std::thread::sleep(Duration::from_millis(120));
     }

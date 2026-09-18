@@ -553,9 +553,14 @@ impl Supervisor {
                             events.push(Event::ProgressStalled { owner, stalled_for });
                         }
                         Ok(_) => {}
-                        Err(_) => {
+                        Err(error) => {
                             // A witness we cannot read is not a witness. Treat
-                            // it as no progress rather than as progress.
+                            // it as no progress rather than as progress — but
+                            // say so: a missing file reads as `Ok(None)`, so
+                            // reaching this arm at all means the file exists
+                            // and is corrupt, which is worth a person's
+                            // attention (WWW-94).
+                            tracing::warn!("progress witness for {owner:?} unreadable: {error}");
                         }
                     }
                 }
@@ -785,14 +790,26 @@ impl Supervisor {
     /// slow one — so the status file is written before this is called, and it
     /// says `recovering` for the duration.
     fn restore(&mut self, attempt: u32) {
+        let started = Instant::now();
         match self.recovery.restore() {
             Ok(outcome) => {
-                tracing::info!("restore attempt {attempt}: {}", outcome.summary());
+                // `duration_ms` as its own field, not folded into the message:
+                // this is what tells a reader where 6 s of "Home reached"
+                // actually went, and it has to be a field a journal query can
+                // sort and threshold on, not prose (docs/logging.md).
+                tracing::info!(
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "restore attempt {attempt}: {}",
+                    outcome.summary()
+                );
                 self.queued.push(Event::StockRunning);
                 self.queued.push(Event::DisplayReleased);
             }
             Err(error) => {
-                tracing::error!("restore attempt {attempt} FAILED: {error}");
+                tracing::error!(
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "restore attempt {attempt} FAILED: {error}"
+                );
                 self.recovery
                     .capture(&format!("restore attempt {attempt}: {error}"));
                 self.queued.push(Event::RestoreFailed {

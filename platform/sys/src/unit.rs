@@ -11,7 +11,7 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::clock::Clock;
-use crate::process::{Process, ProcessCommand, SystemProcess};
+use crate::process::{Process, ProcessCommand, ProcessOutput, SystemProcess};
 
 /// Why a unit operation could not even be attempted.
 ///
@@ -113,47 +113,70 @@ impl<P: Process> Systemctl<P> {
         Self { process }
     }
 
-    fn run(&self, args: &[&str]) -> Result<(bool, String), String> {
+    fn run(&self, args: &[&str]) -> Result<ProcessOutput, String> {
         let command = ProcessCommand::new("systemctl").args(args.iter().copied());
-        let output = self
-            .process
+        self.process
             .run(&command)
-            .map_err(|error| error.to_string())?;
-        Ok((output.success, output.stdout.trim().to_owned()))
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// systemd's own explanation for a refusal.
+///
+/// Prefers `stderr` — this is the channel `systemctl start`/`stop` actually
+/// write a refusal to (e.g. `Job for paperclip-app@home.service failed
+/// because... 226/NAMESPACE`); reading `stdout` instead, as this adapter did
+/// before WWW-94, silently produces an empty reason on every real failure,
+/// because a failed `systemctl` writes nothing there. Falls back to `stdout`
+/// in case some verb ever does put its explanation there, and finally to the
+/// bare exit status if `systemctl` wrote nothing at all — that is still more
+/// than "failed: " with nothing after the colon.
+fn failure_reason(output: &ProcessOutput) -> String {
+    let stderr = output.stderr.trim();
+    if !stderr.is_empty() {
+        return stderr.to_owned();
+    }
+    let stdout = output.stdout.trim();
+    if !stdout.is_empty() {
+        return stdout.to_owned();
+    }
+    match output.code {
+        Some(code) => format!("exited {code} with no output on stdout or stderr"),
+        None => "terminated by signal, with no output on stdout or stderr".to_owned(),
     }
 }
 
 impl<P: Process> UnitControl for Systemctl<P> {
     fn start(&self, unit: &str) -> Result<(), UnitError> {
-        let (ok, text) = self.run(&["start", unit]).map_err(|reason| UnitError {
+        let output = self.run(&["start", unit]).map_err(|reason| UnitError {
             verb: "start",
             unit: unit.to_owned(),
             reason,
         })?;
-        if ok {
+        if output.success {
             Ok(())
         } else {
             Err(UnitError {
                 verb: "start",
                 unit: unit.to_owned(),
-                reason: text,
+                reason: failure_reason(&output),
             })
         }
     }
 
     fn stop(&self, unit: &str) -> Result<(), UnitError> {
-        let (ok, text) = self.run(&["stop", unit]).map_err(|reason| UnitError {
+        let output = self.run(&["stop", unit]).map_err(|reason| UnitError {
             verb: "stop",
             unit: unit.to_owned(),
             reason,
         })?;
-        if ok {
+        if output.success {
             Ok(())
         } else {
             Err(UnitError {
                 verb: "stop",
                 unit: unit.to_owned(),
-                reason: text,
+                reason: failure_reason(&output),
             })
         }
     }
@@ -170,27 +193,27 @@ impl<P: Process> UnitControl for Systemctl<P> {
 
     fn is_active(&self, unit: &str) -> bool {
         self.run(&["is-active", unit])
-            .map(|(_, text)| text == "active")
+            .map(|output| output.stdout.trim() == "active")
             .unwrap_or(false)
     }
 
     fn is_failed(&self, unit: &str) -> bool {
         self.run(&["is-failed", unit])
-            .map(|(_, text)| text == "failed")
+            .map(|output| output.stdout.trim() == "failed")
             .unwrap_or(false)
     }
 
     fn main_pid(&self, unit: &str) -> Option<u32> {
         self.run(&["show", "-p", "MainPID", "--value", unit])
             .ok()
-            .and_then(|(_, text)| text.parse().ok())
+            .and_then(|output| output.stdout.trim().parse().ok())
             .filter(|pid| *pid != 0)
     }
 
     fn property(&self, unit: &str, name: &str) -> Option<String> {
         self.run(&["show", "-p", name, "--value", unit])
             .ok()
-            .map(|(_, text)| text)
+            .map(|output| output.stdout.trim().to_owned())
             .filter(|text| !text.is_empty())
     }
 }

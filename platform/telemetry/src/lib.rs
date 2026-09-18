@@ -67,7 +67,13 @@ fn env_filter() -> EnvFilter {
 pub fn init_pretty(run_log_dir: PathBuf) -> Result<(), InitError> {
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
-        .with_writer(std::io::stderr);
+        .with_writer(std::io::stderr)
+        // Prints a span's own duration when it closes. Mac-only convenience:
+        // `tracing-journald`'s layer implements no `on_close`, so this never
+        // reaches the device journal — an operation that must show its
+        // duration there needs an explicit field on the event that reports
+        // it (docs/logging.md), which this does not replace.
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
     tracing_subscriber::registry()
         .with(env_filter())
         .with(fmt_layer)

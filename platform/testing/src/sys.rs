@@ -88,16 +88,30 @@ impl FakeProcess {
         });
     }
 
-    /// Every call fails, with `stdout` carrying what `systemctl` would have
-    /// printed — the real adapter reads its error text from stdout, not
-    /// stderr, matching `systemctl`'s own behaviour.
-    pub fn script_failure(&self, stdout: impl Into<String>) {
+    /// Every call fails, with `stderr` carrying what `systemctl` would have
+    /// printed — the real adapter reads a failure's reason from stderr first
+    /// (WWW-94), matching a real `systemctl start`/`stop` refusal, which
+    /// writes there and leaves stdout empty.
+    pub fn script_failure(&self, stderr: impl Into<String>) {
         let mut state = self.state.borrow_mut();
         state.responses.clear();
         state.responses.push_back(ProcessOutput {
             success: false,
             code: Some(1),
-            stdout: stdout.into(),
+            stdout: String::new(),
+            stderr: stderr.into(),
+        });
+    }
+
+    /// Every call fails with no output on either stream, as `systemctl`
+    /// leaves it when it is killed or refuses before printing anything.
+    pub fn script_failure_silent(&self) {
+        let mut state = self.state.borrow_mut();
+        state.responses.clear();
+        state.responses.push_back(ProcessOutput {
+            success: false,
+            code: Some(1),
+            stdout: String::new(),
             stderr: String::new(),
         });
     }
@@ -455,6 +469,38 @@ mod tests {
         let control = Systemctl::new(process);
         let error = control.stop("xochitl.service").expect_err("refuses");
         assert!(error.to_string().contains("xochitl.service"));
+    }
+
+    /// The WWW-94 regression: a failed `systemctl start` must carry systemd's
+    /// own explanation, not an empty reason. `Systemctl::run` used to read
+    /// only stdout, and a real refusal — e.g. `226/NAMESPACE` for a missing
+    /// `ReadWritePaths=` directory — is written to stderr, so the old adapter
+    /// reported "systemctl start paperclip-app@home.service failed: " with
+    /// nothing after the colon.
+    #[test]
+    fn a_failed_start_carries_systemds_stderr_as_a_non_empty_reason() {
+        let process = FakeProcess::new();
+        process.script_failure(
+            "Job for paperclip-app@home.service failed because the control process \
+             exited with error code.\nSee \"systemctl status paperclip-app@home.service\" \
+             and \"journalctl -xeu paperclip-app@home.service\" for details.",
+        );
+        let control = Systemctl::new(process);
+        let error = control
+            .start("paperclip-app@home.service")
+            .expect_err("refuses");
+        assert!(!error.reason.is_empty(), "reason must not be empty");
+        assert!(error.reason.contains("control process"));
+    }
+
+    #[test]
+    fn a_failed_start_falls_back_to_the_exit_code_when_systemctl_wrote_nothing() {
+        let process = FakeProcess::new();
+        process.script_failure_silent();
+        let control = Systemctl::new(process);
+        let error = control.start("a.service").expect_err("refuses");
+        assert!(!error.reason.is_empty(), "reason must not be empty");
+        assert!(error.reason.contains('1'), "should mention the exit code");
     }
 
     #[test]

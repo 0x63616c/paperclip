@@ -17,6 +17,13 @@ The five canonical roles, each label string equal to its name. See
 Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See
 `docs/agents/domain.md`.
 
+### Logging and tracing
+
+Levels, required fields, durations as structured fields (not span timing —
+`tracing-journald` never emits it), what must never be logged, and where input
+tracing belongs. Read `docs/logging.md` before adding a log line or touching a
+`map_err`/`Err(_) =>` that discards a cause.
+
 ## Git workflow
 
 Land work by committing to `main` and pushing it. **Do not open pull
