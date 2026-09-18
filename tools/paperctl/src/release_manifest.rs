@@ -21,7 +21,7 @@ use serde::Deserialize;
 pub(crate) const RELEASE_MANIFEST_FILE_NAME: &str = "release.toml";
 
 /// Largest `release.toml` that will be read, in bytes. The same ceiling
-/// [`paper_packages::manifest::MAX_MANIFEST_BYTES`] uses for `paper.toml`: a
+/// [`paper_packages::MAX_MANIFEST_BYTES`] uses for `paper.toml`: a
 /// real one is a few hundred bytes, and this only guards against an
 /// unreasonable file rather than describing a working limit.
 pub(crate) const MAX_RELEASE_MANIFEST_BYTES: u64 = 64 * 1024;

@@ -27,11 +27,11 @@
 //!
 //! `plan-release` runs before anything is built (the ticket is explicit:
 //! "do not build or sign anything"), so it cannot compare package bytes the
-//! way [`paper_packages::publish::Publisher::publish`] does — those do not
+//! way `paper_packages::publish::Publisher::publish` does — those do not
 //! exist yet. What it *can* read from the tree is the declared manifest
 //! itself: `apps/<app>/paper.toml` verbatim, or `release.toml` verbatim for
 //! the platform. [`content_digest`] hashes those bytes the way
-//! [`paper_packages::Digest`] spells one (`sha256:<hex>`, ADR-0013), and a
+//! `paper_packages::Digest` spells one (`sha256:<hex>`, ADR-0013), and a
 //! publish step is expected to record that same digest in the GitHub
 //! release's body as a `paperclip-digest: sha256:<hex>` line. A declared
 //! version whose tag exists with a matching line is up to date; a declared
@@ -210,7 +210,7 @@ struct RawReleaseTable {
     version: String,
 }
 
-/// `sha256:<hex>` over `bytes`, spelled the way [`paper_packages::Digest`]
+/// `sha256:<hex>` over `bytes`, spelled the way `paper_packages::Digest`
 /// spells one (ADR-0013). `xtask` does not depend on that crate for one
 /// function's worth of formatting.
 fn content_digest(bytes: &[u8]) -> String {
