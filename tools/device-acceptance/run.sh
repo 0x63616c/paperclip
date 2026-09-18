@@ -26,7 +26,7 @@
 #       --key ~/paperclip-keys/paperclip.key \
 #       --trust /home/root/paperclip/keys/paperclip.pub \
 #       --from 0.3.1 --to 0.4.0 --fail-to 0.4.0-acceptance-fail \
-#       [--device root@192.168.0.180] [--workdir /tmp/paperclip-acceptance]
+#       [--device remarkable-wifi] [--workdir /tmp/paperclip-acceptance]
 #
 # `--from` is asserted, not assumed: the run refuses to start unless the
 # tablet is already on exactly that version, because every later assertion is

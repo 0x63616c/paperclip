@@ -14,8 +14,11 @@ together (§13).
 
 ## Setting a tablet up
 
+Reach the tablet through the `remarkable-wifi` SSH alias, not an IP — the
+tablet is on DHCP and its address moves; the alias doesn't.
+
 ```sh
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl setup
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl setup
 ```
 
 Staged, and it stops at the first thing that is not there. It checks the
@@ -84,8 +87,8 @@ running the old code over bytes it cannot parse.
 ## Installing it
 
 ```sh
-scp paperclip-0.4.0.tar.gz root@192.168.0.180:/tmp/
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl upgrade run \
+scp paperclip-0.4.0.tar.gz remarkable-wifi:/tmp/
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl upgrade run \
     /tmp/paperclip-0.4.0.tar.gz --trust /home/root/paperclip/keys/paperclip.pub
 ```
 
@@ -124,7 +127,7 @@ Turn the tablet back on. It comes up as stock, because nothing Paperclip
 installs survives a reboot. Then:
 
 ```sh
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl upgrade reconcile
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl upgrade reconcile
 ```
 
 An update that had not finished is undone, not resumed — the tablet goes back
@@ -134,7 +137,7 @@ interruption; it is safe when nothing was interrupted.
 ## Going back deliberately
 
 ```sh
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl upgrade rollback \
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl upgrade rollback \
     --trust /home/root/paperclip/keys/paperclip.pub
 ```
 
@@ -144,7 +147,7 @@ means installing that bundle again.
 ## Checking what is on there
 
 ```sh
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl upgrade status
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl upgrade status
 ```
 
 ```
@@ -161,8 +164,8 @@ outside everything an ordinary update replaces, and replacing it is its own
 step:
 
 ```sh
-scp paperctl root@192.168.0.180:/tmp/
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl upgrade bootstrap /tmp/paperctl
+scp paperctl remarkable-wifi:/tmp/
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl upgrade bootstrap /tmp/paperctl
 ```
 
 The outgoing one is kept beside it as `bin/paperctl.previous`. If the new one
@@ -173,8 +176,8 @@ turns out to be wrong, `mv` it back over SSH.
 Return the display to stock first, then ask what removal would do:
 
 ```sh
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl stock
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl remove
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl stock
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl remove
 ```
 
 Nothing is deleted without `--yes`; the first run prints the list. **Notebooks
@@ -182,8 +185,8 @@ are never touched** — they are Xochitl's, in a different directory, and nothin
 in the removal path can name them. **App data is kept** unless you ask for it:
 
 ```sh
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl remove --yes
-ssh root@192.168.0.180 /home/root/paperclip/bin/paperctl remove --yes --remove-app-data
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl remove --yes
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl remove --yes --remove-app-data
 ```
 
 After a removal, reboot. The tablet comes up as it did before Paperclip was

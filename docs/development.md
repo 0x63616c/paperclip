@@ -77,7 +77,8 @@ wakelock is writable, and reports the vendor display locks. It writes nothing
 and stops nothing. Redact the machine id and boot id before posting output.
 
 Use **Wi-Fi**, not USB: the USB CDC gadget does not survive the tablet's
-autosleep, and Wi-Fi does (WWW-20).
+autosleep, and Wi-Fi does (WWW-20). Reach it through the `remarkable-wifi`
+alias, not an IP — the tablet is on DHCP and its address moves.
 
 ## Seeing a screen
 
