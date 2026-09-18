@@ -54,6 +54,11 @@ They are one tested release on purpose. A Host from 0.4.0 running a Home from
 
 ## Building a release
 
+`release.toml`, at the repository root, declares the version this build is —
+version, protocol, and the two state numbers below (WWW-61, ADR-0026).
+Bumping it is the only thing needed to ask for a new platform release; it is
+not the crate version, which stays `0.1.0` from `[workspace.package]`.
+
 On the Mac, with the publishing key:
 
 ```sh
@@ -67,22 +72,48 @@ cp target/aarch64-unknown-linux-gnu/release/app-store      build/bin/
 cp target/aarch64-unknown-linux-gnu/release/settings       build/bin/
 
 paperctl upgrade package \
-    --source build --version 0.4.0 \
+    --source build \
     --key ~/paperclip-keys/paperclip.key \
     --out paperclip-0.4.0.tar.gz
 ```
 
-If the change to the platform's persistent state is **not** backward
-compatible, say so — this is what makes a rollback safe:
+`--version`, `--protocol`, `--state-version` and `--rollback-to-state` all
+override the matching field in `release.toml` when given, for a one-off build;
+without them the file is what settles what this release is.
 
-```sh
-    --state-version 2 --rollback-to-state 2
+If the change to the platform's persistent state is **not** backward
+compatible, bump `release.toml`'s `[release.state]` so that `writes` and
+`readable_back_to` are equal — this is what makes a rollback safe:
+
+```toml
+[release.state]
+writes = 2
+readable_back_to = 2
 ```
 
-`--rollback-to-state` is the lowest state version that can still read what this
-release writes. Leaving it equal to `--state-version` tells the tablet to
-snapshot its state before activating, so going back is going back rather than
-running the old code over bytes it cannot parse.
+`readable_back_to` is the lowest state version that can still read what this
+release writes. Leaving it equal to `writes` tells the tablet to snapshot its
+state before activating, so going back is going back rather than running the
+old code over bytes it cannot parse. The two are spelled out rather than
+shortened, on purpose (ADR-0026): they are one editing mistake apart, and a
+name that says what each one means is harder to swap by accident than a
+position in an argument list ever was.
+
+## What needs publishing
+
+```sh
+cargo xtask plan-release
+```
+
+Reconciles every `apps/<app>/paper.toml` version and `release.toml`'s version
+against what GitHub already lists as released, and reports which ones need
+building — never a `git diff`, so a force-push, a multi-commit push, a re-run
+of a red build, or a revert all reconcile the same way. Publishing nothing is
+the normal case and exits `0`; a declared version already published under
+different content exits non-zero, because that is a mistake to see rather than
+skip. `--format json` gives a workflow step something to parse. See
+`xtask/src/plan_release.rs`'s module doc and ADR-0026 for the tag and digest
+convention it reads.
 
 ## Installing it
 

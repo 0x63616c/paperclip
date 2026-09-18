@@ -1,0 +1,30 @@
+# The platform release manifest (ADR-0026, WWW-61).
+#
+# Bumping `version` here is the only thing needed to ask for a new platform
+# release: `cargo xtask plan-release` and `paperctl upgrade package` both read
+# this file. `upgrade package`'s `--version`/`--protocol`/`--state-version`/
+# `--rollback-to-state` flags override a field individually when given, but
+# absent a flag this file settles it.
+#
+# This is not a crate version. Every crate in the workspace carries
+# `[workspace.package] version = "0.1.0"` because Cargo requires one; nothing
+# reads it as a release number and the two are not meant to track each other
+# (ADR-0026).
+
+[release]
+version = "0.1.0"
+protocol = "1.0"
+
+# `writes` and `readable_back_to` are spelled out rather than shortened to
+# `state_version`/`rollback_to_state`, because those two numbers are one
+# editing mistake apart (ADR-0019's doc comment on `PackageArgs`) and a name
+# that says what each one means is harder to swap by accident than a
+# position in an argument list ever was.
+[release.state]
+# The persistent state version this release writes.
+writes = 1
+# The lowest state version that can still read what this release writes.
+# Equal to `writes` only when the change is *not* backward compatible — that
+# equality is what makes the updater snapshot state before activating
+# (ADR-0019).
+readable_back_to = 1

@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Dev-workflow recipes with real logic: the device bundle, and ADR scaffolding."
+description = "Dev-workflow recipes with real logic: the device bundle, ADR scaffolding, and the release planner."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,12 @@ repository.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

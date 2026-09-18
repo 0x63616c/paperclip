@@ -24,6 +24,11 @@ then, entries below are grouped by project stage rather than by release tag.
 - Fuzz targets for the two hostile-input surfaces named in `platform/packages`'
   own module docs: `.paperpkg` archive extraction and the `paper.toml`
   parser (`platform/packages/fuzz`).
+- `release.toml`, declaring the platform's own version, protocol and state
+  numbers — `paperctl upgrade package` now reads it, with its CLI flags as
+  per-field overrides — and `cargo xtask plan-release`, which reconciles
+  declared app and platform versions against what GitHub already lists as
+  published and reports what needs publishing (WWW-61, ADR-0026).
 
 ### Fixed
 

@@ -94,21 +94,29 @@ pub(crate) struct PackageArgs {
     /// and `bin/settings`.
     #[arg(long)]
     source: PathBuf,
-    /// The release version.
+    /// `release.toml`, which declares the version, protocol and state
+    /// numbers a plain `package` invocation builds (WWW-61, ADR-0026).
+    #[arg(long, default_value = crate::release_manifest::RELEASE_MANIFEST_FILE_NAME)]
+    release_manifest: PathBuf,
+    /// The release version. Overrides `release.toml` when given.
     #[arg(long)]
-    version: semver::Version,
-    /// The protocol this platform speaks.
-    #[arg(long, default_value = "1.0")]
-    protocol: String,
-    /// The persistent state version this release writes.
-    #[arg(long, default_value_t = 1)]
-    state_version: u32,
+    version: Option<semver::Version>,
+    /// The protocol this platform speaks. Overrides `release.toml` when
+    /// given.
+    #[arg(long)]
+    protocol: Option<String>,
+    /// The persistent state version this release writes. Overrides
+    /// `release.toml` when given.
+    #[arg(long)]
+    state_version: Option<u32>,
     /// The lowest state version that can still read what this release writes.
+    /// Overrides `release.toml` when given.
     ///
-    /// Leave it equal to `--state-version` only when the change is *not*
-    /// backward compatible: that is what makes the updater take a snapshot
-    /// before it activates, so a rollback is a rollback rather than a swap
-    /// over bytes the older release cannot parse.
+    /// Leave it equal to `--state-version` (or, in `release.toml`, to
+    /// `writes`) only when the change is *not* backward compatible: that is
+    /// what makes the updater take a snapshot before it activates, so a
+    /// rollback is a rollback rather than a swap over bytes the older
+    /// release cannot parse.
     #[arg(long)]
     rollback_to_state: Option<u32>,
     /// Release notes.
@@ -285,11 +293,18 @@ fn package(args: &PackageArgs) -> Result<(), CommandError> {
     use paper_packages::store;
     use paper_updater::bundle;
 
-    let protocol = args
-        .protocol
+    let declared = crate::release_manifest::DeclaredRelease::read(&args.release_manifest)?;
+    let version = args.version.clone().unwrap_or(declared.version);
+    let protocol_str = args.protocol.clone().unwrap_or(declared.protocol);
+    let state_version = args.state_version.unwrap_or(declared.state_writes);
+    let rollback_to_state = args
+        .rollback_to_state
+        .unwrap_or(declared.state_readable_back_to);
+
+    let protocol = protocol_str
         .parse::<paper_protocol::ProtocolVersion>()
         .map_err(|source| CommandError::Protocol {
-            value: args.protocol.clone(),
+            value: protocol_str,
             source,
         })?;
     let secret: SecretKey = crate::install::read_text(&args.key)?.parse()?;
@@ -297,11 +312,11 @@ fn package(args: &PackageArgs) -> Result<(), CommandError> {
     let manifest = bundle::describe(
         &args.source,
         &bundle::Description {
-            version: args.version.clone(),
+            version,
             protocol,
             published: store::now(),
-            state_version: args.state_version,
-            rollback_to_state: args.rollback_to_state.unwrap_or(args.state_version),
+            state_version,
+            rollback_to_state,
             notes: args.notes.clone(),
             extras: &extras,
         },

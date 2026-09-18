@@ -272,6 +272,11 @@ pub(crate) enum CommandError {
         source: paper_protocol::ParseError,
     },
 
+    /// `release.toml` could not be read.
+    #[cfg(feature = "publishing")]
+    #[error("the release manifest could not be read")]
+    ReleaseManifest(#[from] crate::release_manifest::ReleaseManifestError),
+
     /// The Mac-side device transport could not reach or complete on the
     /// tablet — no device resolved, `ssh` failed, or the remote command
     /// exited non-zero.

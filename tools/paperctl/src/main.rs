@@ -39,6 +39,8 @@ mod open;
 mod packaging;
 #[cfg(feature = "desktop")]
 mod preview;
+#[cfg(feature = "publishing")]
+mod release_manifest;
 #[cfg(feature = "apps")]
 mod run;
 #[cfg(feature = "apps")]

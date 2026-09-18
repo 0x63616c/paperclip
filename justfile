@@ -89,3 +89,8 @@ device-bundle *ARGS:
 # row to docs/adr/README.md, in the same commit.
 new-adr TITLE:
     cargo xtask new-adr "{{TITLE}}"
+
+# "What needs publishing?" — declared app and platform versions against what
+# GitHub already lists as released (WWW-61).
+plan-release *ARGS:
+    cargo xtask plan-release {{ARGS}}
