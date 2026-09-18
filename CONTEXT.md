@@ -90,6 +90,15 @@ concurrent contacts. The pen and the preview's mouse are always exactly one
 contact, so an app that does not care about multitouch can ignore contact ids
 entirely (`platform/protocol/src/input.rs`).
 
+**System gesture** — a gesture the compositor claims for itself rather than
+passing to the focused app: the **escape pinch** (two touch contacts closing
+together) and an **edge swipe** (a contact that began near one of the
+panel's four edges and has since travelled inward past a threshold).
+Confirmation is spatial, not time-based — `PointerEvent` carries no
+timestamp — so a long press is simply a contact that never crosses that
+movement threshold, not a separately timed gesture
+(`platform/compositor/src/gesture.rs`, ADR-0034).
+
 **Run log** — the record `paperctl open` and `paperctl deploy` write for each
 attempt, read back by `paperctl logs`. Distinct from a systemd journal: it is
 Paperclip's own record of what a Mac-initiated run against the tablet did,

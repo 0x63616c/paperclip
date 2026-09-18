@@ -15,6 +15,11 @@
 //! `surface::tests::an_out_of_bounds_rect_never_reaches_the_pool` for the
 //! test that pins this ordering down.
 //!
+//! [`gesture`] is a third, independent piece: a pure detector that turns a
+//! stream of pointer events into a per-event app-vs-system [`gesture::
+//! Verdict`], with no dependency on `pool` or `surface` and none on a clock
+//! or an event loop (WWW-52, WWW-80).
+//!
 //! ## What this crate does not do yet
 //!
 //! There is no socket, no client connection, and no running process here.
@@ -22,10 +27,14 @@
 //! crash/hang teardown are WWW-78, and moving a real client (Home, the test
 //! card, ...) onto this wire is WWW-81. Both need the state this crate
 //! defines to exist first, which is what makes this the foundation rather
-//! than a partial version of either.
+//! than a partial version of either. [`gesture`] is wired into that same
+//! event loop by WWW-78 too — this crate only classifies events, it does
+//! not read them off a socket.
 
+pub mod gesture;
 pub mod pool;
 pub mod surface;
 
+pub use gesture::{Edge, GestureDetector, SystemGesture, Verdict};
 pub use pool::{Pool, PoolError};
 pub use surface::{Committed, Surface, SurfaceError};
