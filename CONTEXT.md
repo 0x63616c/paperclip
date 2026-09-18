@@ -14,6 +14,8 @@ back to it (`platform/device/src/stock.rs`).
 session and back, as one ordered, safety-critical operation. Owned by a single
 type, `paper_device::takeover::Takeover`, because the order of acquiring and
 releasing display ownership is "the whole of the safety argument" (ADR-0011).
+Why the display is taken over at all, rather than Paperclip running in-process
+within Xochitl or alongside it, is argued separately (ADR-0036).
 
 **Hold** — presenting one screen on the panel and keeping it there for a
 duration, as opposed to an interactive session. `paper_device::hold` runs a
