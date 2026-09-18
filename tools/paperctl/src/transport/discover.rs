@@ -44,6 +44,11 @@ pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// criterion 8), so they accept the cheaper, honest trade instead: a
 /// sleeping tablet reads as unreachable rather than waiting to find out. A
 /// person who wants a diagnostic against a sleeping tablet wakes it first.
+// Mac-only: `deploy`, `doctor` and `remote` are the only callers and all
+// three are `#[cfg(not(target_os = "linux"))]` (main.rs, transport/mod.rs), so
+// on a device build this is dead rather than merely unused. Gated for the same
+// reason `remote` and `runlog` are, rather than left to look reachable.
+#[cfg(not(target_os = "linux"))]
 pub(crate) const QUICK_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// How long any single connection attempt inside [`PROBE_TIMEOUT`]'s budget
@@ -57,6 +62,7 @@ pub(crate) const MDNS_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum DeviceSource {
+    #[cfg(not(target_os = "linux"))]
     Flag,
     Env,
     Pinned,
@@ -68,6 +74,7 @@ pub(crate) enum DeviceSource {
 impl std::fmt::Display for DeviceSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            #[cfg(not(target_os = "linux"))]
             Self::Flag => "--device flag",
             Self::Env => "PAPERCTL_DEVICE",
             Self::Pinned => "pinned config",
@@ -192,6 +199,7 @@ fn mdns_browse(_timeout: Duration) -> Vec<String> {
 /// config) — this module only orders and probes it.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Inputs {
+    #[cfg(not(target_os = "linux"))]
     pub(crate) flag: Option<String>,
     pub(crate) env: Option<String>,
     pub(crate) pinned: Option<String>,
@@ -201,6 +209,11 @@ pub(crate) struct Inputs {
 
 /// No device could be resolved. `tried` names every source in resolution
 /// order, so the message is useful without a debugger.
+// Mac-only: `deploy`, `doctor` and `remote` are the only callers and all
+// three are `#[cfg(not(target_os = "linux"))]` (main.rs, transport/mod.rs), so
+// on a device build this is dead rather than merely unused. Gated for the same
+// reason `remote` and `runlog` are, rather than left to look reachable.
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug, thiserror::Error)]
 #[error("no tablet found; tried, in order:\n{}", .tried.iter().map(|line| format!("  {line}")).collect::<Vec<_>>().join("\n"))]
 pub(crate) struct NoDeviceFound {
@@ -209,6 +222,7 @@ pub(crate) struct NoDeviceFound {
 
 /// Resolves one device, per the order in the issue: flag, env, pin, then
 /// discovery (USB, mDNS, cache) in turn, taking the first reachable one.
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn resolve(
     inputs: &Inputs,
     prober: &dyn Prober,
@@ -312,6 +326,10 @@ mod tests {
     use super::*;
     use crate::transport::test_doubles::FakeProber;
 
+    // `resolve` and the `--device` flag are Mac-only, so the resolution-order
+    // tests below and this helper do not exist on a device build. The
+    // `discover_all` and probing tests are not gated: both halves run there.
+    #[cfg(not(target_os = "linux"))]
     fn inputs() -> Inputs {
         Inputs {
             flag: None,
@@ -322,6 +340,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn flag_beats_everything() {
         let mut inputs = inputs();
@@ -335,6 +354,7 @@ mod tests {
         assert_eq!(source, DeviceSource::Flag);
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn env_beats_pinned_and_discovery() {
         let mut inputs = inputs();
@@ -347,6 +367,7 @@ mod tests {
         assert_eq!(source, DeviceSource::Env);
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn pinned_beats_usb() {
         let mut inputs = inputs();
@@ -358,6 +379,7 @@ mod tests {
         assert_eq!(source, DeviceSource::Pinned);
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn pinned_is_used_even_when_unreachable() {
         // A pin is a promise to skip discovery, not a promise the tablet is
@@ -371,6 +393,7 @@ mod tests {
         assert_eq!(source, DeviceSource::Pinned);
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn usb_beats_mdns_and_cache() {
         let mut inputs = inputs();
@@ -383,6 +406,7 @@ mod tests {
         assert_eq!(source, DeviceSource::Usb);
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn mdns_beats_cache_when_usb_is_unreachable() {
         let mut inputs = inputs();
@@ -395,6 +419,7 @@ mod tests {
         assert_eq!(source, DeviceSource::Mdns);
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn cache_is_the_last_resort() {
         let mut inputs = inputs();
@@ -406,6 +431,7 @@ mod tests {
         assert_eq!(source, DeviceSource::Cache);
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn nothing_found_names_every_source_tried() {
         let inputs = inputs();
@@ -441,6 +467,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn probes_are_bounded_by_the_given_timeout() {
         let inputs = inputs();
@@ -459,6 +486,7 @@ mod tests {
     #[test]
     fn discover_all_lists_every_source_once_each() {
         let inputs = Inputs {
+            #[cfg(not(target_os = "linux"))]
             flag: None,
             env: Some("env-host".to_owned()),
             pinned: Some("pinned-host".to_owned()),
@@ -496,6 +524,7 @@ mod tests {
     #[test]
     fn discover_all_deduplicates_a_host_seen_from_two_sources() {
         let inputs = Inputs {
+            #[cfg(not(target_os = "linux"))]
             flag: None,
             env: None,
             pinned: Some(USB_HOST.to_owned()),

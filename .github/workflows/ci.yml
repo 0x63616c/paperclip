@@ -23,6 +23,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  clippy-device:
+    # The same lints against the device target. `paperctl`'s Mac half is
+    # `#[cfg(not(target_os = "linux"))]`, so code that is live on a Mac can be
+    # dead on the tablet, and vice versa. `device-check` runs `cargo check`,
+    # not `clippy`, which is the hole WWW-65's six dead-code findings fell
+    # through.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings
+
   test:
     runs-on: ubuntu-latest
     steps:

@@ -174,6 +174,9 @@ impl Config {
     /// Records the host the most recent successful resolution used, so a
     /// tablet with no USB link and no mDNS response can still be found next
     /// time — the "cached last-good host" resolution source.
+    // Mac-only: `transport::remote` is the only caller and it is
+    // `#[cfg(not(target_os = "linux"))]`.
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn remember(&mut self, host: &str) -> Result<(), ConfigError> {
         if self.file.cache.as_deref() == Some(host) {
             return Ok(());

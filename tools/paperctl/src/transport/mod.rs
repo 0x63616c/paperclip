@@ -25,7 +25,9 @@ pub(crate) mod discover;
 // it.
 #[cfg(not(target_os = "linux"))]
 pub(crate) mod remote;
-#[cfg(not(target_os = "linux"))]
+// Not gated, unlike `remote` and `runlog`: `FakeProber` is used by
+// `discover`'s own tests, which run on both sides. The Mac-only half
+// (`FakeSsh`) carries the gate instead, inside the module.
 pub(crate) mod test_doubles;
 
 use clap::Args;

@@ -1,4 +1,8 @@
-//! Shared test doubles for the Mac-side device transport.
+//! Shared test doubles for the device transport.
+//!
+//! Two halves with different reach: `FakeProber` is used by `discover`'s tests,
+//! which run on the device target too, so it is not gated. `FakeSsh` doubles
+//! `remote::SshRunner`, and `remote` does not exist on a device build.
 //!
 //! `remote`, `doctor` and `deploy` each need to assert the exact command
 //! line they send over SSH, and `doctor` also needs to fake reachability —
@@ -9,12 +13,15 @@
 #![cfg(test)]
 
 use std::cell::RefCell;
+#[cfg(not(target_os = "linux"))]
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::discover::Prober;
+#[cfg(not(target_os = "linux"))]
 use super::remote::{CapturedOutput, SshRunner, TransportError};
 
+#[cfg(not(target_os = "linux"))]
 #[derive(Default)]
 pub(crate) struct FakeSsh {
     pub(crate) blocking_calls: RefCell<Vec<(String, Vec<String>)>>,
@@ -30,6 +37,7 @@ pub(crate) struct FakeSsh {
     pub(crate) stdin_result: CapturedOutput,
 }
 
+#[cfg(not(target_os = "linux"))]
 impl SshRunner for FakeSsh {
     fn run_blocking(&self, host: &str, remote_argv: &[String]) -> Result<i32, TransportError> {
         self.blocking_calls
@@ -120,11 +128,13 @@ impl FakeProber {
     }
 
     /// Every `(host, timeout)` passed to [`Prober::reachable`], in call order.
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn reachable_calls(&self) -> Vec<(String, Duration)> {
         self.reachable_calls.borrow().clone()
     }
 
     /// Every timeout passed to [`Prober::mdns_candidates`], in call order.
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn mdns_calls(&self) -> Vec<Duration> {
         self.mdns_calls.borrow().clone()
     }

@@ -15,6 +15,14 @@ fmt:
 clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
+# The same lints against the device target. Not redundant: `paperctl`'s Mac
+# half is `#[cfg(not(target_os = "linux"))]`, so code that is live on a Mac can
+# be dead on the tablet — and a Mac-only `just clippy` cannot see it. CI runs on
+# Linux and caught six such findings that were invisible locally (WWW-65).
+# `check-device` does not cover this: it runs `cargo check`, not `clippy`.
+clippy-device:
+    cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings
+
 test:
     cargo test --workspace
 
@@ -45,7 +53,7 @@ signing-boundary:
     ./tools/assert-no-signing-path.sh target/release/paperctl
 
 # Exactly the jobs in .github/workflows/ci.yml, in the same order.
-ci: fmt clippy test doc check-device check-paperctl-device feature-matrix signing-boundary
+ci: fmt clippy clippy-device test doc check-device check-paperctl-device feature-matrix signing-boundary
 
 # Fuzz one of platform/packages/fuzz's targets (`archive` or `manifest`) for
 # SECONDS. Needs a nightly toolchain and `cargo install cargo-fuzz`.

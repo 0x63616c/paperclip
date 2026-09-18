@@ -46,6 +46,9 @@ pub(crate) fn run(args: &DevicesArgs) -> Result<(), CommandError> {
 fn list(output: OutputFormat) -> Result<(), CommandError> {
     let config = Config::load(&crate::transport::config::default_path())?;
     let inputs = discover::Inputs {
+        // `paperctl devices` is unconditional, but the `--device` flag it would
+        // carry is Mac-only, so the field does not exist on a device build.
+        #[cfg(not(target_os = "linux"))]
         flag: None,
         env: crate::transport::device_env(),
         pinned: config.pinned().map(str::to_owned),
