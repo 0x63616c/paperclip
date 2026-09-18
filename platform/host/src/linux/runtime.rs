@@ -321,7 +321,7 @@ impl Supervisor {
                     );
                 }
                 for action in actions {
-                    if let Some(outcome) = self.execute(&action, now) {
+                    if let Some(outcome) = self.execute(&action) {
                         self.write_status();
                         return Ok(outcome);
                     }
@@ -441,10 +441,10 @@ impl Supervisor {
     }
 
     /// Performs one action. `Some(..)` ends the run.
-    fn execute(&mut self, action: &Action, now: Instant) -> Option<Outcome> {
+    fn execute(&mut self, action: &Action) -> Option<Outcome> {
         match action {
             Action::StartForeground { target, .. } => {
-                self.start_foreground(target, now);
+                self.start_foreground(target);
                 None
             }
             Action::TerminateSession { reason, escalation } => {
@@ -474,7 +474,7 @@ impl Supervisor {
         }
     }
 
-    fn start_foreground(&mut self, target: &Foreground, now: Instant) {
+    fn start_foreground(&mut self, target: &Foreground) {
         match target {
             Foreground::Stock => {
                 self.session_unit = None;
