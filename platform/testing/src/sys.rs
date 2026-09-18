@@ -164,6 +164,7 @@ struct UnitState {
 pub struct FakeUnitControl {
     units: Mutex<HashMap<String, UnitState>>,
     refuse_start: Mutex<bool>,
+    fail_start: Mutex<bool>,
 }
 
 impl FakeUnitControl {
@@ -200,10 +201,26 @@ impl FakeUnitControl {
     pub fn refuse_start(&self) {
         *self.refuse_start.lock().expect("refuse_start") = true;
     }
+
+    /// Makes every subsequent [`UnitControl::start`] return `Err` instead of
+    /// accepting the start — `systemctl start` itself failing, distinct from
+    /// [`Self::refuse_start`]'s "accepted but never came up". The two are
+    /// different facts to a caller: this one is known the instant `start`
+    /// returns, the other only after however long the caller waits.
+    pub fn fail_start(&self) {
+        *self.fail_start.lock().expect("fail_start") = true;
+    }
 }
 
 impl UnitControl for FakeUnitControl {
     fn start(&self, unit: &str) -> Result<(), UnitError> {
+        if *self.fail_start.lock().expect("fail_start") {
+            return Err(UnitError {
+                verb: "start",
+                unit: unit.to_owned(),
+                reason: "refused by FakeUnitControl::fail_start".to_owned(),
+            });
+        }
         let mut units = self.units.lock().expect("units");
         let entry = units.entry(unit.to_owned()).or_default();
         if !*self.refuse_start.lock().expect("refuse_start") {

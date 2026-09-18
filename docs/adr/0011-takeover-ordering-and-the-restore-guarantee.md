@@ -1,6 +1,7 @@
 # ADR-0011 — Takeover ordering, and what actually guarantees the restore
 
-**Status:** accepted, **amended after a hardware incident** (Stage 3, WWW-3).
+**Status:** accepted, **amended after a hardware incident** (Stage 3, WWW-3),
+**amended again to close a duplication** (Stage 2, WWW-49).
 
 > **Amendment, 2026-09-17.** The release order below originally ended at
 > "restore stock", and that was wrong in a way that hurt: it left our PID in
@@ -8,6 +9,18 @@
 > `NRestarts=2` of a permitted 4. The table now has a step 2 that puts the
 > vendor locks back **before** stock is started, and the "what guarantees the
 > restore" section has been rewritten — the original three layers did not.
+
+> **Amendment, WWW-49.** "One type owns the order" was the decision; it was
+> not, until now, what the code did. Six ordering-critical steps — the health
+> gate, the caller's own preflight, the lock capture and the wakelock —
+> lived in the caller, written out three times (twice in `hold.rs`, once in
+> `examples/takeover.rs`), untested, because they read through a concrete
+> `Systemctl` rather than the `ServiceControl` seam the type's own tests use.
+> `Takeover::acquire` now performs the whole sequence itself; a caller
+> supplies closures for *what*, never *when*. The table below gains row 0 —
+> the settle gate that refuses before anything is touched — promoted to first
+> position for the same reason lock restoration below is "layer 0": no later
+> row substitutes for it.
 
 ## Context
 
@@ -33,18 +46,31 @@ facts make it unforgiving:
 
 ## Decision
 
-One type, `paper_device::Takeover`, owns the order:
+One type, `paper_device::Takeover`, owns the order — the whole of it, inside
+`Takeover::acquire` and `Takeover::release`, not split across the type and
+whichever caller remembered the preamble:
 
 | | Acquire | Release |
 |---|---|---|
-| 1 | arm the watchdog | clear the panel |
+| 0 | **the settle gate**: refuse before anything is touched unless stock is healthy and has restart budget to spare | |
+| 1 | the caller's own preflight (e.g. refuse to present a blank frame) | clear the panel |
 | 2 | record the vendor lock state | **put the vendor locks back** |
-| 3 | check the start budget | wait until the panel is genuinely free |
-| 4 | take the wakelock | restore stock |
-| 5 | stop stock cleanly | release the wakelock |
+| 3 | take the wakelock | wait until the panel is genuinely free |
+| 4 | arm the watchdog | restore stock |
+| 5 | check the start budget, then stop stock cleanly | release the wakelock |
 | 6 | | disarm the watchdog |
 
-The watchdog is armed **first**, before anything can go wrong, so even a failure
+Row 0 is a private function, `wait_until_safe_to_stop`, that only
+`Takeover::acquire` may call — `grep -rn 'wait_until_safe_to_stop'` finds no
+call outside `platform/device/src/takeover.rs`. It reads a `StockHealth`
+snapshot the caller supplies as a closure (a plain read with no side effect on
+the device, so unlike every other row its *position* relative to the rest
+carries no safety argument of its own — only the gate's position does) and
+refuses before the lock capture, the wakelock or the stop, exactly the
+ordering `hold.rs`'s two sessions and `examples/takeover.rs` used to
+duplicate by hand.
+
+The watchdog is armed **first** among the mutating steps, before anything can go wrong, so even a failure
 inside the stop is covered by something outside this process. The budget is
 checked before the stop, so a refusal leaves the tablet exactly as found. The
 wakelock is taken before the stop, because the window where stock is down and
@@ -158,10 +184,20 @@ order — including a service that captures what the registry held at the moment
 `start` was called, so the *ordering* of the lock restore is asserted rather
 than assumed. Both lock tests were confirmed to fail with the restore removed: the acquire and release sequences; restore on drop; **restore after a
 panic**; a spent budget refusing before stock is touched; a failed stop leaving
-stock running and handing the wakelock back to the caller; exactly one guarded
-retry; a hopeless restore reporting failure, releasing the wakelock anyway, and
-leaving the watchdog armed; a double release doing one start; and a session that
-finds stock already down not claiming a restore it did not cause.
+stock running and releasing the wakelock itself rather than handing it back;
+exactly one guarded retry; a hopeless restore reporting failure, releasing the
+wakelock anyway, and leaving the watchdog armed; a double release doing one
+start; and a session that finds stock already down not claiming a restore it
+did not cause.
+
+WWW-49 added five: an unhealthy stock, and one two restarts from the limit,
+each refusing before the lock capture or the wakelock are touched and before
+anything reaches the `ServiceControl` fake at all; a failed caller preflight
+refusing the same way; a failed wakelock acquisition leaving the fake
+untouched; and one end-to-end test asserting the full order — health,
+preflight, locks, wakelock, arm, stop — as a single sequence, which is the
+property the module doc's table claims and the property row 0 above exists
+for. 16 tests total, up from 11.
 
 ## What is not
 

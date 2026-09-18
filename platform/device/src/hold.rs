@@ -984,43 +984,50 @@ mod linux {
         P: FnOnce() -> Result<PanelRecord, DeviceError>,
     {
         let systemctl = Systemctl;
-        let before = systemctl.health();
-        if !before.is_healthy() {
-            return Err(DeviceError::unexpected(format!(
-                "stock is not healthy before the session ({before:?}); refusing to take the display"
-            )));
-        }
-        before.allows_takeover()?;
-
-        // Digested before anything is stopped. A frame that is not worth
-        // presenting must cost the tablet nothing at all.
-        let digest = super::FrameDigest::of(canvas)?;
-        if !digest.looks_drawn() {
-            return Err(DeviceError::unexpected(
-                "the frame is entirely background; refusing to take the display for an empty panel",
-            ));
-        }
-        let expected = format!("sha256:{}", digest.to_hex());
-
-        let locks = VendorLockState::capture()?;
-
-        // Wakelock before the display, always: the window between the stop and
-        // the wakelock is the window a suspend resumes into a second Xochitl.
-        // It is held *here*, in the surviving process, so a presenter that dies
-        // cannot take it with it.
-        let wake = WakeLock::acquire(WAKELOCK_TAG)?;
         let stock = Stock::new(Systemctl, StartBudget::shared());
-        let session = match Takeover::acquire(
+        // `health` and `preflight` both need to leave something behind for
+        // code below that runs after `Takeover::acquire` returns: the health
+        // snapshot becomes `HoldReport::before`, and the digest becomes what
+        // the post-release agreement check compares the presenter against.
+        // Neither is recomputed — the ordering guarantee is about *when* the
+        // gate runs, not about the caller reading twice.
+        let mut before = None;
+        let mut digest = None;
+        let session = Takeover::acquire(
             stock,
-            wake,
+            || {
+                let health = systemctl.health();
+                before = Some(health.clone());
+                health
+            },
+            || {
+                let computed = super::FrameDigest::of(canvas)?;
+                if !computed.looks_drawn() {
+                    return Err(DeviceError::unexpected(
+                        "the frame is entirely background; refusing to take the display for an \
+                         empty panel",
+                    ));
+                }
+                digest = Some(computed);
+                Ok(())
+            },
+            VendorLockState::capture,
+            // Wakelock before the display, always: the window between the
+            // stop and the wakelock is the window a suspend resumes into a
+            // second Xochitl. It is held *here*, in the surviving process, so
+            // a presenter that dies cannot take it with it.
+            || WakeLock::acquire(WAKELOCK_TAG),
             DetachedWatchdog::new(),
-            locks,
             plan.watchdog_budget(),
             SystemTime::now(),
-        ) {
-            Ok(session) => session,
-            Err((error, _wake)) => return Err(error),
-        };
+        )?;
+        let before = before.expect("health always sets this before acquire can return Ok");
+        let expected = format!(
+            "sha256:{}",
+            digest
+                .expect("preflight always sets this before acquire can return Ok")
+                .to_hex()
+        );
 
         let record = present();
 
@@ -1078,30 +1085,30 @@ mod linux {
         P: FnOnce() -> Result<PanelRecord, DeviceError>,
     {
         let systemctl = Systemctl;
-        let before = systemctl.health();
-        if !before.is_healthy() {
-            return Err(DeviceError::unexpected(format!(
-                "stock is not healthy before the session ({before:?}); refusing to take the display"
-            )));
-        }
-        before.allows_takeover()?;
-
-        let locks = VendorLockState::capture()?;
-
-        // Wakelock before the display, always — see `open_and_hold`.
-        let wake = WakeLock::acquire(WAKELOCK_TAG)?;
         let stock = Stock::new(Systemctl, StartBudget::shared());
-        let session = match Takeover::acquire(
+        // `before` is captured out of the `health` closure for the same
+        // reason `open_and_hold` does it — it becomes `HoldReport::before`
+        // below, and must not be a second, later read of stock's health.
+        let mut before = None;
+        let session = Takeover::acquire(
             stock,
-            wake,
+            || {
+                let health = systemctl.health();
+                before = Some(health.clone());
+                health
+            },
+            // No digest agreement check here — see the doc comment above on
+            // why an interactive session has no one canvas to compare
+            // against.
+            || Ok(()),
+            VendorLockState::capture,
+            // Wakelock before the display, always — see `open_and_hold`.
+            || WakeLock::acquire(WAKELOCK_TAG),
             DetachedWatchdog::new(),
-            locks,
             budget.saturating_add(super::WATCHDOG_MARGIN),
             SystemTime::now(),
-        ) {
-            Ok(session) => session,
-            Err((error, _wake)) => return Err(error),
-        };
+        )?;
+        let before = before.expect("health always sets this before acquire can return Ok");
 
         let record = present();
 

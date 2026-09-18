@@ -34,6 +34,7 @@ harness = true
 paper-device = { workspace = true }
 paper-packages = { workspace = true }
 paper-protocol = { workspace = true }
+paper-sys = { workspace = true }
 paper-telemetry = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -43,6 +44,7 @@ libc = { workspace = true }
 
 [dev-dependencies]
 paper-device = { workspace = true }
+paper-testing = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

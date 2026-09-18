@@ -2,15 +2,27 @@
 //!
 //! One type, [`Takeover`], which owns the ordering. The ordering is the whole
 //! of the safety argument, so it lives in one place rather than in every
-//! caller:
+//! caller: every step below, acquire and release both, runs inside
+//! [`Takeover::acquire`] and [`Takeover::release`]. A caller supplies *what*
+//! to check or *how* to obtain a resource — a closure — never *when*; `when`
+//! is this module's alone, which is what makes it impossible to write a
+//! caller that performs the steps out of order or skips one.
 //!
 //! | | Acquire | Release |
 //! |---|---|---|
-//! | 1 | arm the watchdog | clear the panel (the caller, before dropping it) |
+//! | 0 | **the settle gate**: refuse before anything is touched unless stock is healthy and has restart budget to spare | |
+//! | 1 | the caller's own preflight (e.g. refuse to present a blank frame) | clear the panel (the caller, before dropping it) |
 //! | 2 | record the vendor lock state | **put the vendor locks back** |
-//! | 3 | check the start budget | wait until the panel is genuinely free |
-//! | 4 | take the wakelock | restore stock |
-//! | 5 | stop stock cleanly | release the wakelock |
+//! | 3 | take the wakelock | wait until the panel is genuinely free |
+//! | 4 | arm the watchdog | restore stock |
+//! | 5 | check the start budget, then stop stock cleanly | release the wakelock |
+//! | 6 | | disarm the watchdog |
+//!
+//! Row 0 is listed first for the same reason ADR-0011 lists lock restoration
+//! as "layer 0" among what guarantees the restore: it is the one whose
+//! absence is not survivable, and no later row substitutes for it — a
+//! takeover that stops a Xochitl already two restarts from
+//! `StartLimitBurst` is the one that reaches it. See [`wait_until_safe_to_stop`].
 //!
 //! Step 2 of the release is not optional and its absence is not survivable.
 //! Leaving our PID in `/tmp/epframebuffer.lock` made Xochitl abort twice on
@@ -58,7 +70,7 @@ use std::thread;
 
 use crate::error::DeviceError;
 use crate::session::{VendorLockState, WakeLock};
-use crate::stock::{ServiceControl, Stock};
+use crate::stock::{ServiceControl, Stock, StockHealth};
 
 /// The wakelock tag a takeover holds, matching `lib-stock.sh`.
 pub const WAKELOCK_TAG: &str = "paperclip-takeover";
@@ -121,32 +133,81 @@ pub struct Takeover<S: ServiceControl, W: Watchdog> {
     span: tracing::span::EnteredSpan,
 }
 
+/// Row 0 of the acquire table: refuses before anything is touched unless
+/// stock is healthy and has restart budget to spare.
+///
+/// Must never be called from outside this module — every guarantee
+/// [`Takeover::acquire`] makes assumes this ran first, against a snapshot
+/// taken before anything else, and a second call site is a second place that
+/// guarantee could quietly stop holding.
+fn wait_until_safe_to_stop(health: &StockHealth) -> Result<(), DeviceError> {
+    if !health.is_healthy() {
+        return Err(DeviceError::unexpected(format!(
+            "stock is not healthy before the session ({health:?}); refusing to take the display"
+        )));
+    }
+    health.allows_takeover()
+}
+
 impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
-    /// Takes the display, in the order above.
+    /// Takes the display, in the order the module doc's table describes.
     ///
-    /// `wake` is the already-acquired wakelock. It is taken as an argument
-    /// rather than acquired here so that a caller which cannot get one has to
-    /// decide what to do about it explicitly — on this device, running without
-    /// one is a correctness bug, not a degraded mode.
+    /// Every ordering-critical step lives here, not in the caller: `health`,
+    /// `preflight`, `capture_locks` and `acquire_wake` are closures precisely
+    /// so a caller supplies *what* — which health snapshot, which extra
+    /// refusal, which lock registry, which wakelock tag — without being able
+    /// to choose *when*, which stays fixed by this function's body.
+    ///
+    /// - `health` obtains the snapshot [`wait_until_safe_to_stop`] gates on.
+    ///   A plain read with no side effect on the device, so unlike every step
+    ///   after it, its *position* relative to the others carries no safety
+    ///   argument — only the gate's position does.
+    /// - `preflight` is the caller's own additional refusal — `open_and_hold`
+    ///   uses it to refuse a blank frame before anything is stopped.
+    /// - `capture_locks` is normally [`VendorLockState::capture`]; a test
+    ///   supplies [`VendorLockState::capture_at`] against scratch files.
+    /// - `acquire_wake` is normally `|| WakeLock::acquire(WAKELOCK_TAG)`. If
+    ///   it fails there is nothing to hand back — running without a wakelock
+    ///   is a correctness bug on this device, not a degraded mode, so the
+    ///   caller sees the failure at the point it chose to try. If a *later*
+    ///   step fails after the wakelock was taken, this function drops it
+    ///   itself; [`WakeLock`]'s own `Drop` releases it, which is why the
+    ///   error type here is a plain [`DeviceError`] rather than the
+    ///   `(DeviceError, WakeLock)` an earlier version of this signature
+    ///   needed when the caller held the wakelock across the call.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "four closures carry the ordering-critical steps this function exists to \
+                  own; a struct to bundle them would still need one field per step and would \
+                  cost a type parameter per closure for no clarity gained"
+    )]
     pub fn acquire(
         mut stock: Stock<S>,
-        wake: WakeLock,
+        health: impl FnOnce() -> StockHealth,
+        preflight: impl FnOnce() -> Result<(), DeviceError>,
+        capture_locks: impl FnOnce() -> Result<VendorLockState, DeviceError>,
+        acquire_wake: impl FnOnce() -> Result<WakeLock, DeviceError>,
         mut watchdog: W,
-        locks: VendorLockState,
         budget: Duration,
         now: SystemTime,
-    ) -> Result<Self, (DeviceError, WakeLock)> {
+    ) -> Result<Self, DeviceError> {
         let span = tracing::info_span!("takeover").entered();
+
+        wait_until_safe_to_stop(&health())?;
+        preflight()?;
+        let locks = capture_locks()?;
+        let wake = acquire_wake()?;
+
         // The watchdog is armed before the stop, so that even a failure inside
         // `stop_for_session` is covered by something outside this process.
         if let Err(error) = watchdog.arm(budget) {
             tracing::warn!("budget refusal: watchdog would not arm: {error}");
-            return Err((error, wake));
+            return Err(error);
         }
         if let Err(error) = stock.stop_for_session(now) {
             tracing::warn!("budget refusal: stock would not stop for this session: {error}");
             let _ = watchdog.disarm();
-            return Err((error, wake));
+            return Err(error);
         }
         Ok(Self {
             stock,
@@ -353,10 +414,10 @@ mod tests {
     use super::{DEFAULT_WATCHDOG, NoWatchdog, Takeover, Watchdog};
     use crate::error::DeviceError;
     use crate::session::{VendorLockState, WakeLock};
-    use crate::stock::{ServiceControl, StartBudget, Stock};
+    use crate::stock::{ServiceControl, StartBudget, Stock, StockHealth};
     use std::cell::RefCell;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use std::time::{Duration, SystemTime};
 
@@ -449,7 +510,7 @@ mod tests {
         dir
     }
 
-    fn wakelock(dir: &std::path::Path) -> WakeLock {
+    fn wakelock(dir: &Path) -> WakeLock {
         WakeLock::acquire_at(
             "paperclip-test",
             &dir.join("wake_lock"),
@@ -458,13 +519,13 @@ mod tests {
         .expect("takes the lock")
     }
 
-    fn budget(dir: &std::path::Path) -> StartBudget {
+    fn budget(dir: &Path) -> StartBudget {
         StartBudget::at(&dir.join("starts"))
     }
 
     /// Lock state over scratch files. `registry` is what the vendor registry
     /// held before the takeover, mirroring `/tmp/epframebuffer.lock`.
-    fn locks(dir: &std::path::Path, registry: Option<&str>) -> VendorLockState {
+    fn locks(dir: &Path, registry: Option<&str>) -> VendorLockState {
         let registry_path = dir.join("epframebuffer.lock");
         let epd_path = dir.join("epd.lock");
         fs::write(&epd_path, "").expect("creates the epd lock");
@@ -478,12 +539,45 @@ mod tests {
     }
 
     /// What a takeover does to the registry: claims it with its own PID.
-    fn claim(dir: &std::path::Path, pid: u32) {
+    fn claim(dir: &Path, pid: u32) {
         fs::write(
             dir.join("epframebuffer.lock"),
             format!("{pid}\npaperclip\nimx8mm-ferrari\nmachine\nboot\n"),
         )
         .expect("claims the registry");
+    }
+
+    /// A `StockHealth` that never refuses `wait_until_safe_to_stop`.
+    fn healthy() -> StockHealth {
+        StockHealth {
+            active: true,
+            home_mounted: true,
+            ..StockHealth::default()
+        }
+    }
+
+    /// Acquires with the ordinary preamble most tests want: a healthy stock
+    /// snapshot, no extra preflight, and locks/wakelock captured fresh from
+    /// `dir`. Generic over `S` and `W` so the same helper serves the tests
+    /// that need a stand-in `ServiceControl` or `NoWatchdog`.
+    fn acquire<S: ServiceControl, W: Watchdog>(
+        stock: Stock<S>,
+        watchdog: W,
+        dir: &Path,
+        registry: Option<&str>,
+    ) -> Result<Takeover<S, W>, DeviceError> {
+        let state = locks(dir, registry);
+        let wake = wakelock(dir);
+        Takeover::acquire(
+            stock,
+            healthy,
+            || Ok(()),
+            move || Ok(state),
+            move || Ok(wake),
+            watchdog,
+            DEFAULT_WATCHDOG,
+            SystemTime::now(),
+        )
     }
 
     #[test]
@@ -492,16 +586,8 @@ mod tests {
         let log = Rc::new(RefCell::new(Vec::new()));
         let stock = Stock::new(FakeService::new(&log), budget(&dir));
 
-        let session = Takeover::acquire(
-            stock,
-            wakelock(&dir),
-            FakeWatchdog::new(&log),
-            locks(&dir, Some("before\n")),
-            DEFAULT_WATCHDOG,
-            SystemTime::now(),
-        )
-        .map_err(|(error, _)| error)
-        .expect("takes the display");
+        let session = acquire(stock, FakeWatchdog::new(&log), &dir, Some("before\n"))
+            .expect("takes the display");
         assert!(session.holds_display());
 
         session.release(SystemTime::now()).expect("restores stock");
@@ -526,16 +612,8 @@ mod tests {
         let stock = Stock::new(FakeService::new(&log), budget(&dir));
 
         {
-            let _session = Takeover::acquire(
-                stock,
-                wakelock(&dir),
-                FakeWatchdog::new(&log),
-                locks(&dir, Some("before\n")),
-                DEFAULT_WATCHDOG,
-                SystemTime::now(),
-            )
-            .map_err(|(error, _)| error)
-            .expect("takes the display");
+            let _session = acquire(stock, FakeWatchdog::new(&log), &dir, Some("before\n"))
+                .expect("takes the display");
         }
 
         assert!(
@@ -556,16 +634,8 @@ mod tests {
         let inner = Rc::clone(&log);
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let _session = Takeover::acquire(
-                stock,
-                wakelock(&dir),
-                FakeWatchdog::new(&inner),
-                locks(&dir, Some("before\n")),
-                DEFAULT_WATCHDOG,
-                SystemTime::now(),
-            )
-            .map_err(|(error, _)| error)
-            .expect("takes the display");
+            let _session = acquire(stock, FakeWatchdog::new(&inner), &dir, Some("before\n"))
+                .expect("takes the display");
             panic!("a screen did something stupid");
         }));
 
@@ -587,15 +657,8 @@ mod tests {
         }
 
         let stock = Stock::new(FakeService::new(&log), starts);
-        let (error, _wake) = Takeover::acquire(
-            stock,
-            wakelock(&dir),
-            FakeWatchdog::new(&log),
-            locks(&dir, Some("before\n")),
-            DEFAULT_WATCHDOG,
-            now,
-        )
-        .expect_err("refuses");
+        let error =
+            acquire(stock, FakeWatchdog::new(&log), &dir, Some("before\n")).expect_err("refuses");
 
         assert!(error.to_string().contains("emergency shell"), "{error}");
         // Armed, then disarmed. Stock was never stopped.
@@ -603,27 +666,32 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_stop_leaves_stock_running_and_returns_the_wakelock() {
+    fn a_failed_stop_releases_the_wakelock_rather_than_returning_it() {
+        // Before this ticket, a failed `stop` handed the wakelock back to the
+        // caller as `Err((DeviceError, WakeLock))`, so releasing it stayed the
+        // caller's decision. Now `acquire` owns acquiring it too, so it owns
+        // this failure path as well: the wakelock is a local `WakeLock` inside
+        // `acquire`, and returning `Err(error)` drops it, which is what
+        // releases it — no caller has to remember to.
         let dir = scratch("stopfail");
         let log = Rc::new(RefCell::new(Vec::new()));
         let mut service = FakeService::new(&log);
         service.stop_fails = true;
 
-        let (error, wake) = Takeover::acquire(
+        let error = acquire(
             Stock::new(service, budget(&dir)),
-            wakelock(&dir),
             FakeWatchdog::new(&log),
-            locks(&dir, Some("before\n")),
-            DEFAULT_WATCHDOG,
-            SystemTime::now(),
+            &dir,
+            Some("before\n"),
         )
         .expect_err("refuses");
 
         assert!(error.to_string().contains("stop refused"), "{error}");
-        // The caller gets the wakelock back rather than it being dropped inside
-        // a failed constructor, so releasing it stays their decision.
-        assert_eq!(wake.tag(), "paperclip-test");
         assert_eq!(log.borrow().as_slice(), ["arm", "stop", "disarm"]);
+        assert_eq!(
+            fs::read_to_string(dir.join("wake_unlock")).expect("released"),
+            "paperclip-test"
+        );
     }
 
     #[test]
@@ -633,15 +701,12 @@ mod tests {
         let mut service = FakeService::new(&log);
         service.failed_starts_remaining = 1;
 
-        let session = Takeover::acquire(
+        let session = acquire(
             Stock::new(service, budget(&dir)),
-            wakelock(&dir),
             FakeWatchdog::new(&log),
-            locks(&dir, Some("before\n")),
-            DEFAULT_WATCHDOG,
-            SystemTime::now(),
+            &dir,
+            Some("before\n"),
         )
-        .map_err(|(error, _)| error)
         .expect("takes the display");
         session
             .release(SystemTime::now())
@@ -668,15 +733,12 @@ mod tests {
         let mut service = FakeService::new(&log);
         service.failed_starts_remaining = 99;
 
-        let session = Takeover::acquire(
+        let session = acquire(
             Stock::new(service, budget(&dir)),
-            wakelock(&dir),
             FakeWatchdog::new(&log),
-            locks(&dir, Some("before\n")),
-            DEFAULT_WATCHDOG,
-            SystemTime::now(),
+            &dir,
+            Some("before\n"),
         )
-        .map_err(|(error, _)| error)
         .expect("takes the display");
 
         let error = session
@@ -701,10 +763,6 @@ mod tests {
         let dir = scratch("lockorder");
         let log = Rc::new(RefCell::new(Vec::new()));
         let registry = dir.join("epframebuffer.lock");
-        let state = locks(
-            &dir,
-            Some("35366\nxochitl\nimx8mm-ferrari\nmachine\nboot\n"),
-        );
 
         // A service whose `start` records what the registry held at that moment.
         #[derive(Debug)]
@@ -739,15 +797,12 @@ mod tests {
             seen_at_start: Rc::clone(&seen),
         };
 
-        let session = Takeover::acquire(
+        let session = acquire(
             Stock::new(service, budget(&dir)),
-            wakelock(&dir),
             FakeWatchdog::new(&log),
-            state,
-            DEFAULT_WATCHDOG,
-            SystemTime::now(),
+            &dir,
+            Some("35366\nxochitl\nimx8mm-ferrari\nmachine\nboot\n"),
         )
-        .map_err(|(error, _)| error)
         .expect("takes the display");
 
         // The vendor engine claims the panel, exactly as it does on device.
@@ -771,17 +826,13 @@ mod tests {
         let dir = scratch("lockabsent");
         let log = Rc::new(RefCell::new(Vec::new()));
         let registry = dir.join("epframebuffer.lock");
-        let state = locks(&dir, None);
 
-        let session = Takeover::acquire(
+        let session = acquire(
             Stock::new(FakeService::new(&log), budget(&dir)),
-            wakelock(&dir),
             FakeWatchdog::new(&log),
-            state,
-            DEFAULT_WATCHDOG,
-            SystemTime::now(),
+            &dir,
+            None,
         )
-        .map_err(|(error, _)| error)
         .expect("takes the display");
 
         claim(&dir, std::process::id());
@@ -797,15 +848,12 @@ mod tests {
     fn releasing_twice_is_harmless() {
         let dir = scratch("twice");
         let log = Rc::new(RefCell::new(Vec::new()));
-        let session = Takeover::acquire(
+        let session = acquire(
             Stock::new(FakeService::new(&log), budget(&dir)),
-            wakelock(&dir),
             NoWatchdog,
-            locks(&dir, Some("before\n")),
-            DEFAULT_WATCHDOG,
-            SystemTime::now(),
+            &dir,
+            Some("before\n"),
         )
-        .map_err(|(error, _)| error)
         .expect("takes the display");
 
         session.release(SystemTime::now()).expect("restores");
@@ -820,15 +868,12 @@ mod tests {
         let mut service = FakeService::new(&log);
         service.active = false;
 
-        let session = Takeover::acquire(
+        let session = acquire(
             Stock::new(service, budget(&dir)),
-            wakelock(&dir),
             FakeWatchdog::new(&log),
-            locks(&dir, Some("before\n")),
-            DEFAULT_WATCHDOG,
-            SystemTime::now(),
+            &dir,
+            Some("before\n"),
         )
-        .map_err(|(error, _)| error)
         .expect("proceeds");
 
         assert!(!session.holds_display(), "someone else stopped it");
@@ -837,5 +882,167 @@ mod tests {
         // person holding it.
         session.release(SystemTime::now()).expect("restores");
         assert!(log.borrow().contains(&"start".to_owned()));
+    }
+
+    #[test]
+    fn an_unhealthy_stock_refuses_before_touching_locks_or_the_wakelock() {
+        let dir = scratch("unhealthy");
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let stock = Stock::new(FakeService::new(&log), budget(&dir));
+
+        let error = Takeover::acquire(
+            stock,
+            || StockHealth {
+                active: false,
+                ..healthy()
+            },
+            || Ok(()),
+            || -> Result<VendorLockState, DeviceError> {
+                panic!("locks must not be captured when stock is not healthy")
+            },
+            || -> Result<WakeLock, DeviceError> {
+                panic!("the wakelock must not be acquired when stock is not healthy")
+            },
+            FakeWatchdog::new(&log),
+            DEFAULT_WATCHDOG,
+            SystemTime::now(),
+        )
+        .expect_err("refuses");
+
+        assert!(error.to_string().contains("not healthy"), "{error}");
+        assert!(
+            log.borrow().is_empty(),
+            "nothing should have reached systemd: {:?}",
+            log.borrow()
+        );
+    }
+
+    #[test]
+    fn too_few_restarts_remaining_refuses_before_touching_anything() {
+        let dir = scratch("restarts");
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let stock = Stock::new(FakeService::new(&log), budget(&dir));
+
+        let error = Takeover::acquire(
+            stock,
+            || StockHealth {
+                n_restarts: Some(2),
+                ..healthy()
+            },
+            || Ok(()),
+            || -> Result<VendorLockState, DeviceError> {
+                panic!("locks must not be captured this close to the restart limit")
+            },
+            || -> Result<WakeLock, DeviceError> {
+                panic!("the wakelock must not be acquired this close to the restart limit")
+            },
+            FakeWatchdog::new(&log),
+            DEFAULT_WATCHDOG,
+            SystemTime::now(),
+        )
+        .expect_err("refuses");
+
+        assert!(error.to_string().contains("emergency shell"), "{error}");
+        assert!(log.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_failed_preflight_refuses_before_locks_or_the_wakelock() {
+        let dir = scratch("preflight");
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let stock = Stock::new(FakeService::new(&log), budget(&dir));
+
+        let error = Takeover::acquire(
+            stock,
+            healthy,
+            || Err(DeviceError::unexpected("the frame is entirely background")),
+            || -> Result<VendorLockState, DeviceError> {
+                panic!("locks must not be captured after the caller's own preflight refuses")
+            },
+            || -> Result<WakeLock, DeviceError> {
+                panic!("the wakelock must not be acquired after the caller's own preflight refuses")
+            },
+            FakeWatchdog::new(&log),
+            DEFAULT_WATCHDOG,
+            SystemTime::now(),
+        )
+        .expect_err("refuses");
+
+        assert!(error.to_string().contains("background"), "{error}");
+        assert!(log.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_failed_wakelock_acquisition_leaves_the_service_untouched() {
+        let dir = scratch("wakefail");
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let stock = Stock::new(FakeService::new(&log), budget(&dir));
+        let state = locks(&dir, Some("before\n"));
+
+        let error = Takeover::acquire(
+            stock,
+            healthy,
+            || Ok(()),
+            move || Ok(state),
+            || Err(DeviceError::unexpected("no wakelock node on this build")),
+            FakeWatchdog::new(&log),
+            DEFAULT_WATCHDOG,
+            SystemTime::now(),
+        )
+        .expect_err("refuses");
+
+        assert!(error.to_string().contains("no wakelock node"), "{error}");
+        assert!(
+            log.borrow().is_empty(),
+            "the watchdog and stock must not be touched: {:?}",
+            log.borrow()
+        );
+    }
+
+    #[test]
+    fn the_preamble_and_the_stop_run_in_one_fixed_order() {
+        // The property the module doc's table claims: every step, caller-
+        // supplied or not, happens in exactly one order, because this
+        // function's body is the only place that decides when to call any of
+        // them.
+        let dir = scratch("fullorder");
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let stock = Stock::new(FakeService::new(&log), budget(&dir));
+        let dir_for_locks = dir.clone();
+        let dir_for_wake = dir.clone();
+        let health_log = Rc::clone(&log);
+        let preflight_log = Rc::clone(&log);
+        let locks_log = Rc::clone(&log);
+        let wake_log = Rc::clone(&log);
+
+        let session = Takeover::acquire(
+            stock,
+            move || {
+                health_log.borrow_mut().push("health".to_owned());
+                healthy()
+            },
+            move || {
+                preflight_log.borrow_mut().push("preflight".to_owned());
+                Ok(())
+            },
+            move || {
+                locks_log.borrow_mut().push("locks".to_owned());
+                Ok(locks(&dir_for_locks, Some("before\n")))
+            },
+            move || {
+                wake_log.borrow_mut().push("wake".to_owned());
+                Ok(wakelock(&dir_for_wake))
+            },
+            FakeWatchdog::new(&log),
+            DEFAULT_WATCHDOG,
+            SystemTime::now(),
+        )
+        .expect("takes the display");
+        assert!(session.holds_display());
+
+        assert_eq!(
+            log.borrow().as_slice(),
+            ["health", "preflight", "locks", "wake", "arm", "stop"]
+        );
     }
 }

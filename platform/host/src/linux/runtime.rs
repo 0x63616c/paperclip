@@ -15,14 +15,16 @@
 //! survives the supervisor, so a command written while it was dying is still
 //! there afterwards.
 
+use std::fmt;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use paper_packages::AppId;
+use paper_sys::{SystemProcess, Systemctl, UnitControl, UnitError};
 
 use crate::linux::recovery::{LockPaths, RecoveryConfig, StockRecovery, WakeLockPaths};
-use crate::linux::systemd::{self, Systemd};
+use crate::linux::systemd;
 use crate::progress::{Progress, ProgressWatch};
 use crate::readiness::{self, Ladder, Rung};
 use crate::state::{
@@ -190,6 +192,106 @@ impl RuntimeConfig {
     }
 }
 
+/// Controls Paperclip's own systemd units, on top of `platform/sys`'s
+/// [`UnitControl`] — never stock's.
+///
+/// `crate::linux::systemd::Systemd` enforced the same "never stock" guard by
+/// shelling out to `systemctl` directly, which is exactly why the supervisor
+/// that held one had no tests: nothing stood between it and a real systemd.
+/// This sits on the seam `platform/updater` proved out instead (WWW-46), so a
+/// unit test can hand it `paper_testing::sys::FakeUnitControl` and exercise
+/// what a *refused* start does — not merely a slow one, which is the case
+/// `FakeUnitControl::refuse_start` already modelled.
+struct PaperclipUnits {
+    control: Box<dyn UnitControl>,
+}
+
+impl fmt::Debug for PaperclipUnits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PaperclipUnits").finish_non_exhaustive()
+    }
+}
+
+impl PaperclipUnits {
+    /// The real `systemctl`, via the shared process seam.
+    fn system() -> Self {
+        Self::new(Systemctl::<SystemProcess>::default())
+    }
+
+    fn new(control: impl UnitControl + 'static) -> Self {
+        Self {
+            control: Box::new(control),
+        }
+    }
+
+    /// Starts one of Paperclip's units.
+    ///
+    /// # Errors
+    ///
+    /// [`UnitError`] if the unit is not Paperclip's, or if `systemctl`
+    /// refused the start or could not be run at all — distinct from a start
+    /// that was accepted but never brought the unit up, which is not an
+    /// error here any more than it was in `Systemd::start`.
+    fn start(&self, unit: &str) -> Result<(), UnitError> {
+        self.guarded("start", unit, || self.control.start(unit))
+    }
+
+    /// Stops one of Paperclip's units.
+    ///
+    /// # Errors
+    ///
+    /// [`UnitError`] if the unit is not Paperclip's, or if `systemctl`
+    /// refused the stop or could not be run at all.
+    fn stop(&self, unit: &str) -> Result<(), UnitError> {
+        self.guarded("stop", unit, || self.control.stop(unit))
+    }
+
+    fn guarded(
+        &self,
+        verb: &'static str,
+        unit: &str,
+        op: impl FnOnce() -> Result<(), UnitError>,
+    ) -> Result<(), UnitError> {
+        if !is_ours(unit) {
+            return Err(UnitError {
+                verb,
+                unit: unit.to_owned(),
+                reason: "this type only operates Paperclip's own units; stock goes through \
+                         paper_device::stock::Stock, which owns the start budget"
+                    .to_owned(),
+            });
+        }
+        op()
+    }
+
+    fn is_active(&self, unit: &str) -> bool {
+        self.control.is_active(unit)
+    }
+
+    fn main_pid(&self, unit: &str) -> Option<u32> {
+        self.control.main_pid(unit)
+    }
+
+    fn property(&self, unit: &str, name: &str) -> Option<String> {
+        self.control.property(unit, name)
+    }
+
+    /// The cgroup directory systemd put `unit` in.
+    fn cgroup_of(&self, unit: &str) -> Option<PathBuf> {
+        let path = self.control.property(unit, "ControlGroup")?;
+        Some(Path::new("/sys/fs/cgroup").join(path.trim_start_matches('/')))
+    }
+}
+
+/// Whether `unit` is one of Paperclip's own.
+///
+/// Name-based, matching `crate::linux::systemd`'s `is_ours`: the only thing
+/// on the other side of this check that matters is `xochitl.service`, and it
+/// does not start with `paperclip`.
+fn is_ours(unit: &str) -> bool {
+    unit.starts_with("paperclip")
+}
+
 /// How the supervisor finished.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -213,7 +315,7 @@ pub enum Outcome {
 pub struct Supervisor {
     config: RuntimeConfig,
     machine: Machine,
-    systemd: Systemd,
+    units: PaperclipUnits,
     recovery: StockRecovery,
     progress: Option<ProgressWatch>,
     session_unit: Option<String>,
@@ -250,11 +352,16 @@ pub struct Supervisor {
 impl Supervisor {
     /// Builds a supervisor that believes stock currently owns the display.
     pub fn new(config: RuntimeConfig) -> Self {
-        let systemd = Systemd::default();
+        Self::with_units(config, PaperclipUnits::system())
+    }
+
+    /// Builds a supervisor against a stand-in for `systemctl` — how the tests
+    /// in this module exercise `execute`/`collect` without a real systemd.
+    fn with_units(config: RuntimeConfig, units: PaperclipUnits) -> Self {
         let recovery = StockRecovery::new(config.recovery());
         Self {
             machine: Machine::new(config.budget, config.policy),
-            systemd,
+            units,
             recovery,
             progress: None,
             session_unit: None,
@@ -387,7 +494,7 @@ impl Supervisor {
 
         if let Some(unit) = self.session_unit.clone() {
             let owner = self.owner();
-            if self.systemd.is_active(&unit) {
+            if self.units.is_active(&unit) {
                 if !self.machine.state().owns_display() {
                     // The unit came up. Readiness is systemd's `active` under
                     // `Type=notify`, which means the app sent READY=1 — not
@@ -432,7 +539,7 @@ impl Supervisor {
                 self.machine.foreground(),
                 Foreground::Home | Foreground::App(_)
             )
-            && self.systemd.is_active(&self.config.stock_unit)
+            && self.units.is_active(&self.config.stock_unit)
         {
             events.push(Event::StockRunning);
         }
@@ -523,11 +630,30 @@ impl Supervisor {
                 // signal — the ordering is systemd's to enforce, and a clean
                 // stop is the only kind that keeps the tablet off a serial
                 // console.
-                let _ = self.systemd.start(SESSION_TARGET);
-                // A start systemd refused is not a session. Nothing is
-                // invented here: the switch deadline takes it to recovery,
-                // because the machine has no evidence the session arrived.
-                let _ = self.systemd.start(&unit);
+                //
+                // A start systemd refused outright is not a session, and used
+                // to be indistinguishable from one that was merely slow to
+                // arrive: both left `self.session_unit` set and nothing
+                // queued, so the machine only found out at the switch
+                // deadline, up to `Budget::switch` later. `UnitControl::start`
+                // returning `Err` is systemd saying no, not systemd being
+                // slow — `SessionExited` is queued the moment that is known,
+                // the same signal a refused `StartBudget` produces above.
+                if let Err(error) = self.units.start(SESSION_TARGET) {
+                    tracing::warn!("systemd refused to start {SESSION_TARGET}: {error}");
+                    self.queued.push(Event::SessionExited {
+                        owner: other.clone(),
+                        status: ExitKind::Error,
+                    });
+                    return;
+                }
+                if let Err(error) = self.units.start(&unit) {
+                    tracing::warn!("systemd refused to start {unit}: {error}");
+                    self.queued.push(Event::SessionExited {
+                        owner: other.clone(),
+                        status: ExitKind::Error,
+                    });
+                }
             }
         }
     }
@@ -539,13 +665,13 @@ impl Supervisor {
         // Ask systemd first — a clean stop lets the app save (§5) — then sweep
         // the cgroup for anything that outlived it. The sweep is the part that
         // makes "child survives parent" a non-event.
-        let _ = self.systemd.stop(&unit);
+        let _ = self.units.stop(&unit);
         let protected: Vec<u32> = self
-            .systemd
+            .units
             .main_pid(&self.config.stock_unit)
             .into_iter()
             .collect();
-        let tree = match self.systemd.cgroup_of(&unit) {
+        let tree = match self.units.cgroup_of(&unit) {
             Some(cgroup) => crate::linux::process::SessionTree::in_cgroup(cgroup),
             None => crate::linux::process::SessionTree::below(std::process::id()),
         }
@@ -613,7 +739,7 @@ impl Supervisor {
         else {
             return false;
         };
-        let Some(cgroup) = self.systemd.cgroup_of(unit) else {
+        let Some(cgroup) = self.units.cgroup_of(unit) else {
             return false;
         };
         crate::linux::process::SessionTree::in_cgroup(cgroup)
@@ -623,14 +749,14 @@ impl Supervisor {
     }
 
     fn exit_kind(&self, unit: &str) -> ExitKind {
-        let result = self.systemd.property(unit, "Result").unwrap_or_default();
+        let result = self.units.property(unit, "Result").unwrap_or_default();
         let code = self
-            .systemd
+            .units
             .property(unit, "ExecMainCode")
             .and_then(|value| value.parse::<i32>().ok())
             .unwrap_or(0);
         let status = self
-            .systemd
+            .units
             .property(unit, "ExecMainStatus")
             .and_then(|value| value.parse::<i32>().ok())
             .unwrap_or(0);
@@ -761,5 +887,107 @@ pub fn session_unit_name(owner: &Foreground) -> String {
         Foreground::Stock => SESSION_TARGET.to_owned(),
         Foreground::Home => "paperclip-app@home.service".to_owned(),
         Foreground::App(id) => format!("paperclip-app@{id}.service"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paper_testing::FakeUnitControl;
+
+    /// A device config with `start_budget` redirected to a scratch file, so
+    /// concurrent test runs do not share `/tmp/paperclip-xochitl-starts`.
+    /// Every other path stays a device default — unused by `start_foreground`
+    /// directly, and `ProgressWatch::new` does no I/O until polled.
+    fn scratch_config() -> (RuntimeConfig, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = RuntimeConfig::device();
+        config.start_budget = dir.path().join("starts");
+        (config, dir)
+    }
+
+    #[test]
+    fn a_systemd_refusal_to_start_the_session_target_is_queued_immediately() {
+        // Before WWW-49, `start_foreground` discarded this `Result` with
+        // `let _ =`, so a refusal was silent until the switch deadline
+        // expired — up to `Budget::switch` later. `UnitControl::start`
+        // returning `Err` is systemd saying no, not systemd being slow, and
+        // is now queued as `SessionExited` the moment it is known.
+        let (config, _dir) = scratch_config();
+        let control = FakeUnitControl::new();
+        control.fail_start();
+        let mut supervisor = Supervisor::with_units(config, PaperclipUnits::new(control));
+
+        supervisor.start_foreground(&Foreground::Home);
+
+        assert_eq!(
+            supervisor.queued,
+            [Event::SessionExited {
+                owner: Foreground::Home,
+                status: ExitKind::Error,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_start_systemd_merely_accepted_is_not_queued_as_a_refusal() {
+        // `FakeUnitControl::refuse_start` models systemd accepting the start
+        // but the unit never coming up — the "slow" case the switch deadline
+        // exists for. Only an outright `Err` from `start` is known
+        // immediately; this must not be confused with that.
+        let (config, _dir) = scratch_config();
+        let control = FakeUnitControl::new();
+        control.refuse_start();
+        let mut supervisor = Supervisor::with_units(config, PaperclipUnits::new(control));
+
+        supervisor.start_foreground(&Foreground::Home);
+
+        assert!(supervisor.queued.is_empty(), "{:?}", supervisor.queued);
+    }
+
+    #[test]
+    fn a_healthy_start_reaches_both_the_session_target_and_the_app_unit() {
+        let (config, _dir) = scratch_config();
+        let control = FakeUnitControl::new();
+        let mut supervisor = Supervisor::with_units(config, PaperclipUnits::new(control));
+
+        supervisor.start_foreground(&Foreground::Home);
+
+        assert!(supervisor.queued.is_empty(), "{:?}", supervisor.queued);
+        assert!(supervisor.units.is_active(SESSION_TARGET));
+        assert!(
+            supervisor
+                .units
+                .is_active(&session_unit_name(&Foreground::Home))
+        );
+    }
+
+    #[test]
+    fn a_spent_start_budget_refuses_before_systemd_is_touched_at_all() {
+        let (config, _dir) = scratch_config();
+        paper_device::stock::StartBudget::at(&config.start_budget)
+            .allows_session(SystemTime::now())
+            .expect("starts empty");
+        for _ in 0..paper_device::stock::START_BUDGET {
+            paper_device::stock::StartBudget::at(&config.start_budget)
+                .record(SystemTime::now())
+                .expect("records");
+        }
+        let control = FakeUnitControl::new();
+        let mut supervisor = Supervisor::with_units(config, PaperclipUnits::new(control));
+
+        supervisor.start_foreground(&Foreground::Home);
+
+        assert_eq!(
+            supervisor.queued,
+            [Event::SessionExited {
+                owner: Foreground::Home,
+                status: ExitKind::Error,
+            }]
+        );
+        assert!(
+            !supervisor.units.is_active(SESSION_TARGET),
+            "a spent budget must refuse before systemd is asked for anything"
+        );
     }
 }

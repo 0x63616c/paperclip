@@ -33,3 +33,4 @@ device survey and several of these are bets.
 | [0024](0024-pinned-image-and-backup-scope.md) | The pinned OS image is load-bearing, and what the backup covers |
 | [0025](0025-the-effects-spine-and-real-observability.md) | The effects spine and real observability |
 | [0026](0026-declared-release-manifest-and-the-publish-planner.md) | Declared release manifest, and the publish planner |
+| [0027](0027-paperclip-is-the-resident-stock-is-a-grantable-app.md) | Paperclip is the resident; stock is one of the things it may grant the display to |

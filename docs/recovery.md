@@ -61,6 +61,14 @@ at all times. This is a release condition, not an aspiration. A Paperclip
 session that cannot hand the display back is a failed session regardless of
 what it rendered.
 
+**Read this as "usable and recoverable," not "the default."** ADR-0027
+records Paperclip as the resident system and Xochitl as one of the things it
+may grant the display to, on the same mechanics as any other app — not a
+default the tablet boots into and Paperclip borrows from. This requirement is
+unchanged by that: the user must always be able to reach stock. Whether stock
+is what the tablet shows before anyone asks for anything is a separate claim,
+owned by WWW-53's boot sequencing, not by this one.
+
 ## Stop conditions
 
 Stop, mark the affected issue `blocked`, and escalate rather than proceeding,

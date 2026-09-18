@@ -44,51 +44,59 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let probe = Systemctl;
-    let before = probe.health();
-    println!("preflight: {before:?}");
-    if !before.is_healthy() {
-        return Err("stock is not healthy before the session; refusing to take the display".into());
-    }
-    // Two separate budgets, because they count different things. `StartBudget`
-    // counts starts *we* asked for; this counts systemd's own `Restart=`
-    // retries, which is what a crashed Xochitl produces. The incident that
-    // motivated this consumed two restarts nobody asked for.
-    before.allows_takeover()?;
-    println!(
-        "  restarts remaining before OnFailure: {:?}",
-        before.restarts_remaining()
-    );
-
-    // Recorded before anything is claimed, so the release can put the vendor
-    // locks back exactly as Xochitl left them.
-    let locks = VendorLockState::capture()?;
-    println!(
-        "  vendor registry before takeover: {}",
-        if locks.registry.is_some() {
-            "present"
-        } else {
-            "absent"
-        }
-    );
-
-    // Wakelock before the display, always. On charge the tablet holds
-    // `udev.charger` and will not suspend anyway, but relying on that is how a
-    // session that runs off charge one day resumes into a second Xochitl.
-    let wake = WakeLock::acquire(WAKELOCK_TAG)?;
-    println!("wakelock held: {}", wake.tag());
-
     let stock = Stock::new(Systemctl, StartBudget::shared());
-    let session = match Takeover::acquire(
+    // Every ordering-critical step — the health gate, the lock capture, the
+    // wakelock — now lives inside `Takeover::acquire` itself (WWW-49). This
+    // example supplies *what* to check or *how* to obtain each resource, and
+    // prints along the way, but the *order* is no longer something it could
+    // get wrong even if it tried: that is the whole point of moving it.
+    let mut before = None;
+    let session = Takeover::acquire(
         stock,
-        wake,
+        || {
+            let health = probe.health();
+            println!("preflight: {health:?}");
+            // Two separate budgets, because they count different things.
+            // `StartBudget` counts starts *we* asked for; `NRestarts` counts
+            // systemd's own `Restart=` retries, which is what a crashed
+            // Xochitl produces. The incident that motivated this consumed two
+            // restarts nobody asked for.
+            println!(
+                "  restarts remaining before OnFailure: {:?}",
+                health.restarts_remaining()
+            );
+            before = Some(health.clone());
+            health
+        },
+        || Ok(()),
+        || {
+            // Captured before anything is claimed, so the release can put the
+            // vendor locks back exactly as Xochitl left them.
+            let locks = VendorLockState::capture()?;
+            println!(
+                "  vendor registry before takeover: {}",
+                if locks.registry.is_some() {
+                    "present"
+                } else {
+                    "absent"
+                }
+            );
+            Ok(locks)
+        },
+        || {
+            // Wakelock before the display, always. On charge the tablet holds
+            // `udev.charger` and will not suspend anyway, but relying on that
+            // is how a session that runs off charge one day resumes into a
+            // second Xochitl.
+            let wake = WakeLock::acquire(WAKELOCK_TAG)?;
+            println!("wakelock held: {}", wake.tag());
+            Ok(wake)
+        },
         DetachedWatchdog::new(),
-        locks,
         SESSION_BUDGET,
         SystemTime::now(),
-    ) {
-        Ok(session) => session,
-        Err((error, _wake)) => return Err(error.into()),
-    };
+    )?;
+    let before = before.expect("the health closure always runs before acquire can return Ok");
     println!("stock stopped; display should be free");
 
     // The panel is opened, used and dropped inside this block so that it is
