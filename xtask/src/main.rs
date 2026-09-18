@@ -5,6 +5,7 @@
 
 mod adr;
 mod device_bundle;
+mod install_hooks;
 mod plan_release;
 
 use std::path::{Path, PathBuf};
@@ -20,6 +21,8 @@ enum XtaskError {
     Adr(#[from] adr::AdrError),
     #[error(transparent)]
     PlanRelease(#[from] plan_release::PlanError),
+    #[error(transparent)]
+    InstallHooks(#[from] install_hooks::InstallHooksError),
 }
 
 #[derive(Debug, Parser)]
@@ -48,6 +51,10 @@ enum Command {
         #[arg(long, value_enum, default_value_t = PlanFormat::Text)]
         format: PlanFormat,
     },
+    /// Points this checkout's git hooks at `.githooks/` (WWW-66). Runs
+    /// automatically on every workspace build (`xtask/build.rs`); this is
+    /// for a checkout that never triggers that, or to confirm it took.
+    InstallHooks,
 }
 
 /// How `plan-release` prints its result.
@@ -105,6 +112,23 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::InstallHooks => exit_code(
+            install_hooks::run(&root)
+                .map(|outcome| {
+                    println!(
+                        "{}",
+                        match outcome {
+                            install_hooks::HooksOutcome::AlreadyInstalled =>
+                                "core.hooksPath already points at .githooks",
+                            install_hooks::HooksOutcome::Installed =>
+                                "core.hooksPath now points at .githooks",
+                            install_hooks::HooksOutcome::Skipped =>
+                                "not a git checkout, or .githooks/pre-commit is missing: skipped",
+                        }
+                    )
+                })
+                .map_err(XtaskError::from),
+        ),
     }
 }
 

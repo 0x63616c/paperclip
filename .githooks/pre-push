@@ -1,0 +1,11 @@
+#!/bin/sh
+# Installed via `git config core.hooksPath .githooks` (xtask/build.rs,
+# `cargo xtask install-hooks`; WWW-66). Reproduces docs/development.md's "the
+# loop" — the three checks that must pass before anything is pushed — so a
+# CI failure shows up here first. Skip in a real emergency with
+# `git push --no-verify`.
+set -eu
+
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace

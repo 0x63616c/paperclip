@@ -1,0 +1,9 @@
+#!/bin/sh
+# Installed via `git config core.hooksPath .githooks` (xtask/build.rs,
+# `cargo xtask install-hooks`; WWW-66). Only formatting, so a commit is never
+# blocked on a full build: the rest of docs/development.md's "the loop" runs
+# in pre-push and in CI (.github/workflows/ci.yml). Skip in a real emergency
+# with `git commit --no-verify`.
+set -eu
+
+cargo fmt --all --check

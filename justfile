@@ -101,6 +101,12 @@ device-bundle *ARGS:
 new-adr TITLE:
     cargo xtask new-adr "{{TITLE}}"
 
+# Points this checkout's git hooks at .githooks/ (WWW-66). Runs automatically
+# on every workspace build (xtask/build.rs); this is for confirming it took,
+# or a checkout that never triggers that.
+install-hooks:
+    cargo xtask install-hooks
+
 # "What needs publishing?" — declared app and platform versions against what
 # GitHub already lists as released (WWW-61).
 plan-release *ARGS:

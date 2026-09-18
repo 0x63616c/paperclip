@@ -35,6 +35,11 @@ All of it must pass before anything is pushed. Clippy runs with `-D warnings`
 deliberately: `Cargo.toml`'s `[workspace.lints]` are the style rules from §7,
 and a warning nobody has to fix is a rule nobody follows.
 
+A git pre-commit hook (fmt) and pre-push hook (fmt, clippy, test) install
+themselves into `.githooks/` the first time the workspace builds — see
+[`docs/development.md`](docs/development.md#git-hooks-www-66). They catch the
+same failures CI does, earlier.
+
 ## Style
 
 - Concrete structs and enums. No trait-per-struct, no generic plugin

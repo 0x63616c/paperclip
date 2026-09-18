@@ -31,6 +31,26 @@ All three must pass before anything is pushed. Clippy is run with
 `-D warnings` deliberately: the workspace lints in `Cargo.toml` are the style
 rules from §7, and a warning nobody has to fix is a rule nobody follows.
 
+### Git hooks (WWW-66)
+
+`xtask/build.rs` points this checkout's git hooks at `.githooks/` the first
+time anything in the workspace builds — no separate setup step. `.githooks/
+pre-commit` runs `cargo fmt --all --check`; `.githooks/pre-push` runs all
+three commands above, so a CI failure shows up locally first. Both are plain
+shell, committed, and readable in full before trusting them.
+
+There is no Multica-side checkout hook to install into: a fresh `multica repo
+checkout` is a plain git worktree, and nothing re-runs a setup step for it
+later, so the hooks have to install themselves as a side effect of something
+the workflow already runs unconditionally — a build. That is also why the
+build script, not `cargo test` itself, does the installing: `cargo test
+--workspace` builds `xtask` as an ordinary workspace member before running
+anything, so hooks are active before the first commit of a session in every
+normal `docs/development.md`/`just ci` workflow. A checkout that only ever
+builds a single non-`xtask` crate does not trigger it; run `cargo xtask
+install-hooks` by hand there, or check with `git config --get
+core.hooksPath`. Skip a hook in a real emergency with `--no-verify`.
+
 ## Building for the tablet
 
 The device triple is `aarch64-unknown-linux-gnu` — glibc, not musl (WWW-1).

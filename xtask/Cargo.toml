@@ -24,5 +24,11 @@ toml = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
+# build.rs shares xtask/src/install_hooks.rs (WWW-66) via `#[path]`, which
+# needs the same derive macro available to the build script's own
+# compilation.
+[build-dependencies]
+thiserror = { workspace = true }
+
 [lints]
 workspace = true
