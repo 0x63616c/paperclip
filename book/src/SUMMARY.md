@@ -42,3 +42,4 @@
 - [ADR-0035: System chrome: a drawing-order guarantee, not a permission check](./decisions/0035-system-chrome-a-drawing-order-guarantee-not-a-permission-check.md)
 - [ADR-0036: Why takeover, not in-process](./decisions/0036-why-takeover-not-in-process.md)
 - [ADR-0037: The compositor accept loop, its client wire, and crash/hang isolation](./decisions/0037-compositor-accept-loop-and-crash-hang-isolation.md)
+- [ADR-0038: Sleep and lock as a compositor overlay, not a session hack](./decisions/0038-sleep-and-lock-as-a-compositor-overlay.md)
