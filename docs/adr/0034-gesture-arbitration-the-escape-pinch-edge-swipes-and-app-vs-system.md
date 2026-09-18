@@ -7,8 +7,8 @@
 WWW-52 names gesture routing as one of the compositor's deliverables: "the
 escape pinch and any edge gestures are the system's; everything else passes
 through to the focused app," with the arbitration rule — "who wins between a
-long-press and a swipe, and between app and system" — to be "decide[d] once
-and write[ten] down." It cited generalising an existing `input/pinch.rs` and
+long-press and a swipe, and between app and system" — to be "decide\[d\] once
+and write\[ten\] down." It cited generalising an existing `input/pinch.rs` and
 a duplicated `PinchDetector::new()` as the starting point.
 
 That citation does not describe this repository. WWW-77's description
@@ -46,7 +46,7 @@ whatever a contact does that never crosses a movement threshold. There is no
 separate long-press detector to arbitrate against a swipe detector — one
 movement-distance check *is* the arbitration. A contact sitting still near an
 edge for one event or for a thousand is identically `Verdict::App` right up
-until it crosses [`EDGE_SWIPE_MIN_TRAVEL`], and irrevocably `Verdict::System`
+until it crosses `EDGE_SWIPE_MIN_TRAVEL`, and irrevocably `Verdict::System`
 the instant it does.
 
 ### App vs system: the system only ever preempts, never claims a first event

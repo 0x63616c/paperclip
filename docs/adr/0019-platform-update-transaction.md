@@ -166,7 +166,7 @@ already written them; nothing in the real product ever did; `paperctl units`
 is a manual preview command nothing else invokes, and the only real writer was
 the VM harness's own fixture, which is why the VM never caught this.
 
-`bring_up()` now writes [`UnitSet::for_supervisor`] itself — everything except
+`bring_up()` now writes `UnitSet::for_supervisor` itself — everything except
 the per-app unit, which needs a specific app's `SessionGrants` that VERIFY
 does not have yet — and calls `daemon-reload` before starting the supervisor.
 The alternative of making the install path call whatever wrote the units

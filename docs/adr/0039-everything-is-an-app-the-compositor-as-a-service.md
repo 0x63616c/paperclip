@@ -1,4 +1,4 @@
-# 0039 — Everything is an app: the compositor as a long-running service
+# ADR-0039 — Everything is an app: the compositor as a long-running service
 
 **Status:** accepted (WWW-52, WWW-81). Builds on ADR-0033 (WWW-77) and
 ADR-0037 (WWW-78) — see their own "What stays out of this stage" sections for

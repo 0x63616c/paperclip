@@ -20,7 +20,26 @@ while IFS= read -r -d '' file; do
   done < <(grep -oE '\{\{#include[[:space:]]+[^:}[:space:]]+' "$file" | sed -E 's/^\{\{#include[[:space:]]+//')
 done < <(find "$book_src" -name '*.md' -print0)
 
+# The mirror of the check above, and the one that was missing. The loop so far
+# proves every page the book *has* points at a real ADR; it says nothing about
+# an ADR the book has no page for. WWW-81 added ADR-0039 and no book page, the
+# README's index linked it anyway, and `mdbook build` failed on a dangling link
+# — after CI had already gone green on the commit that introduced it. Adding an
+# ADR and forgetting its page is the ordinary mistake here, so gate it.
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+for adr in "$repo_root"/docs/adr/[0-9]*.md; do
+  slug="$(basename "$adr" .md)"
+  if [[ ! -f "$book_src/decisions/$slug.md" ]]; then
+    echo "ADR with no book page: docs/adr/$slug.md -> book/src/decisions/$slug.md" >&2
+    status=1
+  fi
+  if ! grep -qF "decisions/$slug.md" "$book_src/SUMMARY.md"; then
+    echo "ADR missing from book/src/SUMMARY.md: $slug" >&2
+    status=1
+  fi
+done
+
 if [[ "$status" -eq 0 ]]; then
-  echo "all {{#include}} targets resolve"
+  echo "all {{#include}} targets resolve, and every ADR has a book page"
 fi
 exit "$status"
