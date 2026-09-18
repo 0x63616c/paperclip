@@ -30,3 +30,4 @@ device survey and several of these are bets.
 | [0021](0021-per-cell-damage-and-the-sudoku-app.md) | How an app claims per-cell damage, and Sudoku as the worked example |
 | [0022](0022-app-entrypoint-binaries-and-stdio-transport.md) | App entrypoint binaries, and stdio as the launch transport |
 | [0023](0023-paperctl-logs-doctor-deploy.md) | `paperctl logs`, `doctor` and `deploy`, replacing a set of personal shell aliases |
+| [0024](0024-pinned-image-and-backup-scope.md) | The pinned OS image is load-bearing, and what the backup covers |

@@ -208,8 +208,11 @@ been run against a real service manager — in a VM, on a stand-in for Xochitl:
 
 ## What is still owed here
 
-- The verified backup procedure, and how "verified" is checked. (A backup from
-  WWW-1 exists on the Mac; the *procedure* is not written down here.)
+- ~~The verified backup procedure, and how "verified" is checked.~~ Written:
+  `docs/backup.md`, covering what is captured, the definition of "verified"
+  and its stated limit (consistent, not quiesced; documented, not rehearsed),
+  the restore procedure, and OS auto-update evidence
+  (`docs/adr/0024-pinned-image-and-backup-scope.md`).
 - ~~How the display is taken, and how it is given back — the sequencing.~~
   Written: `paper_device::Takeover` owns the order and ADR-0011 explains why it
   is that order. Still never run on the tablet.
