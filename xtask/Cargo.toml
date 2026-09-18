@@ -10,6 +10,10 @@ repository.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+# For `REQUIRED_COMPONENTS`: which apps ship inside the platform bundle rather
+# than through the catalog. Reading it from the crate that enforces it is what
+# keeps the planner from drifting out of step with the manifest it plans for.
+paper-updater = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

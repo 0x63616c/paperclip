@@ -1,7 +1,8 @@
 //! `cargo xtask plan-release` — "what needs publishing?" and nothing else
 //! (WWW-61, ADR-0026).
 //!
-//! Reconciles what is *declared* in the tree — every `apps/<app>/paper.toml`
+//! Reconciles what is *declared* in the tree — every catalog app's
+//! `apps/<app>/paper.toml`
 //! and the platform's own `release.toml` — against what is already
 //! *published*, read from the GitHub release list. Not a `git diff`: that
 //! trigger is wrong after a force-push, a multi-commit push, a re-run of a
@@ -65,6 +66,25 @@ const APPS_DIR: &str = "apps";
 /// crates with no `paper.toml` — and those are skipped rather than treated as
 /// an error.
 const APP_MANIFEST_FILE_NAME: &str = "paper.toml";
+/// Apps that ship *inside* the platform bundle rather than through the
+/// catalog, named by their directory under `apps/`.
+///
+/// Home, the App Store and Settings are components of one platform release
+/// (§13; `paper_updater::manifest::REQUIRED_COMPONENTS`), so bumping their
+/// `paper.toml` does not publish them — releasing the platform does. Chess and
+/// Sudoku are the catalog apps, and `apps/sudoku/paper.toml` says so in as many
+/// words: "not a default app: it ships through the catalog and is versioned on
+/// its own".
+///
+/// Derived from `REQUIRED_COMPONENTS` rather than written out, so a fourth
+/// bundled app cannot be added there and silently double-publish here.
+fn bundled_app_dirs() -> Vec<&'static str> {
+    paper_updater::manifest::REQUIRED_COMPONENTS
+        .iter()
+        .copied()
+        .filter(|name| *name != "paperclip-host")
+        .collect()
+}
 /// The platform release manifest, at the repository root (WWW-61,
 /// ADR-0026).
 const RELEASE_MANIFEST_FILE_NAME: &str = "release.toml";
@@ -210,6 +230,13 @@ pub(crate) fn read_declared_apps(repo_root: &Path) -> Result<Vec<DeclaredApp>, P
         })?;
         let manifest_path = entry.path().join(APP_MANIFEST_FILE_NAME);
         if !manifest_path.is_file() {
+            continue;
+        }
+        let dir_name = entry.file_name();
+        if bundled_app_dirs()
+            .iter()
+            .any(|bundled| std::ffi::OsStr::new(bundled) == dir_name)
+        {
             continue;
         }
         let bytes = fs::read(&manifest_path).map_err(|source| PlanError::Read {
@@ -650,14 +677,44 @@ mod tests {
     fn reads_declared_apps_from_a_tree_and_skips_directories_with_no_manifest() {
         let dir = tempfile::tempdir().unwrap();
         write_app(dir.path(), "chess", "dev.calum.chess", "0.2.0");
-        write_app(dir.path(), "home", "dev.calum.home", "0.2.0");
+        write_app(dir.path(), "sudoku", "dev.calum.sudoku", "0.1.0");
         fs::create_dir_all(dir.path().join("apps/chess-rules")).unwrap();
 
         let apps = read_declared_apps(dir.path()).unwrap();
 
         assert_eq!(apps.len(), 2);
         assert_eq!(apps[0].id, "dev.calum.chess");
-        assert_eq!(apps[1].id, "dev.calum.home");
+        assert_eq!(apps[1].id, "dev.calum.sudoku");
+    }
+
+    #[test]
+    fn apps_that_ship_inside_the_platform_bundle_are_not_catalog_releases() {
+        // Home, the App Store and Settings are components of one platform
+        // release (§13), so a bump to their `paper.toml` is not a publish —
+        // releasing the platform is. Planning them as catalog apps would ship
+        // each of them twice.
+        let dir = tempfile::tempdir().unwrap();
+        write_app(dir.path(), "chess", "dev.calum.chess", "0.2.0");
+        write_app(dir.path(), "home", "dev.calum.home", "0.2.0");
+        write_app(dir.path(), "app-store", "dev.calum.app-store", "0.1.0");
+        write_app(dir.path(), "settings", "dev.calum.settings", "0.1.0");
+
+        let apps = read_declared_apps(dir.path()).unwrap();
+
+        assert_eq!(
+            apps.iter().map(|app| app.id.as_str()).collect::<Vec<_>>(),
+            vec!["dev.calum.chess"],
+            "only the catalog apps are planned as catalog releases"
+        );
+    }
+
+    #[test]
+    fn every_bundled_component_but_the_host_is_an_app_directory() {
+        // `bundled_app_dirs` drops `paperclip-host` because it is the
+        // supervisor, not an app with a `paper.toml`. If a future component is
+        // added to `REQUIRED_COMPONENTS` this catches it here rather than
+        // through a silently double-published app.
+        assert_eq!(bundled_app_dirs(), vec!["home", "app-store", "settings"]);
     }
 
     #[test]

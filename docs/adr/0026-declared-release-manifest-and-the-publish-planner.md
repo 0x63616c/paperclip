@@ -80,6 +80,23 @@ publishing. It is non-zero only for `Conflict`, because that is the one case
 the ticket calls a mistake someone needs to see rather than something to skip
 quietly.
 
+### Which apps are catalog releases, and which are not
+
+Only **Chess and Sudoku**. Home, the App Store and Settings each have a
+`paper.toml` with its own version, and none of the three is a catalog release:
+they ship *inside* the platform bundle as components of one platform version
+(§13, `paper_updater::manifest::REQUIRED_COMPONENTS`). Bumping
+`apps/home/paper.toml` therefore does not publish Home — releasing the platform
+does. `apps/sudoku/paper.toml` states the other side of the same rule in as many
+words: "not a default app: it ships through the catalog and is versioned on its
+own".
+
+`plan-release` skips them, and derives the exclusion from `REQUIRED_COMPONENTS`
+rather than listing the three names, so adding a fourth bundled component cannot
+silently double-publish it. Their `paper.toml` versions stay meaningful: the home
+screen reads a manifest to build its shelf tile, which is a different question
+from what gets published.
+
 ### The tag convention
 
 Proposed, not yet exercised by a real publish step: apps publish under
