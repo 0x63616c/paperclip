@@ -1,0 +1,16 @@
+# The render test card's manifest. Not a default app (project decision,
+# 2026-09-16, amending §3/§5 to name only Home, App Store and Settings): this
+# ships through the catalog like Chess and Sudoku, reached today via
+# `paperctl dev --app render-test-card` and `paperctl run --app
+# render-test-card` (WWW-47).
+#
+# No `capabilities` key: this app writes nothing and reads nothing outside
+# what the host hands it in `Hello`, so there is nothing to grant.
+
+[app]
+id = "dev.calum.render-test-card"
+name = "Render Test Card"
+version = "0.1.0"
+protocol = "1.1"
+entrypoint = "bin/render-test-card"
+assets = []

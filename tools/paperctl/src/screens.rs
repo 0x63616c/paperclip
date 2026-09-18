@@ -449,7 +449,7 @@ fn parse_built_in(app: &'static str, text: &str) -> Result<Manifest, CommandErro
 #[cfg(test)]
 mod golden {
     use paper_device::FrameDigest;
-    use paper_protocol::ExitReason;
+    use paper_protocol::{ExitReason, PixelFormat, SurfaceDescriptor};
     use paper_sdk::SCREEN;
     use paper_settings::{PlaceholderHost, SettingsApp};
 
@@ -592,6 +592,7 @@ mod golden {
         let session = open_session_with(
             DevApp::Settings(Box::new(SettingsApp::new(PlaceholderHost::new()))),
             &root,
+            SurfaceDescriptor::packed(SCREEN, PixelFormat::Argb8888),
         )
         .expect("a Settings session opens");
         let digest = FrameDigest::of(&session.frame()).expect("digests");

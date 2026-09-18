@@ -1588,6 +1588,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "paper-render-test-card"
+version = "0.1.0"
+dependencies = [
+ "paper-protocol",
+ "paper-sdk",
+ "tempfile",
+]
+
+[[package]]
 name = "paper-sdk"
 version = "0.1.0"
 dependencies = [
@@ -1715,6 +1724,7 @@ dependencies = [
  "paper-host",
  "paper-packages",
  "paper-protocol",
+ "paper-render-test-card",
  "paper-sdk",
  "paper-settings",
  "paper-sudoku",

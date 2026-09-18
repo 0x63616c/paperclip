@@ -102,6 +102,8 @@ pub(crate) enum RunAppArg {
     Sudoku,
     /// The App Store, against `PAPERCLIP_ROOT`'s own store and catalog.
     AppStore,
+    /// The render test card (WWW-47).
+    RenderTestCard,
 }
 
 impl RunAppArg {
@@ -112,6 +114,7 @@ impl RunAppArg {
             RunAppArg::Settings => "settings",
             RunAppArg::Sudoku => "sudoku",
             RunAppArg::AppStore => "app-store",
+            RunAppArg::RenderTestCard => "render-test-card",
         }
     }
 }
@@ -238,7 +241,7 @@ mod interactive {
         ContactIds, DeviceError, FrameDigest, InputRole, PanelRecord, PenDecoder, PixelRect,
         PointerTransform, Refresh, TouchDecoder, Waveform,
     };
-    use paper_protocol::{ExitReason, Request};
+    use paper_protocol::{ExitReason, PixelFormat, Request, SurfaceDescriptor};
     use paper_sdk::PointerEvent;
 
     use crate::session;
@@ -277,6 +280,20 @@ mod interactive {
         let panel_size = panel.size();
         let storage_root = storage_root();
 
+        // The geometry every session opened below reports to its app, in
+        // `Hello.surface`: the engine's own stride, not the tightly packed
+        // one `SurfaceDescriptor::packed` would assume. `buffer()` is a cheap
+        // read of the cached pointer and stride the engine reported at open
+        // (`VendorPanel::open`, `platform/device/src/vendor.rs`) — nothing
+        // here is written to. WWW-36 found that value assumed rather than
+        // queried was exactly how the display binding went silently wrong.
+        let stride_bytes = panel.buffer()?.stride as u32 * PixelFormat::Argb8888.bytes_per_pixel();
+        let surface = SurfaceDescriptor {
+            extent: panel_size,
+            stride_bytes,
+            format: PixelFormat::Argb8888,
+        };
+
         let (sink, events) = mpsc::channel();
         spawn_input_readers(&sink)?;
         drop(sink);
@@ -293,6 +310,7 @@ mod interactive {
                 &storage_root,
                 "DEVICE",
                 "paperctl run \u{2014} presenting on the panel",
+                surface,
             )
             .map_err(|error| DeviceError::unexpected(error.to_string()))?;
 

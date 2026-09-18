@@ -44,3 +44,20 @@ either end.
 WWW-1 reporting that colour is cheap, stable and legible at UI sizes. Then
 colour becomes available — as reinforcement for something already distinguished
 by luminance, not as the only signal.
+
+## Amendment (WWW-47) — still open, instrument built
+
+`rmweb`'s device profile (cited in WWW-26) already establishes that the panel
+*is* E Ink Gallery 3, colour, ARGB8888 — the "is colour cheap, stable and
+legible" question above is a photograph away from an answer, not a hardware
+unknown. WWW-47 built `apps/render-test-card` specifically to gather that
+photograph: its Colour and Waveform sections put primaries, reduced-saturation
+tints, realistic UI accents and the mode 0/2/3/4 waveform pairings on the
+glass, side by side, labelled.
+
+No device photograph exists yet as of this amendment — see WWW-47's result
+comment for exactly what is still owed and why (no camera in that run). This
+ADR is therefore **not** amended to a decision either way: greyscale-first
+stands, unrevisited, until a photograph exists to revisit it against. The
+next reader who has that photograph should replace this paragraph with the
+actual finding, not add another "still pending" note beside it.

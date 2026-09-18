@@ -1,0 +1,23 @@
+[package]
+name = "paper-render-test-card"
+description = "The render test card: what this panel actually does, settled by looking (WWW-47)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "render-test-card"
+path = "src/main.rs"
+
+[dependencies]
+paper-sdk = { workspace = true }
+
+[dev-dependencies]
+paper-protocol = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

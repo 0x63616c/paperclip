@@ -43,6 +43,7 @@ use paper_protocol::{
     Hello, HostMessage, LaunchReason, LifecycleEvent, PixelFormat, PointerEvent, Request, Saved,
     SessionId, SurfaceDescriptor, codec,
 };
+use paper_render_test_card::RenderTestCardApp;
 use paper_sdk::{
     App, Canvas, Context, Event, SCREEN, SaveError, Surface, SurfaceError, SurfaceProvider,
 };
@@ -54,6 +55,7 @@ const CHESS_MANIFEST: &str = include_str!("../../../apps/chess/paper.toml");
 const SETTINGS_MANIFEST: &str = include_str!("../../../apps/settings/paper.toml");
 const SUDOKU_MANIFEST: &str = include_str!("../../../apps/sudoku/paper.toml");
 const APP_STORE_MANIFEST: &str = include_str!("../../../apps/app-store/paper.toml");
+const RENDER_TEST_CARD_MANIFEST: &str = include_str!("../../../apps/render-test-card/paper.toml");
 
 /// How long a read on the loopback socket may block waiting for the app
 /// thread before this side gives up on it. See [`open_session`].
@@ -289,6 +291,8 @@ pub(crate) enum DevApp {
     Settings(Box<SettingsApp>),
     /// Sudoku, on the real rules core.
     Sudoku(Box<SudokuApp>),
+    /// The render test card (WWW-47).
+    RenderTestCard(Box<RenderTestCardApp>),
 }
 
 impl DevApp {
@@ -300,6 +304,7 @@ impl DevApp {
             DevApp::Chess(_) => "chess",
             DevApp::Settings(_) => "settings",
             DevApp::Sudoku(_) => "sudoku",
+            DevApp::RenderTestCard(_) => "render-test-card",
         }
     }
 
@@ -310,6 +315,7 @@ impl DevApp {
             DevApp::Chess(_) => CHESS_MANIFEST,
             DevApp::Settings(_) => SETTINGS_MANIFEST,
             DevApp::Sudoku(_) => SUDOKU_MANIFEST,
+            DevApp::RenderTestCard(_) => RENDER_TEST_CARD_MANIFEST,
         }
     }
 }
@@ -327,6 +333,7 @@ impl App for DevApp {
             DevApp::Chess(app) => app.event(event, context),
             DevApp::Settings(app) => app.event(event, context),
             DevApp::Sudoku(app) => app.event(event, context),
+            DevApp::RenderTestCard(app) => app.event(event, context),
         }
     }
 
@@ -336,6 +343,7 @@ impl App for DevApp {
             DevApp::Chess(app) => app.draw(canvas, context),
             DevApp::Settings(app) => app.draw(canvas, context),
             DevApp::Sudoku(app) => app.draw(canvas, context),
+            DevApp::RenderTestCard(app) => app.draw(canvas, context),
         }
     }
 
@@ -345,6 +353,7 @@ impl App for DevApp {
             DevApp::Chess(app) => app.save(context),
             DevApp::Settings(app) => app.save(context),
             DevApp::Sudoku(app) => app.save(context),
+            DevApp::RenderTestCard(app) => app.save(context),
         }
     }
 
@@ -354,6 +363,7 @@ impl App for DevApp {
             DevApp::Chess(app) => app.damage(),
             DevApp::Settings(app) => app.damage(),
             DevApp::Sudoku(app) => app.damage(),
+            DevApp::RenderTestCard(app) => app.damage(),
         }
     }
 }
@@ -406,12 +416,18 @@ pub(crate) fn open_session(
     storage_root: &Path,
     status: &str,
     mode_fact: &str,
+    surface: SurfaceDescriptor,
 ) -> Result<Session, SessionError> {
     match app_slug {
-        "chess" => open_session_with(DevApp::Chess(Box::new(ChessApp::new())), storage_root),
+        "chess" => open_session_with(
+            DevApp::Chess(Box::new(ChessApp::new())),
+            storage_root,
+            surface,
+        ),
         "home" => open_session_with(
             DevApp::Home(HomeApp::new(home_screen(status, mode_fact)?)),
             storage_root,
+            surface,
         ),
         // The real store, not the fixture the desktop preview draws: a
         // Settings page that invented its numbers would be worse than one
@@ -422,9 +438,19 @@ pub(crate) fn open_session(
                 Layout::from_environment(),
             )))),
             storage_root,
+            surface,
         ),
-        "sudoku" => open_session_with(DevApp::Sudoku(Box::new(SudokuApp::new())), storage_root),
-        "app-store" => open_app_store_session(storage_root),
+        "sudoku" => open_session_with(
+            DevApp::Sudoku(Box::new(SudokuApp::new())),
+            storage_root,
+            surface,
+        ),
+        "render-test-card" => open_session_with(
+            DevApp::RenderTestCard(Box::new(RenderTestCardApp::new())),
+            storage_root,
+            surface,
+        ),
+        "app-store" => open_app_store_session(storage_root, surface),
         other => Err(SessionError::UnknownApp {
             app: other.to_owned(),
         }),
@@ -438,7 +464,11 @@ pub(crate) fn open_session(
 /// directly is what lets a test run the same session loop over an app it
 /// constructed itself — a Settings over a fixture Host, say — rather than
 /// whatever the environment happens to hold.
-pub(crate) fn open_session_with(app: DevApp, storage_root: &Path) -> Result<Session, SessionError> {
+pub(crate) fn open_session_with(
+    app: DevApp,
+    storage_root: &Path,
+    surface: SurfaceDescriptor,
+) -> Result<Session, SessionError> {
     let app_slug = app.slug();
     let manifest = Manifest::parse(app.manifest_text())?;
     open_session_common(
@@ -446,6 +476,7 @@ pub(crate) fn open_session_with(app: DevApp, storage_root: &Path) -> Result<Sess
         &manifest,
         vec![Capability::Storage],
         storage_root,
+        surface,
         move |reader, app_side, surfaces| {
             thread::spawn(move || paper_sdk::run(app, reader, app_side, surfaces))
         },
@@ -455,7 +486,10 @@ pub(crate) fn open_session_with(app: DevApp, storage_root: &Path) -> Result<Sess
 /// Opens an App Store session — the App Store's counterpart to
 /// [`open_session_with`], built and spawned on its own rather than through
 /// [`DevApp`] for the reason the module doc gives.
-fn open_app_store_session(storage_root: &Path) -> Result<Session, SessionError> {
+fn open_app_store_session(
+    storage_root: &Path,
+    surface: SurfaceDescriptor,
+) -> Result<Session, SessionError> {
     let manifest = Manifest::parse(APP_STORE_MANIFEST)?;
     let source = app_store_source(&manifest)?;
     let screen = AppStoreScreen::new(source.inventory()?);
@@ -467,6 +501,7 @@ fn open_app_store_session(storage_root: &Path) -> Result<Session, SessionError> 
         // `context.storage()`.
         vec![Capability::Packages],
         storage_root,
+        surface,
         move |reader, app_side, surfaces| {
             thread::spawn(move || paper_sdk::run(app, reader, app_side, surfaces))
         },
@@ -488,6 +523,7 @@ fn open_session_common(
     manifest: &Manifest,
     capabilities: Vec<Capability>,
     storage_root: &Path,
+    surface: SurfaceDescriptor,
     spawn: impl FnOnce(
         UnixStream,
         UnixStream,
@@ -537,7 +573,7 @@ fn open_session_common(
         } else {
             LaunchReason::Fresh
         },
-        surface: SurfaceDescriptor::packed(SCREEN, PixelFormat::Argb8888),
+        surface,
         capabilities,
         paths: AppPaths {
             assets,
@@ -638,7 +674,7 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use paper_protocol::{DrawReason, FrameId};
+    use paper_protocol::{DrawReason, FrameId, PixelFormat, SurfaceDescriptor};
     use paper_sdk::{Canvas, SCREEN};
 
     use super::{READ_TIMEOUT, Session};
@@ -691,7 +727,8 @@ mod tests {
     #[test]
     fn open_session_leaves_the_hang_guard_armed_on_a_real_session() {
         let root = session_root("open-session-leaves-the-hang-guard-armed");
-        let session = super::open_session("home", &root, "TEST", "unit test").expect("opens");
+        let session =
+            super::open_session("home", &root, "TEST", "unit test", test_surface()).expect("opens");
 
         assert_eq!(session.read_timeout(), Some(READ_TIMEOUT));
 
@@ -710,10 +747,10 @@ mod tests {
     /// panel with the display taken over.
     #[test]
     fn every_runnable_app_opens_a_real_session_and_draws_something() {
-        for slug in ["home", "chess", "settings", "sudoku"] {
+        for slug in ["home", "chess", "settings", "sudoku", "render-test-card"] {
             let root = session_root(slug);
-            let session =
-                super::open_session(slug, &root, "TEST", "unit test").expect("the session opens");
+            let session = super::open_session(slug, &root, "TEST", "unit test", test_surface())
+                .expect("the session opens");
             assert!(
                 session.frame().ink_coverage() > 0.0,
                 "{slug}'s first frame is blank"
@@ -725,8 +762,14 @@ mod tests {
         }
 
         assert!(
-            super::open_session("solitaire", &session_root("unknown"), "TEST", "unit test")
-                .is_err(),
+            super::open_session(
+                "solitaire",
+                &session_root("unknown"),
+                "TEST",
+                "unit test",
+                test_surface()
+            )
+            .is_err(),
             "an app this loop cannot run must be refused rather than substituted"
         );
     }
@@ -737,5 +780,11 @@ mod tests {
             "paperctl-session-test-{}-{what}",
             std::process::id()
         ))
+    }
+
+    /// The tightly packed descriptor every non-device caller sends: no real
+    /// panel is behind these tests, so there is no real stride to report.
+    fn test_surface() -> SurfaceDescriptor {
+        SurfaceDescriptor::packed(SCREEN, PixelFormat::Argb8888)
     }
 }

@@ -42,7 +42,7 @@ use std::fmt;
 
 use paper_protocol::{
     Action, AppId, Capability, Diagnostic, DiagnosticLevel, ExitReason, LaunchReason, PointerEvent,
-    SessionId, Size,
+    SessionId, Size, SurfaceDescriptor,
 };
 
 use crate::canvas::Canvas;
@@ -139,7 +139,7 @@ pub struct Context<'a, C> {
     app: &'a AppId,
     version: &'a semver::Version,
     launch: LaunchReason,
-    viewport: Size,
+    surface: SurfaceDescriptor,
     capabilities: &'a [Capability],
     storage: &'a Storage,
     completer: &'a Completer<C>,
@@ -154,7 +154,7 @@ impl<'a, C: Send + 'static> Context<'a, C> {
         app: &'a AppId,
         version: &'a semver::Version,
         launch: LaunchReason,
-        viewport: Size,
+        surface: SurfaceDescriptor,
         capabilities: &'a [Capability],
         storage: &'a Storage,
         completer: &'a Completer<C>,
@@ -165,7 +165,7 @@ impl<'a, C: Send + 'static> Context<'a, C> {
             app,
             version,
             launch,
-            viewport,
+            surface,
             capabilities,
             storage,
             completer,
@@ -198,7 +198,18 @@ impl<'a, C: Send + 'static> Context<'a, C> {
 
     /// The drawing surface's extent. The app's own space, not the panel's.
     pub fn viewport(&self) -> Size {
-        self.viewport
+        self.surface.extent
+    }
+
+    /// The drawing surface this session actually granted: extent, stride and
+    /// pixel format, exactly as [`Hello`](paper_protocol::Hello) carried them.
+    ///
+    /// Not a compiled constant: whichever host built this session's `Hello`
+    /// decided these numbers, and a host that queried the real panel (rather
+    /// than assuming a tightly packed one) is the only way this differs from
+    /// [`SurfaceDescriptor::packed`].
+    pub fn surface(&self) -> SurfaceDescriptor {
+        self.surface
     }
 
     /// What the host granted.

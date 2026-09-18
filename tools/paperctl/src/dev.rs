@@ -31,7 +31,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use paper_protocol::{AppId, ExitReason, Request};
+use paper_protocol::{AppId, ExitReason, PixelFormat, Request, SurfaceDescriptor};
 use paper_sdk::SCREEN;
 use paper_sdk::desktop::{self, PreviewControl, PreviewEvent, PreviewOptions};
 
@@ -53,6 +53,7 @@ const WATCHED_DIRS: &[&str] = &[
     "apps/chess-rules/src",
     "apps/sudoku/src",
     "apps/sudoku-rules/src",
+    "apps/render-test-card/src",
     "platform/sdk/src",
     "platform/protocol/src",
     "platform/packages/src",
@@ -103,6 +104,8 @@ pub(crate) enum DevAppArg {
     Chess,
     /// The sudoku app, on the real rules core.
     Sudoku,
+    /// The render test card (WWW-47).
+    RenderTestCard,
 }
 
 impl DevAppArg {
@@ -111,6 +114,7 @@ impl DevAppArg {
             DevAppArg::Home => "home",
             DevAppArg::Chess => "chess",
             DevAppArg::Sudoku => "sudoku",
+            DevAppArg::RenderTestCard => "render-test-card",
         }
     }
 }
@@ -242,6 +246,7 @@ fn run_session(app_slug: &str, storage_root: &Path) -> Result<SessionOutcome, Co
         storage_root,
         "DEV",
         "paperctl dev \u{2014} local, not device verified",
+        SurfaceDescriptor::packed(SCREEN, PixelFormat::Argb8888),
     )
     .map_err(DevError::from)?;
     let options = PreviewOptions::new(format!("paperctl dev \u{2014} {app_slug}"), SCREEN);

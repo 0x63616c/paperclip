@@ -22,6 +22,7 @@ apps = [
     "dep:paper-chess",
     "dep:paper-chess-rules",
     "dep:paper-home",
+    "dep:paper-render-test-card",
     "dep:paper-settings",
     "dep:paper-sudoku",
     "dep:paper-sudoku-rules",
@@ -55,6 +56,7 @@ paper-home = { workspace = true, optional = true }
 paper-host = { workspace = true }
 paper-packages = { workspace = true }
 paper-protocol = { workspace = true }
+paper-render-test-card = { workspace = true, optional = true }
 paper-sdk = { workspace = true }
 paper-settings = { workspace = true, optional = true }
 paper-sudoku = { workspace = true, optional = true }

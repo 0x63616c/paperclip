@@ -280,7 +280,7 @@ impl<A: App, S: Surface, W: Write> Loop<'_, A, S, W> {
             &hello.app,
             &hello.version,
             hello.launch,
-            hello.surface.extent,
+            hello.surface,
             &hello.capabilities,
             storage,
             completer,

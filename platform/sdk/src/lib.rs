@@ -70,5 +70,6 @@ pub use text::{TextAlign, TextStyle, measure_text};
 // out would otherwise mean depending on `paper_protocol` directly.
 pub use paper_protocol::{
     Action, AppId, Capability, ContactId, Damage, DiagnosticLevel, ExitReason, LaunchReason,
-    MAX_DAMAGE_RECTS, Point, Pointer, PointerEvent, PointerPhase, Pressure, Rect, Size, Tilt,
+    MAX_DAMAGE_RECTS, PixelFormat, Point, Pointer, PointerEvent, PointerPhase, Pressure, Rect,
+    Size, SurfaceDescriptor, Tilt,
 };

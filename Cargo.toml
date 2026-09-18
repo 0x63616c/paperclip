@@ -23,6 +23,7 @@ members = [
     "apps/chess-rules",
     "apps/sudoku",
     "apps/sudoku-rules",
+    "apps/render-test-card",
     "tools/paperctl",
     "tools/fault-app",
     "tests/system",
@@ -62,6 +63,7 @@ paper-settings = { path = "apps/settings" }
 paper-chess-rules = { path = "apps/chess-rules" }
 paper-sudoku = { path = "apps/sudoku" }
 paper-sudoku-rules = { path = "apps/sudoku-rules" }
+paper-render-test-card = { path = "apps/render-test-card" }
 paper-sys = { path = "platform/sys" }
 paper-telemetry = { path = "platform/telemetry" }
 # Dev-dependency only, everywhere it appears — see the crate's own doc comment.
