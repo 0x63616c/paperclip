@@ -16,6 +16,31 @@ use std::process::Command;
 /// Relative to the repo root; committed, so every checkout already has it.
 pub(crate) const HOOKS_DIR: &str = ".githooks";
 
+/// Git prefers these over `current_dir` when resolving which repository a
+/// command targets. A git hook sets them for every process it spawns — and
+/// `pre-push` spawning `cargo test`, which spawns this, is exactly that
+/// path — so left alone they redirect `git config`/`git init` below to
+/// whichever repository invoked us instead of `repo_root`. Clearing them is
+/// what makes `repo_root` the actual target regardless of what called us.
+const GIT_ENV_VARS_TO_CLEAR: [&str; 5] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+];
+
+/// A `git` invocation pinned to `repo_root`, immune to the ambient
+/// environment redirecting it elsewhere (see [`GIT_ENV_VARS_TO_CLEAR`]).
+fn git_in(repo_root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.current_dir(repo_root);
+    for var in GIT_ENV_VARS_TO_CLEAR {
+        command.env_remove(var);
+    }
+    command
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HooksOutcome {
     /// `core.hooksPath` already pointed at `.githooks`; nothing to do.
@@ -37,9 +62,8 @@ pub(crate) enum InstallHooksError {
 
 /// The checkout's current local `core.hooksPath`, or `None` if it is unset.
 fn current_hooks_path(repo_root: &Path) -> Option<String> {
-    let output = Command::new("git")
+    let output = git_in(repo_root)
         .args(["config", "--local", "--get", "core.hooksPath"])
-        .current_dir(repo_root)
         .output()
         .ok()?;
     output
@@ -61,9 +85,8 @@ pub(crate) fn run(repo_root: &Path) -> Result<HooksOutcome, InstallHooksError> {
         return Ok(HooksOutcome::AlreadyInstalled);
     }
 
-    let status = Command::new("git")
+    let status = git_in(repo_root)
         .args(["config", "--local", "core.hooksPath", HOOKS_DIR])
-        .current_dir(repo_root)
         .status()
         .map_err(InstallHooksError::RunGit)?;
 
@@ -80,11 +103,7 @@ mod tests {
     use std::fs;
 
     fn init_repo(dir: &Path) {
-        let status = Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(dir)
-            .status()
-            .unwrap();
+        let status = git_in(dir).args(["init", "-q"]).status().unwrap();
         assert!(status.success());
     }
 
