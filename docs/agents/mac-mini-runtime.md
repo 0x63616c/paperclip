@@ -6,14 +6,19 @@ Pro to a Mac mini (Mac14,3, macOS 15.6, arm64, user `calum`, Tailscale name
 it, cross-compile for the tablet, and push, with nothing beyond Homebrew and
 `rustup`/`zig` installed.
 
-## PATH: the one thing that bites first
+## PATH: fixed, not a standing hazard
 
-The agent shell here is not a login shell. Neither `/opt/homebrew/bin` nor
-`~/.cargo/bin` is on `PATH` by default — `cargo`, `rustup`, `zig`, `brew`
-itself all read as "command not found" until you export them. That is a PATH
-problem, not a missing install; check with `command -v <tool>` before
-concluding a tool needs installing. Every command that needs the toolchain
-has to carry:
+`export PATH="$HOME/.cargo/bin:$PATH"` is appended to `~/.zshenv` on this
+host (previous file backed up at `~/.zshenv.bak`). `~/.zshenv` — not
+`~/.zshrc` — is sourced by *every* zsh, including non-interactive ones, so
+`zig`, `gh`, `brew` (`/opt/homebrew/bin`) and `cargo`/`rustup`
+(`~/.cargo/bin`) all resolve by default now, even in a bare `zsh -c
+'command -v cargo'`. That's the fact a future agent needs if this ever
+breaks again: check `~/.zshenv` first, not `~/.zshrc`.
+
+If a run ever lands in a shell that skips `~/.zshenv` (a non-zsh shell, or
+one started with flags that suppress startup files), fall back to
+exporting explicitly:
 
 ```sh
 export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
@@ -54,19 +59,23 @@ for `platform/device`'s `vendor-engine` feature, which links Qt from the
 reMarkable SDK (`platform/device/native/README.md`) — out of scope here and
 not attempted.
 
-## GitHub auth: deploy key, not `gh`
+## GitHub auth: two credentials, two jobs
 
 `~/.ssh/id_ed25519_github` is an SSH deploy key scoped to
 `0x63616c/paperclip` only, wired up in `~/.ssh/config` for `github.com`. A
 `git-receive-pack` probe confirmed it has write access, and this issue's own
-commit is the second proof. Plain `git clone`/`fetch`/`push` against
-`git@github.com:0x63616c/paperclip.git` work with no further setup.
+commits are further proof. Plain `git clone`/`fetch`/`push` against
+`git@github.com:0x63616c/paperclip.git` run on this key — it's what `git`
+push uses, and remains the normal path for landing commits on `main`.
 
-`gh` is installed but has no credential and none should be added — no
-`gh auth login` (interactive, and this key isn't a `gh` credential anyway).
-Anything that needs `gh` (PRs, gh-side issue comments, checks) doesn't work
-from this host and isn't needed: this project pushes straight to `main`, no
-PRs.
+`gh` is separately authenticated, as the `0x63616c` user account (`gh auth
+login` run interactively over SSH by Calum): `gh auth status` reports
+`✓ Logged in to github.com account 0x63616c`, git protocol `https`. Use it
+for anything that needs the GitHub API rather than a bare push — PRs, gh-side
+issue comments, checks (though this project pushes straight to `main`, no
+PRs, so there's little call for it yet). The credential lives in
+`/Users/calum/.config/gh/hosts.yml` **in plain text** — the session had no
+TTY for a keychain — worth knowing before that file is ever pasted anywhere.
 
 ## What still needs a human
 
