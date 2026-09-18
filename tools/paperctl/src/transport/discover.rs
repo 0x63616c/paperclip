@@ -51,6 +51,25 @@ pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(not(target_os = "linux"))]
 pub(crate) const QUICK_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
+/// The bound `devices` uses to *enumerate*, instead of [`PROBE_TIMEOUT`].
+///
+/// [`discover_all`] probes each candidate in turn, so a per-candidate budget
+/// is paid once per candidate rather than once per run. At [`PROBE_TIMEOUT`]
+/// that made `paperctl devices` take 33s on a Mac with no tablet plugged in —
+/// 30s of backoff against an absent USB host, then the mDNS browse — printing
+/// nothing until it finished, which reads as a hang rather than as a slow
+/// answer.
+///
+/// Listing is not reaching: nothing is about to be done to the tablet, so the
+/// wake budget buys nothing here. This is the same trade
+/// [`QUICK_PROBE_TIMEOUT`] makes for `doctor` and `deploy`, for the same
+/// reason. `devices --wake` spends [`PROBE_TIMEOUT`] instead, for the one case
+/// where the question really is "is there a *sleeping* tablet out there".
+///
+/// Ungated, unlike [`QUICK_PROBE_TIMEOUT`]: `devices` is built on the device
+/// too, so a Mac-only constant would not compile there.
+pub(crate) const LIST_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+
 /// How long any single connection attempt inside [`PROBE_TIMEOUT`]'s budget
 /// gets. Short and repeated, not long and singular — see [`PROBE_TIMEOUT`].
 const CONNECT_ATTEMPT: Duration = Duration::from_secs(2);
@@ -111,7 +130,10 @@ pub(crate) struct SystemProber;
 
 impl Prober for SystemProber {
     fn reachable(&self, host: &str, budget: Duration) -> bool {
-        let Ok(addrs) = (host, SSH_PORT).to_socket_addrs() else {
+        let Some(target) = resolvable_host(host) else {
+            return false;
+        };
+        let Ok(addrs) = (target.as_str(), SSH_PORT).to_socket_addrs() else {
             return false;
         };
         probe_with_backoff(&addrs.collect::<Vec<_>>(), budget)
@@ -120,6 +142,61 @@ impl Prober for SystemProber {
     fn mdns_candidates(&self, timeout: Duration) -> Vec<String> {
         mdns_browse(timeout)
     }
+}
+
+/// `host` with any `user@` stripped. The probe opens a TCP socket, which has
+/// no notion of who will log in — only [`super::remote::ssh_target`]'s side
+/// cares. `to_socket_addrs` treats the whole string as a hostname, so
+/// `root@192.168.0.180` fails to parse and reads as unreachable.
+fn bare_host(host: &str) -> &str {
+    host.rsplit_once('@').map_or(host, |(_, host)| host)
+}
+
+/// The name this machine can actually resolve for `host`, or `None`.
+///
+/// `--device` documents itself as taking a host "as `ssh` would take it", and
+/// the pin, the cache and `PAPERCLIP_DEVICE` all accept the same thing — but
+/// the probe resolves the string itself rather than handing it to `ssh`, so
+/// two of the forms ssh accepts never worked:
+///
+/// - `root@host`, which `to_socket_addrs` cannot parse; and
+/// - a `~/.ssh/config` alias such as `remarkable-wifi`, which only `ssh`
+///   knows and the system resolver has never heard of.
+///
+/// Both failed in tens of milliseconds with `reachable=false` — indis-
+/// tinguishable, to a reader, from a tablet that is switched off. Diagnosed
+/// 2026-09-18 against a tablet that was demonstrably up and answering `ssh`.
+///
+/// So: strip the login, then, if the name still does not resolve, ask `ssh`
+/// what it would use. `ssh -G` prints the fully-expanded config for a target
+/// without connecting, so this costs a local process and no network. When no
+/// `Host` block matches, `ssh -G` echoes the name back unchanged — that is
+/// not a translation, and the name did not resolve a moment ago, so it is
+/// rejected rather than retried.
+fn resolvable_host(host: &str) -> Option<String> {
+    let bare = bare_host(host);
+    if (bare, SSH_PORT).to_socket_addrs().is_ok() {
+        return Some(bare.to_owned());
+    }
+    ssh_config_hostname(bare)
+}
+
+/// The `hostname` `ssh -G <host>` reports, when it differs from `host`.
+fn ssh_config_hostname(host: &str) -> Option<String> {
+    let output = std::process::Command::new("ssh")
+        .arg("-G")
+        .arg(host)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("hostname "))
+        .map(str::trim)
+        .filter(|resolved| !resolved.is_empty() && !resolved.eq_ignore_ascii_case(host))
+        .map(str::to_owned)
 }
 
 /// Retries a TCP connect to any of `addrs` with backoff across `budget`,
@@ -481,6 +558,29 @@ mod tests {
         for timeout in prober.mdns_calls() {
             assert!(timeout <= MDNS_TIMEOUT);
         }
+    }
+
+    #[test]
+    fn a_login_prefix_is_not_part_of_the_hostname() {
+        // Every one of these is a form `--device`, a pin, the cache or
+        // `PAPERCLIP_DEVICE` documents itself as accepting.
+        assert_eq!(bare_host("root@192.168.0.180"), "192.168.0.180");
+        assert_eq!(bare_host("192.168.0.180"), "192.168.0.180");
+        assert_eq!(
+            bare_host("root@imx8mm-ferrari.localdomain"),
+            "imx8mm-ferrari.localdomain"
+        );
+        assert_eq!(bare_host("remarkable-wifi"), "remarkable-wifi");
+    }
+
+    #[test]
+    fn a_bare_ip_resolves_without_consulting_ssh() {
+        // The fast path: no `ssh -G`, no config, no network. Guards against a
+        // regression that made every probe pay for a subprocess.
+        assert_eq!(
+            resolvable_host("root@127.0.0.1").as_deref(),
+            Some("127.0.0.1")
+        );
     }
 
     #[test]

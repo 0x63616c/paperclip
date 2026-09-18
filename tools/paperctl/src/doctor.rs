@@ -14,6 +14,20 @@ use crate::transport::OutputFormat;
 use crate::transport::discover::{self, DeviceSource, Prober, QUICK_PROBE_TIMEOUT, SystemProber};
 use crate::transport::remote::{self, CapturedOutput, REMOTE_PAPERCTL, SshRunner};
 
+/// `ssh` reserves 255 for *its own* failures — it could not connect, or could
+/// not authenticate — as distinct from any code the remote command returned.
+///
+/// Without this, an ssh that never ran anything is indistinguishable from a
+/// tablet that answered "no": empty output parses as `active=false`,
+/// `held=false`, `present=false`, and `doctor` reports a healthy tablet as
+/// `Degraded` with every field wrong. Observed 2026-09-18 against a tablet
+/// whose `xochitl.service` was `active` with `NRestarts=0` at the time.
+///
+/// "I could not ask" and "the answer is no" are different answers, and a
+/// false `xochitl active=false` is the one that invites a recovery action
+/// against a device that never needed one.
+const SSH_FAILURE: i32 = 255;
+
 /// `paperctl doctor`.
 #[derive(Debug, Args)]
 pub(crate) struct DoctorArgs {
@@ -37,6 +51,10 @@ pub(crate) struct DeviceStatus {
 pub(crate) struct XochitlStatus {
     active: bool,
     n_restarts: u32,
+    /// The unit's `MainPID`, which is what says whether the process holding
+    /// the display is stock Xochitl or something left behind. `None` when the
+    /// unit is not running (`systemctl` writes `MainPID=0`).
+    main_pid: Option<i32>,
 }
 
 /// The vendor display lock registry, read over SSH.
@@ -44,6 +62,16 @@ pub(crate) struct XochitlStatus {
 pub(crate) struct LockStatus {
     held: bool,
     holder: Option<String>,
+    /// Whether the holder is stock Xochitl itself, by `MainPID`.
+    ///
+    /// Stock holds the display whenever it is running, which is the normal
+    /// resting state of a tablet nobody has taken over — so a held lock is
+    /// only a finding when someone *else* holds it. `tools/device-acceptance/
+    /// run.sh`'s `display-free` precondition makes exactly this distinction,
+    /// and its comment records that the naive "is anything holding it" check
+    /// refused every session on a healthy device the first time it ran on
+    /// hardware. `doctor` had the same bug: it could never report `Healthy`.
+    stock: bool,
 }
 
 /// The `paperctl` binary installed on the device.
@@ -167,15 +195,15 @@ fn build_report(
         .expect("a reachable device status always names a host");
 
     let xochitl = query_xochitl(ssh, &host)?;
-    let lock = query_lock(ssh, &host)?;
+    let lock = query_lock(ssh, &host, xochitl.as_ref().and_then(|x| x.main_pid))?;
     let device_binary = query_binary(ssh, &host)?;
-    let verdict = compute_verdict(&xochitl, &lock, &device_binary);
+    let verdict = compute_verdict(xochitl.as_ref(), lock.as_ref(), device_binary.as_ref());
 
     Ok(DoctorReport {
         device,
-        xochitl: Some(xochitl),
-        lock: Some(lock),
-        device_binary: Some(device_binary),
+        xochitl,
+        lock,
+        device_binary,
         verdict,
     })
 }
@@ -223,59 +251,93 @@ fn resolve_status(
     }
 }
 
+/// `None` when the device could not be asked, never a fabricated "no".
 fn query_xochitl(
     ssh: &dyn SshRunner,
     host: &str,
-) -> Result<XochitlStatus, crate::transport::remote::TransportError> {
+) -> Result<Option<XochitlStatus>, crate::transport::remote::TransportError> {
     let command = format!(
-        "systemctl show {} -p ActiveState -p NRestarts",
+        "systemctl show {} -p ActiveState -p NRestarts -p MainPID",
         paper_host::units::XOCHITL_UNIT
     );
     let output = ssh.run_capture(host, &command)?;
+    if output.exit_code == SSH_FAILURE {
+        return Ok(None);
+    }
     Ok(parse_xochitl(&output.stdout))
 }
 
-fn parse_xochitl(stdout: &str) -> XochitlStatus {
-    let mut active = false;
+/// `None` when the output carries no `ActiveState=` at all — `systemctl show`
+/// always writes the properties it was asked for, so its absence means the
+/// command did not run, not that the unit is inactive.
+fn parse_xochitl(stdout: &str) -> Option<XochitlStatus> {
+    let mut active = None;
     let mut n_restarts = 0;
+    let mut main_pid = None;
     for line in stdout.lines() {
         if let Some(value) = line.strip_prefix("ActiveState=") {
-            active = value.trim() == "active";
+            active = Some(value.trim() == "active");
         } else if let Some(value) = line.strip_prefix("NRestarts=") {
             n_restarts = value.trim().parse().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("MainPID=") {
+            // systemctl writes MainPID=0 for a unit with no running process.
+            main_pid = value.trim().parse::<i32>().ok().filter(|pid| *pid != 0);
         }
     }
-    XochitlStatus { active, n_restarts }
+    Some(XochitlStatus {
+        active: active?,
+        n_restarts,
+        main_pid,
+    })
 }
 
+/// `xochitl_main_pid` is what makes a held lock readable: see
+/// [`LockStatus::stock`].
 fn query_lock(
     ssh: &dyn SshRunner,
     host: &str,
-) -> Result<LockStatus, crate::transport::remote::TransportError> {
+    xochitl_main_pid: Option<i32>,
+) -> Result<Option<LockStatus>, crate::transport::remote::TransportError> {
     let command = format!(
         "cat {} 2>/dev/null || true",
         paper_device::session::EPFRAMEBUFFER_LOCK
     );
     let output = ssh.run_capture(host, &command)?;
-    Ok(parse_lock(&output.stdout))
+    if output.exit_code == SSH_FAILURE {
+        return Ok(None);
+    }
+    Ok(Some(parse_lock(&output.stdout, xochitl_main_pid)))
 }
 
-fn parse_lock(stdout: &str) -> LockStatus {
+fn parse_lock(stdout: &str, xochitl_main_pid: Option<i32>) -> LockStatus {
     let holder = paper_device::session::DisplayLockHolder::parse(stdout);
     let held = holder.pid.is_some();
+    let stock = match (holder.pid, xochitl_main_pid) {
+        (Some(holder), Some(xochitl)) => holder == xochitl,
+        // Without Xochitl's MainPID there is nothing to compare against, so
+        // the holder is not *known* to be stock. Erring toward "report it"
+        // keeps a real stray session visible.
+        _ => false,
+    };
     LockStatus {
         held,
         holder: held.then(|| holder.describe()),
+        stock,
     }
 }
 
+/// `None` when the device could not be asked. Distinct from a binary that is
+/// genuinely absent, which exits non-zero with output of its own.
 fn query_binary(
     ssh: &dyn SshRunner,
     host: &str,
-) -> Result<BinaryStatus, crate::transport::remote::TransportError> {
+) -> Result<Option<BinaryStatus>, crate::transport::remote::TransportError> {
     let command = format!("{REMOTE_PAPERCTL} --version 2>&1");
     let output = ssh.run_capture(host, &command)?;
-    Ok(parse_binary(&output))
+    if output.exit_code == SSH_FAILURE {
+        return Ok(None);
+    }
+    Ok(Some(parse_binary(&output)))
 }
 
 fn parse_binary(output: &CapturedOutput) -> BinaryStatus {
@@ -297,9 +359,21 @@ fn parse_binary(output: &CapturedOutput) -> BinaryStatus {
     }
 }
 
-fn compute_verdict(xochitl: &XochitlStatus, lock: &LockStatus, binary: &BinaryStatus) -> Verdict {
+/// A missing component means the tablet answered the TCP probe but could not
+/// be *asked* — `ssh` failed. That is not `Degraded`, which asserts something
+/// about the device: it is a device this command cannot speak for, so it gets
+/// [`Verdict::Unreachable`] and its exit code. Reporting `Healthy` or
+/// `Degraded` from three unanswered questions is the failure this replaces.
+fn compute_verdict(
+    xochitl: Option<&XochitlStatus>,
+    lock: Option<&LockStatus>,
+    binary: Option<&BinaryStatus>,
+) -> Verdict {
+    let (Some(xochitl), Some(lock), Some(binary)) = (xochitl, lock, binary) else {
+        return Verdict::Unreachable;
+    };
     let degraded = xochitl.n_restarts > 0
-        || lock.held
+        || (lock.held && !lock.stock)
         || !binary.present
         || matches!(
             binary.comparison,
@@ -330,21 +404,37 @@ fn print_report(report: &DoctorReport, output: OutputFormat) -> Result<(), Comma
                 }
                 _ => println!("device       none resolved"),
             }
-            if let Some(xochitl) = &report.xochitl {
-                println!(
+            match &report.xochitl {
+                Some(xochitl) => println!(
                     "xochitl      active={} n_restarts={}",
                     xochitl.active, xochitl.n_restarts
-                );
+                ),
+                None if report.device.reachable => {
+                    println!("xochitl      unknown (could not run commands over ssh)");
+                }
+                None => {}
             }
-            if let Some(lock) = &report.lock {
-                println!(
-                    "lock         held={}{}",
+            match &report.lock {
+                Some(lock) => println!(
+                    "lock         held={}{}{}",
                     lock.held,
                     lock.holder
                         .as_deref()
                         .map(|holder| format!(" ({holder})"))
-                        .unwrap_or_default()
-                );
+                        .unwrap_or_default(),
+                    if lock.held && lock.stock {
+                        " — stock xochitl, which is the normal resting state"
+                    } else {
+                        ""
+                    }
+                ),
+                None if report.device.reachable => {
+                    println!("lock         unknown (could not run commands over ssh)");
+                }
+                None => {}
+            }
+            if report.device_binary.is_none() && report.device.reachable {
+                println!("device paperctl unknown (could not run commands over ssh)");
             }
             if let Some(binary) = &report.device_binary {
                 println!(
@@ -368,6 +458,18 @@ fn print_report(report: &DoctorReport, output: OutputFormat) -> Result<(), Comma
                 );
             }
             println!("verdict      {:?}", report.verdict);
+            // A tablet that answers on :22 but cannot be asked anything is
+            // the case that used to be reported as three confident falsehoods.
+            // Say what actually happened, and what usually causes it.
+            if report.device.reachable && report.xochitl.is_none() {
+                println!(
+                    "             the tablet answered on port 22 but `ssh` could not run a \
+                     command.\n             Check that `ssh {} true` works — a host with no \
+                     matching\n             `~/.ssh/config` entry logs in as the local user \
+                     with no key.",
+                    report.device.host.as_deref().unwrap_or("<host>")
+                );
+            }
         }
     }
     Ok(())
@@ -431,22 +533,26 @@ mod tests {
     }
 
     #[test]
-    fn restarts_hold_or_a_missing_binary_degrade_the_verdict() {
+    fn restarts_a_stray_hold_or_a_missing_binary_degrade_the_verdict() {
         let restarted = XochitlStatus {
             active: true,
             n_restarts: 1,
+            main_pid: Some(423),
         };
         let clean = XochitlStatus {
             active: true,
             n_restarts: 0,
+            main_pid: Some(423),
         };
         let free = LockStatus {
             held: false,
             holder: None,
+            stock: false,
         };
-        let held = LockStatus {
+        let held_by_stranger = LockStatus {
             held: true,
-            holder: Some("xochitl (pid 1)".to_owned()),
+            holder: Some("paperctl (pid 900)".to_owned()),
+            stock: false,
         };
         let present = BinaryStatus {
             present: true,
@@ -459,47 +565,99 @@ mod tests {
             comparison: None,
         };
 
-        assert_eq!(compute_verdict(&clean, &free, &present), Verdict::Healthy);
         assert_eq!(
-            compute_verdict(&restarted, &free, &present),
+            compute_verdict(Some(&clean), Some(&free), Some(&present)),
+            Verdict::Healthy
+        );
+        assert_eq!(
+            compute_verdict(Some(&restarted), Some(&free), Some(&present)),
             Verdict::Degraded
         );
-        assert_eq!(compute_verdict(&clean, &held, &present), Verdict::Degraded);
-        assert_eq!(compute_verdict(&clean, &free, &missing), Verdict::Degraded);
+        assert_eq!(
+            compute_verdict(Some(&clean), Some(&held_by_stranger), Some(&present)),
+            Verdict::Degraded
+        );
+        assert_eq!(
+            compute_verdict(Some(&clean), Some(&free), Some(&missing)),
+            Verdict::Degraded
+        );
     }
 
     #[test]
-    fn an_older_device_binary_degrades_the_verdict_but_a_newer_one_does_not() {
+    fn a_display_lock_held_by_stock_xochitl_is_not_a_finding() {
+        // The normal resting state of every tablet nobody has taken over.
+        // Treating it as a finding meant `doctor` could never say `Healthy`
+        // and exited 1 forever — which in a CI gate reads as a failure.
         let clean = XochitlStatus {
             active: true,
             n_restarts: 0,
+            main_pid: Some(423),
         };
-        let free = LockStatus {
-            held: false,
-            holder: None,
-        };
-        let older = BinaryStatus {
+        let present = BinaryStatus {
             present: true,
             version: Some("0.1.0".to_owned()),
-            comparison: Some(VersionComparison::DeviceOlder),
+            comparison: Some(VersionComparison::Same),
         };
-        let newer = BinaryStatus {
-            present: true,
-            version: Some("9.0.0".to_owned()),
-            comparison: Some(VersionComparison::DeviceNewer),
-        };
-        let unparseable = BinaryStatus {
-            present: true,
-            version: Some("not-a-version".to_owned()),
-            comparison: Some(VersionComparison::Unparseable),
-        };
+        let held_by_stock = parse_lock("423\nxochitl\nimx8mm-ferrari\nmachine\nboot\n", Some(423));
 
-        assert_eq!(compute_verdict(&clean, &free, &older), Verdict::Degraded);
-        assert_eq!(compute_verdict(&clean, &free, &newer), Verdict::Healthy);
+        assert!(held_by_stock.held, "stock really is holding it");
+        assert!(held_by_stock.stock);
         assert_eq!(
-            compute_verdict(&clean, &free, &unparseable),
+            compute_verdict(Some(&clean), Some(&held_by_stock), Some(&present)),
+            Verdict::Healthy
+        );
+
+        // The same lock, held by anything that is not Xochitl's MainPID, is
+        // exactly the stray session the check exists to catch.
+        let stray = parse_lock("900\npaperctl\nimx8mm-ferrari\nmachine\nboot\n", Some(423));
+        assert!(!stray.stock);
+        assert_eq!(
+            compute_verdict(Some(&clean), Some(&stray), Some(&present)),
             Verdict::Degraded
         );
+    }
+
+    #[test]
+    fn a_question_that_could_not_be_asked_is_never_answered_no() {
+        // ssh exits 255 when it could not connect or authenticate, having run
+        // nothing. The empty output that follows used to parse as three
+        // confident falsehoods and a `Degraded` verdict.
+        let prober = FakeProber::reachable_hosts(&["10.11.99.1"]);
+        let ssh = FakeSsh {
+            capture_result: CapturedOutput {
+                stdout: String::new(),
+                exit_code: 255,
+            },
+            ..FakeSsh::default()
+        };
+
+        let report = build_report(
+            None,
+            None,
+            None,
+            None,
+            &prober,
+            &ssh,
+            Duration::from_millis(10),
+        )
+        .expect("ok");
+
+        assert!(report.device.reachable, "the TCP probe did answer");
+        assert!(report.xochitl.is_none(), "not `active=false`");
+        assert!(report.lock.is_none(), "not `held=false`");
+        assert!(report.device_binary.is_none(), "not `present=false`");
+        assert_eq!(
+            report.verdict,
+            Verdict::Unreachable,
+            "a device that cannot be asked is not one to call Degraded"
+        );
+    }
+
+    #[test]
+    fn output_with_no_active_state_is_not_an_inactive_unit() {
+        // `systemctl show` always writes the properties it was asked for.
+        assert!(parse_xochitl("").is_none());
+        assert!(parse_xochitl("some unrelated noise\n").is_none());
     }
 
     #[test]
@@ -524,21 +682,28 @@ mod tests {
 
     #[test]
     fn parses_the_shape_systemctl_show_actually_writes() {
-        let status = parse_xochitl("ActiveState=active\nNRestarts=2\n");
+        let status = parse_xochitl("ActiveState=active\nNRestarts=2\nMainPID=423\n")
+            .expect("ActiveState= is present, so this is a real answer");
         assert!(status.active);
         assert_eq!(status.n_restarts, 2);
+        assert_eq!(status.main_pid, Some(423));
+
+        // A stopped unit reports MainPID=0, which is not a pid.
+        let stopped = parse_xochitl("ActiveState=inactive\nNRestarts=0\nMainPID=0\n")
+            .expect("still a real answer");
+        assert_eq!(stopped.main_pid, None);
     }
 
     #[test]
     fn an_empty_lock_file_reads_as_not_held() {
-        let status = parse_lock("");
+        let status = parse_lock("", Some(423));
         assert!(!status.held);
         assert_eq!(status.holder, None);
     }
 
     #[test]
     fn a_lock_naming_a_holder_reads_as_held() {
-        let status = parse_lock("15310\nxochitl\nimx8mm-ferrari\nmachine\nboot\n");
+        let status = parse_lock("15310\nxochitl\nimx8mm-ferrari\nmachine\nboot\n", Some(423));
         assert!(status.held);
         assert_eq!(status.holder.as_deref(), Some("xochitl (pid 15310)"));
     }
