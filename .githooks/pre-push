@@ -1,11 +1,22 @@
 #!/bin/sh
 # Installed via `git config core.hooksPath .githooks` (xtask/build.rs,
 # `cargo xtask install-hooks`; WWW-66). Reproduces docs/development.md's "the
-# loop" — the three checks that must pass before anything is pushed — so a
-# CI failure shows up here first. Skip in a real emergency with
+# loop" — the checks that must pass before anything is pushed — so a CI
+# failure shows up here first. Keep this in step with `just ci`: a hook that
+# claims to pre-empt CI while running a subset of it is worse than no hook,
+# because it buys false confidence. Skip in a real emergency with
 # `git push --no-verify`.
 set -eu
 
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --keep-going -- -D warnings
+# The device target too. This is not redundant: `paperctl`'s Mac half is
+# `#[cfg(not(target_os = "linux"))]`, so code that is live here is dead on the
+# tablet, and a host-target clippy cannot see it (WWW-65). CI runs on Linux and
+# caught six such findings that were invisible locally.
+cargo clippy --workspace --all-targets --keep-going --target aarch64-unknown-linux-gnu -- -D warnings
+# And the docs. Cross-targeted for the mirror-image reason, and because that is
+# what `just doc` does since WWW-67: intra-doc links to Linux-only items cannot
+# resolve on a Mac, so documenting the host target fails here and nowhere else.
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --workspace --no-deps --keep-going --target aarch64-unknown-linux-gnu
 cargo test --workspace
