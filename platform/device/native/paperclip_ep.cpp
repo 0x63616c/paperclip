@@ -399,24 +399,34 @@ int32_t paperclip_ep_open(paperclip_ep **out)
         handle->pixel_count = static_cast<size_t>(handle->engine_aux->bytesPerLine() / 4)
             * static_cast<size_t>(handle->engine_aux->height());
 
-        /* The engine presents from `front`, the first element of the tuple,
-         * which is also what `paperclip_ep_buffer` hands out.
+        /* `handle->pixels` is the ENGINE's memory, not ours handed to it.
          *
-         * ESTABLISHED BY DISASSEMBLY, WWW-29 — not by readback. `setBuffers`
-         * at 0x328c0 stores `std::get<0>(tuple)` into `this+0x88`, and
-         * `swapBuffers` at 0x32930 reads `this+0x88`. It stores by
-         * `QImage::operator=`, so what it keeps *shares* our pixel data rather
-         * than copying it; that sharing is the transport, and severing it is
+         * ESTABLISHED ON HARDWARE, WWW-32 — not by disassembly alone.
+         * `EPFramebuffer::setBuffers` is an engine-internal init call, made
+         * once from the backend's own constructor with images the engine
+         * allocated for itself. Calling it again from outside — which every
+         * present did up to WWW-32 — is not an error and produces no
+         * diagnostic; it just writes into three members `swapBuffers` never
+         * reads. The disassembly WWW-29 read is still accurate as a
+         * description of what `setBuffers` does with its arguments
+         * (`QImage::operator=` into `this+0x88`/`this+0xa0`/`this+0xa8`); the
+         * inference that an external caller driving those members is the same
+         * as the constructor's own assignment is what WWW-32 refuted, on the
+         * tablet. See ADR-0009.
+         *
+         * So this bridge never calls `setBuffers`, and instead keeps a raw
+         * pointer straight at the engine's own `QImage` and reads its
+         * `constBits()` directly — never `bits()`, the same rule WWW-29
+         * found, just guarding the other side of the boundary now: a
+         * non-const accessor called on that `QImage`, by anything, would
+         * copy its pixel data onto fresh memory, and severing it that way is
          * the failure `PAPERCLIP_EP_DETACHED` exists to catch.
          *
-         * WWW-23 reached the same conclusion from a readback and was not
-         * entitled to: at the time `paperclip_ep_buffer` had already detached
-         * `front` onto private memory, so "front came back byte-identical to
-         * what was sent" was this side's buffer agreeing with itself and would
-         * have read the same however the engine behaved. The conclusion
-         * survived; the evidence for it did not. ADR-0009 records both. */
-        /* Deliberately NOT calling setBuffers: it is the engine's own init
-         * call and our images are not what it renders from. */
+         * WWW-23's readback-based claim that `front` was the presented buffer
+         * was never sound evidence either way: at the time `paperclip_ep_buffer`
+         * had already detached `front` onto private memory, so "front came
+         * back byte-identical to what was sent" was this side's buffer
+         * agreeing with itself. */
 
         *out = handle;
         g_last_error.clear();

@@ -10,6 +10,15 @@ from WWW-3 to WWW-30 was orphaned from the frame it was meant to show. See
 "Which buffer the engine presents from", which also withdraws the evidence the
 earlier version of that section rested on. Takeover, release and the safety
 properties are unaffected; what was on the glass is not.
+
+**Amended again 2026-09-17 (WWW-32).** The buffer WWW-29/WWW-30 fixed the
+sharing of was the wrong one. `EPFramebuffer::setBuffers` never hands the
+engine anything we allocate — it is an engine-internal init call — so the
+"which tuple element" question the first amendment answered is moot. The
+engine presents from its own `Format_RGB32` `QImage`, found inside the
+already-constructed engine object. See the amendment appended after
+"Which buffer the engine presents from", which supersedes that section's
+conclusion without deleting its disassembly.
 Implements the decision in [ADR-0007](0007-display-transport-via-vendor-waveform-engine.md);
 this ADR is about *how* the vendor engine is called, not whether it is.
 
@@ -47,12 +56,19 @@ libqsgepaper.so            EPFramebuffer, proprietary, never vendored
 - The **handle** (`paperclip_ep *`) is created by `paperclip_ep_open` and
   destroyed only by `paperclip_ep_close`. `VendorPanel` owns exactly one and
   closes it in `Drop`, including on the error paths inside `open` itself.
-- The **pixel buffer** is owned by the bridge — three `QImage`s allocated in
-  `paperclip_ep_open` and handed to `EPFramebuffer::setBuffers`. Rust borrows
-  one address and frees nothing. That address is cached in `open` *before*
-  `setBuffers`, and it is the only one the bridge ever hands out or writes
-  through; see "Implicit sharing is the transport" below, which is the reason
-  and not an optimisation.
+- The **pixel buffer the engine presents from** is owned by the *engine*, not
+  the bridge (WWW-32, correcting the paragraph below). It is a `Format_RGB32`
+  `QImage` the engine allocates for itself inside `EPFramebuffer::instance()`;
+  the bridge locates it by scanning a short list of candidate offsets and
+  identifying the 32bpp image by format and stride, then borrows its
+  `constBits()`. `EPFramebuffer::setBuffers` is never called — it is an
+  engine-internal init call, and buffers handed to it from outside are never
+  read back. Rust borrows the one address the bridge caches at `open` and
+  frees nothing; see "Implicit sharing" below, which is still the mechanism,
+  just borrowing in the other direction than this ADR originally assumed.
+  The bridge's own `front`/`back`/`aux` `QImage`s are still allocated in
+  `open` — `front` for panel-bounds arithmetic, `back`/`aux` as inert scratch
+  for their readback planes — but none of them is what reaches the glass.
 - The **error string** is thread-local storage inside the bridge. Rust copies
   it before returning; it never holds the pointer.
 
@@ -248,6 +264,18 @@ Read out of the pulled copy and out of running it:
 - **It participates in the advisory locks**, naming `/tmp/epd.lock` and
   `/tmp/epframebuffer.lock` directly, and carries the string
   `"Failed to lock epframebuffer. Is there another EPFramebuffer instance?"`.
+- **There is no `EPContentType`-aware `swapBuffers` overload.** quill resolves
+  and calls a four-argument `swapBuffers(QRect, EPContentType, EPScreenMode,
+  QFlags<UpdateFlag>)` against the same library family, which raised the
+  question of whether `platform/device/native` has been calling the wrong
+  overload since WWW-3 and silently discarding content type. Checked directly
+  against the WWW-3 pull, sha256 `3f76b7db32…` (WWW-36): the string
+  `EPContentType` does not appear anywhere in the binary, `_ZN13EPFramebuffer`
+  exports exactly the seven symbols `vendor-abi.txt` already records, and the
+  only two `swapBuffers` overloads are the `QRect` one this bridge calls and
+  the `QRegion`/`EPScreenModeMap` one it does not. `content` staying discarded
+  in `present()` is therefore not a wrong-overload bug on this image; quill's
+  four-argument overload belongs to a different build of the library.
 - **Waveform tables are files, per panel lot, and mandatory.** Four of them:
   `/usr/share/remarkable/ct33_{std,best,fast,pen}.bin`. The engine loads them
   at construction and validates their size — a wrong-sized file produced
@@ -265,6 +293,10 @@ gate is closed, `QCoreApplication` is a far lighter requirement than the
 fallback rather than becoming the cheaper option.
 
 ## Which buffer the engine presents from
+
+**Superseded by WWW-32, on hardware — see the amendment at the end of this
+section.** The conclusion below ("the engine presents from `front`") is wrong;
+the disassembly it is built on is not, and is kept for that reason.
 
 `paperclip_ep_open` hands the engine `setBuffers(make_tuple(front, back),
 &aux)`. The engine presents from **`front`**, the first tuple element, which is
@@ -381,6 +413,59 @@ including the present, which refuses with `PAPERCLIP_EP_DETACHED` instead of
 succeeding. **Landing this does not prove the glass changed** — that is
 WWW-33's job, on the tablet.
 
+### Amendment (WWW-32): `setBuffers` never was the transport
+
+Everything above through "How this is held without a tablet" concluded that
+`paperclip_ep_open`'s `setBuffers(make_tuple(front, back), &aux)` call hands
+the engine the memory it presents from, and that the member set from `front`
+is the one `swapBuffers` reads. **That conclusion is wrong.** WWW-32
+established, on the tablet: `EPFramebuffer::setBuffers` is an
+**engine-internal init call**, made once from `EPFramebufferSwtcon`'s own
+constructor with images the engine allocates for itself. Calling it again
+from outside — which `platform/device/native` did, per the disassembly above
+— is not an error and produces no diagnostic; it simply writes into members
+`swapBuffers` never reads back. Every present from WWW-3 to WWW-32 painted a
+real frame with a real waveform onto a buffer the engine had already
+discarded, which is why `paperctl open` reported success while the panel
+stayed white.
+
+**The disassembly above is kept, not withdrawn.** `setBuffers` really does
+write `this+0x88`/`this+0xa0`/`this+0xa8` by `QImage::operator=`, and
+`swapBuffers` really does read `this+0x88`. What was wrong was the inference
+that an external caller driving those writes is the same as the constructor's
+own — the disassembly cannot distinguish "the constructor wrote this" from
+"our `setBuffers` call overwrote it a second time, harmlessly", and only a
+device session could. The same caution applies to the WWW-23-vs-WWW-29 story
+two sections up: it is a real, distinct, already-resolved bug, but it does not
+make the disassembly's *interpretation* here any more trustworthy without
+hardware.
+
+The engine renders from its own `Format_RGB32` `QImage`, found *inside the
+already-constructed engine object* rather than handed to it. On image
+`20260827113527` that surface is at `engine + 0x88`; a `Format_Grayscale8`
+internal buffer of identical dimensions sits at `+0xa8`. Matching on
+dimensions alone picks either one and both look plausible — `find_draw_surface`
+in `paperclip_ep.cpp` therefore probes a short list of candidate offsets
+(`0x88`, `0xa8`, `0xc8`, overridable via `PAPERCLIP_AUX_OFFSET`) and identifies
+the surface by **format and stride** (a 32bpp `QImage` whose `bytesPerLine`
+implies 4 bytes per pixel), never by which offset it happened to be at on this
+build.
+
+Binding to it uses the same rule WWW-29 established, just on the other side of
+the boundary: `constBits()`, never `bits()`. The non-const accessor detaches
+the engine's shared `QImage` onto a private copy, and the bridge would draw
+into memory the engine no longer reads — the WWW-29 failure, mirrored. The
+no-detach invariant, `attached()` and `paperclip_ep_readback`'s `FRONT` plane
+all now check against this engine-owned surface rather than the bridge's own
+cached `front`, which is what actually makes the WWW-31 exit-code verdict
+non-vacuous.
+
+`native/check-detach.cpp` is rewritten to match: its stub `EPFramebuffer`
+carries its own `Format_RGB32` image at the probed offset rather than sharing
+whatever `setBuffers` was handed, and the assertions are against that surface.
+Confirmed on hardware by Calum, 2026-09-17: the Home shelf appears on the
+panel.
+
 ## Provenance
 
 The wrapper's *shape* — a pixel buffer accessor, a mono-fast swap for live ink,
@@ -411,10 +496,13 @@ pointed at by `PAPERCLIP_VENDOR_LIB_DIR`.
 - advisory-lock parsing against the exact bytes the tablet wrote, and that the
   description leaks neither the machine id nor the boot id;
 - that `ep_abi.hpp` generates exactly the recorded vendor signatures;
-- that a pixel address cached before `setBuffers` reaches the image the engine
-  shares, that a non-const `QImage` accessor severs it silently, and that the
-  bridge refuses to present once severed — `native/check-host.sh`, which needs
-  Qt but neither the vendor library nor the tablet.
+- that the bridge finds the engine's own `Format_RGB32` surface by format and
+  stride rather than by dimensions alone — the stub's same-size
+  `Format_Grayscale8` decoy catches a regression to a dimensions-only match —
+  that a pixel address cached from it reaches the image the engine shares,
+  that a non-const `QImage` accessor severs it silently, and that the bridge
+  refuses to present once severed — `native/check-host.sh`, which needs Qt but
+  neither the vendor library nor the tablet.
 
 **Not proven — every one of these is an open hardware gate:**
 
@@ -425,15 +513,15 @@ pointed at by `PAPERCLIP_VENDOR_LIB_DIR`.
 | Whether `EPFramebuffer` needs a live `QGuiApplication` | **closed** — a bare `QCoreApplication` suffices; without one it segfaults | whether the primary path is simpler than the fallback |
 | Whether the vendor can kill the process past our error handling | **closed, and it can** — `abort()` on init failure, guarded by `preflight()` | the honesty of the no-exception contract |
 | Which waveform table the engine loads | **closed** — panel-specific, selected by lot/TFT; not the `ct33_*` files | a guard that wrongly refuses another panel |
-| The engine opens and presents on the real tablet | **opens: closed** — three round trips, stock healthy after each. **Presents: reopened by WWW-29** — every one of those presents was a detached frame, so the engine was handed white | the stage |
+| The engine opens and presents on the real tablet | **closed** — three takeover round trips, stock healthy after each, and WWW-32 confirmed the Home shelf appears on the panel. Reopened twice on the way here: WWW-29 found every present up to WWW-30 was a detached frame; WWW-32 then found `setBuffers` itself was inert, so even an attached frame was reaching a buffer the engine had discarded | the stage |
 | The `EPScreenMode` encoding | **closed, and it was wrong** — mode alone, no content bit | every colour swap |
 | **That what reaches the glass is correct** | **open** — nothing has seen the panel | §18 item 2 |
 | Panel settle time, as against API call latency | **open** — connect `framebufferUpdated` or use a camera | the §9 latency budget |
 | Input during a session | **open** — needs a finger on the glass | the input half of the round trip |
 | Ghosting, memory, CPU, behaviour across a real suspend | **open** — the tablet was on charge, so it never suspended | the §9 baseline |
 | A Paperclip surface is legible on the glass | **open** | §18 item 2, the stage's whole point |
-| Which tuple element the engine presents from | **closed** — `front`, by WWW-29's disassembly of `setBuffers` and `swapBuffers`; no device needed | drawing landing on the wrong page |
-| That the caller's drawing reaches the memory the engine presents from | **closed off-device** — `check-host.sh`; a detach is now `PAPERCLIP_EP_DETACHED` rather than a silent success | every frame |
+| Which memory the engine presents from | **closed, on hardware** — WWW-32: not a tuple element handed to `setBuffers` at all, but the engine's own `Format_RGB32` `QImage`, found inside the already-constructed engine object by format and stride. The earlier "closed off-device" answer (`front`, by disassembly of `setBuffers`/`swapBuffers`) was wrong; the disassembly was right about what those functions do, the inference that our call drives them was not | drawing landing on the wrong page |
+| That the caller's drawing reaches the memory the engine presents from | **closed off-device** — `check-host.sh`, against the engine's own surface post-WWW-32; a detach is now `PAPERCLIP_EP_DETACHED` rather than a silent success | every frame |
 | The `EPScreenMode` / `UpdateFlag` / `GhostControlMode` numeric values | **guessed** | wrong waveform, silently |
 | Mono 0 / mono 3 / colour 4 being the right waveforms | **proposed** | latency and legibility |
 | Aux buffer byte order `B, G, R, 0xFF` | **inferred** from quill, not measured | inverted colour |

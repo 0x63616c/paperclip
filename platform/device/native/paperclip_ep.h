@@ -28,18 +28,30 @@
  *
  * ## The no-detach invariant
  *
- * `EPFramebuffer::setBuffers` stores its arguments by `QImage::operator=`,
- * Qt's refcounted shallow assignment, so from `open` onwards the engine holds
- * a `QImage` *sharing* the bridge's pixel data. Qt's implicit sharing is
- * therefore inverted at this boundary: writing through shared data is the
- * entire mechanism, and a detach — which Qt performs silently, on any
- * non-const accessor — severs the caller's drawing from the engine's page.
+ * `EPFramebuffer::setBuffers` is an engine-internal init call, made once from
+ * the backend's own constructor with images the engine allocated for itself
+ * — calling it again from outside does nothing the engine ever reads back
+ * (WWW-32, established on hardware). So the bridge never calls it. Instead it
+ * finds the engine's own drawing surface — a `Format_RGB32` `QImage` already
+ * living inside the `EPFramebuffer` object, identified by format and stride,
+ * never by a fixed offset — and borrows it directly.
  *
- * So the bridge caches the pixel address before `setBuffers` runs, hands that
- * cached pointer out, and never calls a non-const `QImage` accessor again.
- * Every present re-checks the two agree and returns PAPERCLIP_EP_DETACHED
+ * The bridge does not hold a second `QImage` sharing that data — it holds a
+ * raw pointer straight at the engine's own `QImage` object and reads its
+ * `constBits()` directly, every time, rather than caching the address at the
+ * `QImage` level. `constBits()` never disturbs the object it is called on,
+ * but a non-const accessor — called on that object by anything, from either
+ * side of this boundary — copies its pixel data onto fresh memory and leaves
+ * the object pointing there instead. Writing through the pixel address cached
+ * at `open` is how a frame reaches the panel; a detach from either side
+ * severs it.
+ *
+ * So the bridge caches the engine surface's pixel address in `open`, hands
+ * that cached pointer out, and never calls a non-const `QImage` accessor on
+ * it. Every present re-checks the two agree and returns PAPERCLIP_EP_DETACHED
  * rather than presenting a frame the engine has never seen. WWW-29 found the
- * bug this guards; WWW-30 is the fix.
+ * detach bug this guards against; WWW-32 found that the buffer being guarded
+ * was the wrong one and moved the guard to the engine's own surface.
  */
 
 #ifndef PAPERCLIP_EP_H
@@ -69,10 +81,12 @@ extern "C" {
 
 /* Which of the three buffers `paperclip_ep_readback` copies out.
  *
- * `open` hands the engine `setBuffers(make_tuple(front, back), &aux)`. WWW-29
- * disassembled `setBuffers` and established that the engine keeps the first
- * tuple element — our FRONT — and presents from it, so FRONT is both where the
- * caller draws and what reaches the panel.
+ * FRONT is the engine's own drawing surface, found inside the already
+ * constructed `EPFramebuffer` object rather than handed to it (WWW-32): the
+ * caller's writes and the engine's scanout are the same memory, so FRONT is
+ * both where the caller draws and what reaches the panel. BACK and AUX are
+ * the bridge's own scratch buffers — never shared with the engine — kept for
+ * bounds arithmetic and as inert readback planes.
  *
  * Reading FRONT back therefore answers "are the pixels I wrote still in the
  * memory the engine shares with me" — a different and weaker question than "is

@@ -53,23 +53,29 @@ Neither would have caught WWW-29, where the bridge built, linked, ran and
 returned success while presenting white for four issues. This is the check that
 does.
 
-`EPFramebuffer::setBuffers` stores its arguments by `QImage::operator=`, so the
-engine holds a `QImage` **sharing** our pixels. Writing through that shared data
-is how a frame reaches the panel, and a detach — which Qt performs silently on
-any non-const accessor — severs it without an error. So:
+`EPFramebuffer::setBuffers` is an engine-internal init call (WWW-32, on
+hardware) — the bridge never calls it. Instead it finds the engine's own
+`Format_RGB32` drawing surface inside the already-constructed engine object,
+identified by format and stride rather than a fixed offset, and borrows it
+through `constBits()`. The bridge's own `QImage` then **shares** the engine's
+pixels. Writing through that shared data is how a frame reaches the panel, and
+a detach — which Qt performs silently on any non-const accessor — severs it
+without an error. So:
 
 - `check-sharing.cpp` pins the Qt behaviour on its own. Runs anywhere with Qt,
   a Mac included.
 - `check-detach.cpp` runs the real `paperclip_ep_open` against a stub
-  `EPFramebuffer` that shares its buffers the way the disassembly shows the real
-  one doing, and asserts the handed-out buffer *is* the engine's memory, that a
-  clear reaches it, and that a forced detach turns swap, clear and front
-  readback into `PAPERCLIP_EP_DETACHED`. It needs a disposable
-  `/usr/share/remarkable` for `preflight()`, so it is skipped where one cannot
-  be made and always runs in `check-link.sh`'s container.
+  `EPFramebuffer` that carries a real `Format_RGB32` `QImage` at the offset
+  `find_draw_surface` scans, plus a same-size `Format_Grayscale8` decoy at the
+  offset WWW-32 found holds the engine's *other* internal buffer — and asserts
+  that the bridge finds the RGB32 one, that the handed-out buffer *is* the
+  engine's memory, that a clear reaches it, and that a forced detach turns
+  swap, clear and front readback into `PAPERCLIP_EP_DETACHED`. It needs a
+  disposable `/usr/share/remarkable` for `preflight()`, so it is skipped where
+  one cannot be made and always runs in `check-link.sh`'s container.
 
-`check-link.sh` runs both as its last stage. See ADR-0009, "Implicit sharing is
-the transport".
+`check-link.sh` runs both as its last stage. See ADR-0009, "Which buffer the
+engine presents from".
 
 ## Build it for the tablet — needs two things this repository does not contain
 
@@ -115,7 +121,8 @@ linker error, and refuses outright on a non-aarch64 target.
 
 ## Status
 
-**Compiles and links against the real library. Has never run on the tablet.**
+**Compiles and links against the real library. Confirmed on hardware: the
+Home shelf appears on the panel (WWW-32).**
 
 Verified: `check-abi.sh` passes all four steps against `libqsgepaper.so`
 sha256 `3f76b7db…`, image `20260827113527` — after it caught that `UpdateFlag`
@@ -126,8 +133,12 @@ to a clean refusal.
 Two things running it established that reading the exports never would: the
 engine **segfaults without a live `QCoreApplication`** (so the bridge owns
 one), and it **`abort()`s** rather than failing when it cannot initialise (so
-`preflight()` checks its preconditions first — `catch (...)` cannot help).
+`preflight()` checks its preconditions first — `catch (...)` cannot help). A
+third, WWW-32, needed the tablet rather than a container: `setBuffers` is
+inert from outside, and the engine presents from its own surface, found by
+scanning rather than by a fixed offset.
 
-Still unvalidated: the waveform mode numbers, which tuple element the engine
-presents from, the aux byte order, and everything about the panel. Guesses are
-marked `UNVERIFIED` in the source; ADR-0009 lists every open gate.
+Still unvalidated: the waveform mode numbers, the aux byte order, and most of
+what happens once a frame is actually on the glass — panel settle time,
+ghosting, and behaviour across a real suspend. Guesses are marked
+`UNVERIFIED` in the source; ADR-0009 lists every open gate.

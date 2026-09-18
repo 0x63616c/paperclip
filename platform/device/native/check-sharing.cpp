@@ -1,10 +1,20 @@
 // The Qt behaviour the whole display path rests on, reproduced in isolation.
 //
-// `EPFramebuffer::setBuffers` stores its arguments by `QImage::operator=`
-// (WWW-29, disassembly at 0x328c0), so the engine ends up holding a QImage
-// that *shares* the bridge's pixel data. Writing through that shared data is
-// how a frame reaches the panel. A detach — which Qt performs silently on any
-// non-const accessor of shared data — severs it, and nothing reports an error.
+// A `QImage`'s pixel data is refcounted: `constBits()` never disturbs it, but
+// a non-const accessor — `bits()`, `fill()`, and the like — copies the data
+// onto fresh memory whenever the refcount says someone else might be looking
+// at it, and hands back a pointer to the copy instead. Called on an image
+// nothing else references, the same accessor is a no-op: there is nothing to
+// copy away from. `paperclip_ep.cpp` depends on the first case never
+// happening to the engine's own drawing surface once the bridge has cached
+// its address, which is why it never calls a non-const accessor on it.
+//
+// (Earlier revisions of this file framed this around `EPFramebuffer::setBuffers`
+// specifically, on the strength of WWW-29's disassembly of it: the bridge's
+// own `front` and the engine's copy of it, connected by that call. WWW-32
+// found, on hardware, that `setBuffers` never connected them at all — see
+// ADR-0009. The Qt mechanism below is unaffected; only which two objects it
+// was ever protecting changed.)
 //
 // This file needs Qt and nothing else: no `libqsgepaper.so`, no reMarkable SDK,
 // no tablet. It asserts both halves:
