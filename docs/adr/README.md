@@ -44,3 +44,4 @@ device survey and several of these are bets.
 | [0035](0035-system-chrome-a-drawing-order-guarantee-not-a-permission-check.md) | System chrome: a drawing-order guarantee, not a permission check |
 | [0036](0036-why-takeover-not-in-process.md) | Why takeover, not in-process |
 | [0037](0037-compositor-accept-loop-and-crash-hang-isolation.md) | The compositor accept loop, its client wire, and crash/hang isolation |
+| [0038](0038-sleep-and-lock-as-a-compositor-overlay.md) | Sleep and lock as a compositor overlay, not a session hack |

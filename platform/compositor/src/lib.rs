@@ -34,6 +34,12 @@
 //! (WWW-79). It does not depend on `pool`, `surface` or `gesture` — see its
 //! module doc for what still has to drive it.
 //!
+//! [`sleep`] is a fifth, independent piece: the sleep cover and a basic lock
+//! screen, drawn above everything else — client surfaces and chrome both
+//! (WWW-82). [`server::Compositor::sleep`]/[`server::Compositor::wake`] are
+//! the seam that drives it; see `sleep`'s module doc for what still has to
+//! drive *that*.
+//!
 //! ## What this crate does not do yet
 //!
 //! [`server::Compositor`] is a library, not a running system service: it has
@@ -58,6 +64,7 @@ pub mod gesture;
 pub mod pool;
 pub mod present;
 pub mod server;
+pub mod sleep;
 pub mod stopped;
 pub mod surface;
 pub mod wire;
@@ -67,6 +74,7 @@ pub use gesture::{Edge, GestureDetector, SystemGesture, Verdict};
 pub use pool::{Pool, PoolError};
 pub use present::present_pool_slot;
 pub use server::{BindError, ClientId, Compositor, CompositorEvent, HELLO_DEADLINE};
+pub use sleep::render_lock_frame;
 pub use stopped::render_stopped_frame;
 pub use surface::{Committed, Surface, SurfaceError};
 pub use wire::{ClientHello, ClientRequest, ClientRole, HostEvent};

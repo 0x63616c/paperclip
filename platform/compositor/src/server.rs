@@ -1,5 +1,18 @@
-//! The compositor's accept loop: EOF teardown, non-blocking client I/O, and
-//! crash/hang isolation (WWW-78).
+//! The compositor's accept loop: EOF teardown, non-blocking client I/O,
+//! crash/hang isolation (WWW-78), and the sleep/lock overlay (WWW-82).
+//!
+//! ## Sleep and lock stop presenting without disturbing state
+//!
+//! [`Compositor::sleep`] draws [`crate::sleep::render_lock_frame`] and sets
+//! an internal flag; `present_foreground` checks that flag before every
+//! blit and, while set, releases a committed buffer without ever reading
+//! it. A client's `Surface`/`Pool` keep advancing exactly as they would
+//! unlocked — attaching, damaging, committing — so [`Compositor::wake`] has
+//! an up-to-date frame to present the instant it clears the flag, rather
+//! than a stale one from the moment sleep began. A foreground client dying
+//! while locked (`disconnect`) is handled the same way: the state
+//! transition to `Foreground::Stopped` happens immediately, but the
+//! stopped frame itself is not painted until `wake`.
 //!
 //! ## Non-blocking is the whole answer to "a wedged client stalls nobody"
 //!
@@ -44,6 +57,7 @@ use paper_protocol::{BufferSlot, MAX_MESSAGE_BYTES};
 use crate::fdpass;
 use crate::pool::{Pool, PoolError};
 use crate::present::present_pool_slot;
+use crate::sleep::render_lock_frame;
 use crate::stopped::render_stopped_frame;
 use crate::surface::Surface;
 use crate::wire::{ClientRequest, ClientRole, HostEvent};
@@ -235,6 +249,10 @@ pub enum CompositorEvent {
         /// Home's client id.
         id: ClientId,
     },
+    /// [`Compositor::sleep`] drew the lock screen.
+    Locked,
+    /// [`Compositor::wake`] cleared the lock screen.
+    Unlocked,
 }
 
 /// One fd [`Compositor::run_once`] is waiting on, and what it is for.
@@ -256,6 +274,8 @@ pub struct Compositor {
     home: Option<ClientId>,
     foreground: Foreground,
     next_id: u64,
+    /// Whether the lock screen is currently covering the panel (WWW-82).
+    locked: bool,
 }
 
 impl Compositor {
@@ -277,6 +297,7 @@ impl Compositor {
             home: None,
             foreground: Foreground::None,
             next_id: 0,
+            locked: false,
         })
     }
 
@@ -300,6 +321,57 @@ impl Compositor {
     /// The registered Home client, if one is connected.
     pub fn home_client(&self) -> Option<ClientId> {
         self.home
+    }
+
+    /// Whether the lock screen is currently covering the panel (WWW-82).
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    /// Draws the lock screen over whatever is currently foreground and stops
+    /// presenting client frames — see `present_foreground` — until
+    /// [`Self::wake`] clears it.
+    ///
+    /// A no-op past the first call in a row: sleeping again while already
+    /// locked would otherwise cost a redundant full refresh for no visible
+    /// change. What triggers this call — an idle timer, a power button, a
+    /// real suspend signal — is not this crate's job; see `sleep`'s module
+    /// doc.
+    pub fn sleep(&mut self, events: &mut Vec<CompositorEvent>) {
+        if self.locked {
+            return;
+        }
+        match render_lock_frame(self.panel.as_mut()) {
+            Ok(()) => {
+                self.locked = true;
+                events.push(CompositorEvent::Locked);
+            }
+            Err(err) => tracing::error!(?err, "rendering the lock frame failed"),
+        }
+    }
+
+    /// Clears the lock screen and re-presents whatever the panel would be
+    /// showing had [`Self::sleep`] never been called — the foreground
+    /// client's latest committed frame, or a stopped frame if the foreground
+    /// client died while locked.
+    ///
+    /// A no-op if not currently locked.
+    pub fn wake(&mut self, events: &mut Vec<CompositorEvent>) {
+        if !self.locked {
+            return;
+        }
+        self.locked = false;
+        events.push(CompositorEvent::Unlocked);
+        match &self.foreground {
+            Foreground::Client(_) => self.present_foreground(events),
+            Foreground::Stopped { label } => {
+                let label = label.clone();
+                if let Err(err) = render_stopped_frame(self.panel.as_mut(), &label) {
+                    tracing::error!(?err, "re-rendering the stopped frame on wake failed");
+                }
+            }
+            Foreground::None => {}
+        }
     }
 
     /// The role a connected client registered as.
@@ -591,6 +663,20 @@ impl Compositor {
             return;
         };
         let slot = committed.buffer;
+
+        if self.locked {
+            // The lock screen owns the panel while sleeping (WWW-82): still
+            // release the slot, so a client that keeps committing does not
+            // stall on its two-buffer pool waiting for a presentation that
+            // will not happen until `wake`. Nothing reads `slot`'s bytes on
+            // this path, so releasing without presenting is safe.
+            if let Some(client) = self.clients.get_mut(&id) {
+                let _ = client.surface.release(slot);
+                notify_release(&client.stream, slot);
+            }
+            return;
+        }
+
         let descriptor = client.pool.descriptor();
         let result = present_pool_slot(
             self.panel.as_mut(),
@@ -632,11 +718,20 @@ impl Compositor {
         }
 
         let label = client.label;
-        match render_stopped_frame(self.panel.as_mut(), &label) {
-            Ok(()) => events.push(CompositorEvent::ForegroundStopped {
+        // While locked (WWW-82), the lock screen owns the panel: record the
+        // state transition but do not paint over it. `wake` re-renders
+        // whichever frame `self.foreground` says is current once it clears.
+        if self.locked {
+            events.push(CompositorEvent::ForegroundStopped {
                 label: label.clone(),
-            }),
-            Err(err) => tracing::error!(?err, "rendering the stopped frame failed"),
+            });
+        } else {
+            match render_stopped_frame(self.panel.as_mut(), &label) {
+                Ok(()) => events.push(CompositorEvent::ForegroundStopped {
+                    label: label.clone(),
+                }),
+                Err(err) => tracing::error!(?err, "rendering the stopped frame failed"),
+            }
         }
         self.foreground = Foreground::Stopped { label };
 
