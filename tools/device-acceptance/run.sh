@@ -176,14 +176,32 @@ else
     note "start-budget   xochitl start budget: ${recent_starts:-unknown} starts in the last 600s (limit 3); wait for the window to clear"
 fi
 
-# Precondition 3: nothing already holds the display. A stray `paperctl`
-# process from a prior session that never released `/dev/dri/card0` would
-# make this run's own takeover ambiguous about who is holding what.
+# Precondition 3: nothing *unexpected* holds the display. A stray `paperctl`
+# from a prior session that never released `/dev/dri/card0` would make this
+# run's own takeover ambiguous about who is holding what.
+#
+# Xochitl is not that. Stock holds the display whenever it is running, which is
+# the normal state of a tablet before a takeover and is precisely what the
+# takeover exists to take over from — so its own MainPID is expected here, not a
+# refusal. Checking for an empty holder instead would refuse every session on a
+# healthy device, which is what it did the first time this ran against real
+# hardware (pid 423 = `/usr/bin/xochitl --system`, xochitl.service's MainPID).
 holder=$(ssh_raw 'fuser /dev/dri/card0 2>/dev/null' || true)
-if [ -z "$holder" ]; then
-    log "PASS     display-free   free"
+xochitl_pid=$(ssh_raw 'systemctl show xochitl --property=MainPID --value' 2>/dev/null || true)
+unexpected=
+for pid in $holder; do
+    [ "$pid" = "$xochitl_pid" ] && continue
+    unexpected="$unexpected $pid"
+done
+unexpected=${unexpected# }
+if [ -z "$unexpected" ]; then
+    if [ -n "$holder" ]; then
+        log "PASS     display-free   held only by stock xochitl (pid $xochitl_pid), as expected"
+    else
+        log "PASS     display-free   free"
+    fi
 else
-    note "display-free   /dev/dri/card0 is held by pid(s) $holder; clear that session before running this"
+    note "display-free   /dev/dri/card0 is held by pid(s) $unexpected, which is not stock xochitl; clear that session before running this"
 fi
 
 # Precondition 4: the tablet is where this run's assertions assume it is.
