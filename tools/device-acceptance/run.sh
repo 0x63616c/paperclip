@@ -141,6 +141,23 @@ ssh_raw() {
     ssh -o BatchMode=yes -o ConnectTimeout=5 "$ssh_host" "$@"
 }
 
+# `paperctl upgrade status`/`reconcile` are answered locally against
+# `--root` (default `/home/root/paperclip`), same as every other command
+# `UpgradeArgs`'s own doc comment says stays local
+# (`tools/paperctl/src/upgrade.rs`) — `--device` is accepted by clap because
+# it lives on the shared `UpgradeArgs`, but only `run` and `rollback`
+# actually read it. Passing `--device "$ssh_host"` to `status` here silently
+# queries this Mac's own nonexistent `/home/root/paperclip`, which reads as
+# "nothing installed" the same tolerant way a missing config file does
+# elsewhere in this codebase — a plausible-looking wrong answer, not an
+# error, and exactly the failure shape this project has already been bitten
+# by once (WWW-75). Query the resident bootstrap binary already on the
+# device instead, where that root path is real (WWW-55, found running this
+# script for real).
+device_status() {
+    ssh_raw /home/root/paperclip/bin/paperctl upgrade status
+}
+
 # Precondition 1: the tablet is reachable at all. USB de-enumerates in deep
 # sleep and the interface disappears from the host entirely (WWW-41) — this
 # is the check that tells that apart from a tablet that is merely asleep.
@@ -209,7 +226,7 @@ fi
 # make a pass meaningless and a failure ambiguous. On a tablet nothing has
 # ever been installed on, `current` reads literally `none` — `--from none`
 # matches that the same way any other value matches a real version.
-current=$($paperctl upgrade status --device "$ssh_host" | awk '/^current/{print $2}')
+current=$(device_status | awk '/^current/{print $2}')
 if [ "$current" = "$from" ]; then
     log "PASS     from-matches   current $current"
 elif [ "$current" = "none" ]; then
@@ -223,7 +240,7 @@ if [ "$check_only" -eq 1 ]; then
 fi
 
 mkdir -p "$workdir"
-trap 'log "restoring stock"; $paperctl stock --device "$ssh_host" >/dev/null 2>&1 || true; log "final status"; $paperctl upgrade status --device "$ssh_host" || true' EXIT
+trap 'log "restoring stock"; $paperctl stock --device "$ssh_host" >/dev/null 2>&1 || true; log "final status"; device_status || true' EXIT
 
 # --- building ------------------------------------------------------------
 
@@ -284,8 +301,8 @@ $paperctl setup --device "$ssh_host"
 log "step 1/3: healthy upgrade $from -> $to"
 stage_bundle "$workdir/paperclip-$to.tar.gz"
 $paperctl upgrade run "$workdir/paperclip-$to.tar.gz" --trust "$trust" --device "$ssh_host"
-current=$($paperctl upgrade status --device "$ssh_host" | awk '/^current/{print $2}')
-last=$($paperctl upgrade status --device "$ssh_host" | awk '/^last/{$1=""; print}')
+current=$(device_status | awk '/^current/{print $2}')
+last=$(device_status | awk '/^last/{$1=""; print}')
 [ "$current" = "$to" ] || fail "step 1: current is $current after a healthy upgrade, expected $to"
 case "$last" in *commit*) ;; *) fail "step 1: journal did not reach commit: $last" ;; esac
 log "PASS     step 1: current $current, $last"
@@ -310,7 +327,7 @@ stage_bundle "$corrupt"
 if $paperctl upgrade run "$corrupt" --trust "$trust" --device "$ssh_host"; then
     fail "step 2: a damaged package was accepted"
 fi
-current=$($paperctl upgrade status --device "$ssh_host" | awk '/^current/{print $2}')
+current=$(device_status | awk '/^current/{print $2}')
 [ "$current" = "$to" ] || fail "step 2: current moved to $current after a refused package; must stay $to"
 log "PASS     step 2: refused, current still $current"
 
@@ -327,7 +344,7 @@ log "step 3/3: a candidate that panics on start must be rolled back"
 stage_bundle "$workdir/paperclip-$fail_to.tar.gz"
 report=$($paperctl upgrade run "$workdir/paperclip-$fail_to.tar.gz" --trust "$trust" --device "$ssh_host")
 case "$report" in *refused*) ;; *) fail "step 3: the report never said the candidate was refused: $report" ;; esac
-current=$($paperctl upgrade status --device "$ssh_host" | awk '/^current/{print $2}')
+current=$(device_status | awk '/^current/{print $2}')
 [ "$current" = "$to" ] || fail "step 3: current is $current after a rollback; expected $to"
 log "PASS     step 3: refused ($report), current still $current"
 
