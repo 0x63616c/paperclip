@@ -1588,6 +1588,7 @@ dependencies = [
 name = "paper-app-store"
 version = "0.1.0"
 dependencies = [
+ "paper-compositor",
  "paper-packages",
  "paper-protocol",
  "paper-sdk",
@@ -1640,6 +1641,7 @@ dependencies = [
  "paper-device",
  "paper-protocol",
  "paper-sdk",
+ "paper-telemetry",
  "serde",
  "serde_json",
  "tempfile",
@@ -1707,6 +1709,7 @@ dependencies = [
 name = "paper-home"
 version = "0.1.0"
 dependencies = [
+ "paper-compositor",
  "paper-packages",
  "paper-sdk",
 ]
@@ -1716,6 +1719,7 @@ name = "paper-host"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "paper-compositor",
  "paper-device",
  "paper-packages",
  "paper-protocol",
@@ -1763,6 +1767,8 @@ dependencies = [
 name = "paper-render-test-card"
 version = "0.1.0"
 dependencies = [
+ "paper-compositor",
+ "paper-device",
  "paper-protocol",
  "paper-sdk",
  "tempfile",
@@ -1785,6 +1791,7 @@ dependencies = [
 name = "paper-settings"
 version = "0.1.0"
 dependencies = [
+ "paper-compositor",
  "paper-protocol",
  "paper-sdk",
 ]

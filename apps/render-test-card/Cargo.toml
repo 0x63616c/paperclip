@@ -13,9 +13,11 @@ name = "render-test-card"
 path = "src/main.rs"
 
 [dependencies]
+paper-compositor = { workspace = true }
 paper-sdk = { workspace = true }
 
 [dev-dependencies]
+paper-device = { workspace = true }
 paper-protocol = { workspace = true }
 tempfile = { workspace = true }
 

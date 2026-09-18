@@ -31,6 +31,7 @@ path = "tests/host.rs"
 harness = true
 
 [dependencies]
+paper-compositor = { workspace = true }
 paper-device = { workspace = true }
 paper-packages = { workspace = true }
 paper-protocol = { workspace = true }

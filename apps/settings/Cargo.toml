@@ -13,6 +13,7 @@ name = "settings"
 path = "src/main.rs"
 
 [dependencies]
+paper-compositor = { workspace = true }
 paper-sdk = { workspace = true }
 
 [dev-dependencies]

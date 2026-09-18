@@ -31,7 +31,7 @@ use crate::state::{
     Action, Budget, Diagnosis, Escalation, Event, ExitKind, FailurePolicy, Foreground, Machine,
     SessionState, StopReason,
 };
-use crate::units::{SESSION_TARGET, SessionPaths};
+use crate::units::{COMPOSITOR_UNIT, SESSION_TARGET, SessionPaths};
 
 /// The ELF machine this build targets, for the `home` rung.
 ///
@@ -525,10 +525,10 @@ impl Supervisor {
                     events.push(Event::ProcessReady {
                         owner: owner.clone(),
                     });
-                    if self.display_owned_by_session(&unit) {
+                    if self.compositor_reports_a_client_foreground() {
                         events.push(Event::DisplayOwned { owner });
                     }
-                } else if !self.display_owned_by_session(&unit) {
+                } else if !self.compositor_reports_a_client_foreground() {
                     // The session is alive and no longer owns the panel: the
                     // process that was holding it on our behalf is gone. §10's
                     // "display process crash" row, and it is deliberately not
@@ -610,6 +610,19 @@ impl Supervisor {
                 self.session_unit = None;
                 self.progress = None;
                 self.incoming = Some(Foreground::Stock);
+                // Stop the compositor first, best-effort: it is the one
+                // process that opens the panel while Paperclip owns the
+                // display (WWW-81), and a clean stop runs its own
+                // `ADR-0009` shutdown (clear, then drop the vendor handle)
+                // before this returns. Its outcome does not gate the
+                // restore below — `StockRecovery::restore` already reaps
+                // any stray DRM holder and clears stale advisory locks
+                // before starting stock, which is exactly the defence a
+                // compositor that failed to stop cleanly needs, and a
+                // restore attempted anyway is better than none.
+                if let Err(error) = self.units.stop(COMPOSITOR_UNIT) {
+                    tracing::warn!("stopping the compositor before restoring stock: {error}");
+                }
                 self.restore(1);
             }
             other => {
@@ -646,6 +659,23 @@ impl Supervisor {
                     self.config.paths.progress().join(other.label()),
                 ));
                 self.session_unit = Some(unit.clone());
+                // The compositor is the one process that opens the panel
+                // while Paperclip owns the display (WWW-81): started here,
+                // ahead of the app unit, so it is already accepting
+                // connections by the time the app tries to become its
+                // client. Idempotent against a unit already active from a
+                // previous app-to-app switch in the same session — `start`
+                // on an active `Type=simple` unit is a no-op success, the
+                // same property `SESSION_TARGET`'s own unconditional start
+                // below already relies on.
+                if let Err(error) = self.units.start(COMPOSITOR_UNIT) {
+                    tracing::warn!("systemd refused to start {COMPOSITOR_UNIT}: {error}");
+                    self.queued.push(Event::SessionExited {
+                        owner: other.clone(),
+                        status: ExitKind::Error,
+                    });
+                    return;
+                }
                 // Starting the session target is how stock is taken down: the
                 // target `Conflicts=` the stock unit, so systemd stops it
                 // cleanly and in the right order. Paperclip never issues a
@@ -749,26 +779,37 @@ impl Supervisor {
     }
 
     /// Whether the session actually took the panel, rather than merely
-    /// starting. Ownership is the lock registry naming a pid inside the
-    /// session's own cgroup.
-    fn display_owned_by_session(&self, unit: &str) -> bool {
-        let Ok(raw) = fs::read_to_string(&self.config.locks.registry) else {
+    /// starting.
+    ///
+    /// Before WWW-81, ownership was the vendor advisory lock registry naming
+    /// a pid inside the session's own cgroup — right for a process that
+    /// opened the panel itself. It never observed one for a real launched
+    /// app on the device, because no app ever did that (ADR-0022: every app
+    /// used `LocalSurfaces`, which touches no lock); this check would have
+    /// refused every switch forever, a gap that predates and is broader than
+    /// this ticket.
+    ///
+    /// Now the compositor is the one process that opens the panel (WWW-81),
+    /// so ownership is read from its own status file instead — see
+    /// `paperclip-compositor`'s `write_status`. This does not distinguish
+    /// *which* connected client is foreground by name; it does not need to,
+    /// because the project's v1 scope is single-foreground-app (ADR-0037)
+    /// and the supervisor only ever has one app unit active at a time, so
+    /// "the compositor is presenting *some* client" and "it is presenting
+    /// *this* session's app" coincide for as long as that invariant holds.
+    ///
+    /// A catalog app that has not moved onto the compositor yet (Chess,
+    /// Sudoku — WWW-81 names only Home, Settings, the App Store and the test
+    /// card) never registers a client at all, so this reads `false` for it
+    /// forever, exactly as the lock-registry check did. That is an
+    /// unchanged, pre-existing gap for those two apps, not a regression.
+    fn compositor_reports_a_client_foreground(&self) -> bool {
+        let Ok(raw) = fs::read_to_string(self.config.paths.compositor_status()) else {
             return false;
         };
-        let Some(holder) = raw
-            .split_whitespace()
-            .next()
-            .and_then(|pid| pid.parse::<u32>().ok())
-        else {
-            return false;
-        };
-        let Some(cgroup) = self.units.cgroup_of(unit) else {
-            return false;
-        };
-        crate::linux::process::SessionTree::in_cgroup(cgroup)
-            .members()
-            .map(|members| members.contains(&holder))
-            .unwrap_or(false)
+        raw.lines()
+            .find_map(|line| line.strip_prefix("foreground="))
+            .is_some_and(|value| value.starts_with("client:"))
     }
 
     fn exit_kind(&self, unit: &str) -> ExitKind {

@@ -13,6 +13,7 @@ name = "app-store"
 path = "src/main.rs"
 
 [dependencies]
+paper-compositor = { workspace = true }
 paper-packages = { workspace = true }
 paper-sdk = { workspace = true }
 semver = { workspace = true }

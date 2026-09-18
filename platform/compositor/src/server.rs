@@ -389,6 +389,23 @@ impl Compositor {
         self.panel.as_ref()
     }
 
+    /// Mutable access to the panel this compositor owns exclusively.
+    ///
+    /// For shutdown only (WWW-81): `paperclip-compositor`'s `main` clears the
+    /// panel before this value is dropped, following ADR-0009's shutdown
+    /// ordering. Nothing inside this crate's own event loop needs this — it
+    /// reaches the panel only through its own private `present_foreground`
+    /// and [`crate::stopped::render_stopped_frame`], both driven by `run_once`.
+    pub fn panel_mut(&mut self) -> &mut dyn Panel {
+        self.panel.as_mut()
+    }
+
+    /// The label a connected client registered under, if `id` is still
+    /// connected.
+    pub fn client_label(&self, id: ClientId) -> Option<&str> {
+        self.clients.get(&id).map(|client| client.label.as_str())
+    }
+
     /// Runs one iteration: accepts new connections, services every fd
     /// `poll` reports ready within `timeout`, and reaps any pending
     /// connection that has outlived [`HELLO_DEADLINE`]. Never blocks longer

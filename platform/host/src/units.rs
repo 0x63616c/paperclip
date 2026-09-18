@@ -47,6 +47,11 @@ pub const RESTORE_UNIT: &str = "paperclip-restore-stock.service";
 /// The templated foreground session unit.
 pub const APP_UNIT: &str = "paperclip-app@.service";
 
+/// The compositor unit (WWW-81): the one process that opens the panel while
+/// Paperclip owns the display. Long-running for the whole session, unlike
+/// the per-owner `APP_UNIT` it presents on behalf of.
+pub const COMPOSITOR_UNIT: &str = "paperclip-compositor.service";
+
 /// Stock's unit. Named here so every reference to it in generated units goes
 /// through one constant that is easy to grep for.
 pub const XOCHITL_UNIT: &str = "xochitl.service";
@@ -185,6 +190,28 @@ impl SessionPaths {
     /// Where diagnostics bundles are written.
     pub fn diagnostics(&self) -> PathBuf {
         self.state.join("diagnostics")
+    }
+
+    /// The compositor's client socket (WWW-81).
+    ///
+    /// Under [`Self::state`], not [`Self::root`]: `/run` is where every other
+    /// per-session, non-persistent channel already lives (the command and
+    /// status files below), and a reboot clearing it along with the rest of
+    /// the session's runtime state is correct — there is nothing to reconnect
+    /// to once the compositor that bound it is gone.
+    pub fn compositor_socket(&self) -> PathBuf {
+        self.state.join("compositor.sock")
+    }
+
+    /// Where the compositor publishes what it is presenting (WWW-81).
+    ///
+    /// The same "control arrives through a file" reasoning
+    /// `linux::runtime`'s module doc gives for the supervisor's own command
+    /// file: the host reads this to learn which client (if any) is
+    /// foreground, without holding a socket connection of its own to the
+    /// compositor.
+    pub fn compositor_status(&self) -> PathBuf {
+        self.state.join("compositor-status")
     }
 }
 
@@ -335,6 +362,7 @@ impl UnitSet {
                 session_target(&spec.stock_unit),
                 host_service(&spec.paths),
                 restore_service(&spec.paths),
+                compositor_service(spec),
                 app_service(spec, grants, facilities),
             ],
         }
@@ -349,13 +377,25 @@ impl UnitSet {
     /// Writing it here with placeholder grants would bake a wrong sandbox
     /// into a file a later launch would trust as already correct, which is
     /// worse than not writing it at all.
+    ///
+    /// The compositor unit is included, unlike the app unit: what it needs
+    /// (device access, its socket path) is device-wide, not per-app, so
+    /// there is nothing about a specific app to get wrong by writing it now
+    /// — built from [`SessionSpec::device`]'s static defaults, rebased onto
+    /// `paths` and `stock_unit`.
     pub fn for_supervisor(paths: &SessionPaths, stock_unit: &str) -> Self {
+        let spec = SessionSpec {
+            paths: paths.clone(),
+            stock_unit: stock_unit.to_owned(),
+            ..SessionSpec::device()
+        };
         Self {
             files: vec![
                 slice(),
                 session_target(stock_unit),
                 host_service(paths),
                 restore_service(paths),
+                compositor_service(&spec),
             ],
         }
     }
@@ -486,6 +526,81 @@ fn restore_service(paths: &SessionPaths) -> UnitFile {
     }
 }
 
+/// The compositor unit (WWW-81): long-running for the whole session, started
+/// once and left up while any Paperclip client — Home, an app, the test card
+/// — is foreground, rather than per-owner like [`APP_UNIT`].
+///
+/// Carries the device access [`app_service`]'s per-app unit used to carry:
+/// now that the compositor is the one process that ever opens the panel, an
+/// ordinary app needs none of it, which is what "no special privileges"
+/// (WWW-81) means in practice for `DeviceAllow=`. Narrowing `app_service`'s
+/// own grants to match is a separate, independently reviewable hardening
+/// change and is not made here — see this ticket's final report.
+fn compositor_service(spec: &SessionSpec) -> UnitFile {
+    let paths = &spec.paths;
+    let mut body = format!(
+        "{HEADER}\n\
+         [Unit]\n\
+         Description=Paperclip compositor\n\
+         PartOf={SESSION_TARGET}\n\
+         After={HOST_UNIT}\n\
+         # An app crash must still return the panel even if the compositor\n\
+         # itself is what died — the same belt-and-braces reasoning\n\
+         # app_service's own OnFailure= carries.\n\
+         OnFailure={RESTORE_UNIT}\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart={bin} --socket {socket} --status {status}\n\
+         # The supervisor decides whether to relaunch a session, not systemd\n\
+         # (§10) — every other Paperclip unit makes the same choice.\n\
+         Restart=no\n\
+         Slice={SLICE}\n\
+         KillSignal=SIGTERM\n\
+         # Long enough for the panel-clear on the way out (ADR-0009's\n\
+         # shutdown ordering) to finish before SIGKILL cuts it short.\n\
+         TimeoutStopSec=5s\n\
+         WorkingDirectory={root}\n\
+         User={user}\n\
+         NoNewPrivileges=yes\n\
+         CapabilityBoundingSet=\n\
+         AmbientCapabilities=\n\
+         ProtectKernelTunables=yes\n\
+         ProtectKernelModules=yes\n\
+         ProtectControlGroups=yes\n\
+         RestrictSUIDSGID=yes\n\
+         RemoveIPC=yes\n\
+         LockPersonality=yes\n\
+         DevicePolicy=closed\n",
+        bin = paths.root.join("bin/paperclip-compositor").display(),
+        socket = paths.compositor_socket().display(),
+        status = paths.compositor_status().display(),
+        root = paths.root.display(),
+        user = spec.user,
+    );
+    for allow in &spec.device_allow {
+        let _ = writeln!(body, "DeviceAllow={allow}");
+    }
+    let _ = writeln!(body, "InaccessiblePaths=-/data");
+    let _ = writeln!(body, "ReadOnlyPaths={}", paths.root.display());
+    // The socket and status file live under `paths.state` (/run/paperclip),
+    // which the session's other units already need writable.
+    let _ = writeln!(body, "ReadWritePaths={}", paths.state.display());
+    let _ = writeln!(
+        body,
+        "PrivateTmp=no\n\
+         # ^ deliberate, matching app_service: the vendor waveform engine\n\
+         #   this process opens participates in /tmp/epd.lock and\n\
+         #   /tmp/epframebuffer.lock directly (ADR-0009, ADR-0011); a\n\
+         #   PrivateTmp= compositor could not join that registry."
+    );
+    let _ = writeln!(body, "# No [Install].");
+    UnitFile {
+        name: COMPOSITOR_UNIT.to_owned(),
+        contents: body,
+    }
+}
+
 fn app_service(spec: &SessionSpec, grants: &SessionGrants, facilities: &Facilities) -> UnitFile {
     let paths = &spec.paths;
     let limits = spec.limits;
@@ -507,6 +622,14 @@ fn app_service(spec: &SessionSpec, grants: &SessionGrants, facilities: &Faciliti
          Type=notify\n\
          NotifyAccess=main\n\
          ExecStart={root}/apps/%i/bin/%i\n\
+         # This app is an ordinary compositor client (WWW-81): it connects to\n\
+         # {socket} itself, over `paper_compositor::client`, rather than\n\
+         # receiving a mapping the host prepared. No special access to the\n\
+         # panel is granted here — DeviceAllow= below is unchanged from\n\
+         # before this ticket and is over-broad for what a compositor client\n\
+         # actually needs now; narrowing it is a separate hardening change\n\
+         # (see this ticket's final report).\n\
+         Environment={socket_env}={socket}\n\
          # systemd never restarts a foreground session. The supervisor owns\n\
          # that decision and stops making it after a budget (§10, repeated\n\
          # failures).\n\
@@ -533,6 +656,8 @@ fn app_service(spec: &SessionSpec, grants: &SessionGrants, facilities: &Faciliti
          DevicePolicy=closed\n",
         root = paths.root.display(),
         user = spec.user,
+        socket_env = paper_compositor::SOCKET_ENV,
+        socket = paths.compositor_socket().display(),
     );
 
     for allow in &spec.device_allow {

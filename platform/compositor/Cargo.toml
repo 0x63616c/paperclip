@@ -19,10 +19,21 @@ license.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[features]
+# Off by default, same reasoning as `paper-device`'s own feature: only an
+# aarch64 Linux build with the vendor SDK sysroot can link it. The compositor
+# binary falls back to `MemoryPanel` without it.
+vendor-engine = ["paper-device/vendor-engine"]
+
+[[bin]]
+name = "paperclip-compositor"
+path = "src/bin/paperclip-compositor.rs"
+
 [dependencies]
 paper-device = { workspace = true }
 paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
+paper-telemetry = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

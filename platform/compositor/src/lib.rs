@@ -59,6 +59,7 @@
 //! pointer events) onto this wire.
 
 pub mod chrome;
+pub mod client;
 pub mod fdpass;
 pub mod gesture;
 pub mod pool;
@@ -70,6 +71,9 @@ pub mod surface;
 pub mod wire;
 
 pub use chrome::{ChromeState, content_rect, draw as draw_chrome, reserved_rect};
+pub use client::{
+    CompositorSurface, CompositorSurfaces, ConnectError, DEFAULT_SOCKET, SOCKET_ENV, socket_path,
+};
 pub use gesture::{Edge, GestureDetector, SystemGesture, Verdict};
 pub use pool::{Pool, PoolError};
 pub use present::present_pool_slot;

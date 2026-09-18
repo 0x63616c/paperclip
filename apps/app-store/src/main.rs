@@ -24,17 +24,22 @@
 //! `NothingIsRunning` is the same stand-in `paperctl` uses for
 //! `ActivationGuard`: nothing surveys running apps until there is a
 //! supervisor to ask.
+//!
+//! Its pixels go to the compositor (WWW-81): [`paper_compositor::
+//! CompositorSurfaces`] replaces [`paper_sdk::LocalSurfaces`], so the App
+//! Store is an ordinary compositor client with no special access to the
+//! panel.
 
 use std::io;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use paper_app_store::{AppStoreApp, AppStoreScreen, PackagesSource, SourceError, StoreSource};
+use paper_compositor::{ClientRole, CompositorSurfaces, socket_path};
 use paper_packages::install::NothingIsRunning;
 use paper_packages::signing::TrustedKeys;
 use paper_packages::store::Layout;
 use paper_packages::{Capability, InstallPolicy, InstalledApp, Manifest, ManifestError};
-use paper_sdk::LocalSurfaces;
 
 const MANIFEST: &str = include_str!("../paper.toml");
 
@@ -59,7 +64,12 @@ fn main() -> ExitCode {
         }
     };
     let app = AppStoreApp::new(screen, Arc::new(source));
-    let outcome = paper_sdk::run(app, io::stdin(), io::stdout(), LocalSurfaces::new());
+    let outcome = paper_sdk::run(
+        app,
+        io::stdin(),
+        io::stdout(),
+        CompositorSurfaces::new(socket_path(), ClientRole::App, "App Store"),
+    );
     match outcome {
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => {

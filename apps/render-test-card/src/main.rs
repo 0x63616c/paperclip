@@ -5,19 +5,24 @@
 //! gets in-process in `paperctl`, now on the far side of an actual process
 //! boundary. This is `bin/render-test-card`, the file
 //! `apps/render-test-card/paper.toml` names as the entrypoint.
+//!
+//! Its pixels go to the compositor (WWW-81): [`paper_compositor::
+//! CompositorSurfaces`] replaces [`paper_sdk::LocalSurfaces`], so the test
+//! card is an ordinary compositor client with no special access to the
+//! panel — the thing it exists to look at.
 
 use std::io;
 use std::process::ExitCode;
 
+use paper_compositor::{ClientRole, CompositorSurfaces, socket_path};
 use paper_render_test_card::RenderTestCardApp;
-use paper_sdk::LocalSurfaces;
 
 fn main() -> ExitCode {
     let outcome = paper_sdk::run(
         RenderTestCardApp::new(),
         io::stdin(),
         io::stdout(),
-        LocalSurfaces::new(),
+        CompositorSurfaces::new(socket_path(), ClientRole::App, "Render Test Card"),
     );
     match outcome {
         Ok(_) => ExitCode::SUCCESS,

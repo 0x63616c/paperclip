@@ -6,6 +6,12 @@
 //! boundary. This is `bin/home`, the file `apps/home/paper.toml` names as the
 //! entrypoint.
 //!
+//! Its pixels go to the compositor (WWW-81): [`paper_compositor::client::
+//! CompositorSurfaces`] replaces [`paper_sdk::LocalSurfaces`] as the surface
+//! provider `paper_sdk::run` opens, so Home is an ordinary compositor client
+//! with no special access to the panel — the Hello/Draw/Ready lifecycle
+//! above it is unchanged.
+//!
 //! # Building the shelf
 //!
 //! `HomeApp`'s own doc is explicit that enumerating what to show is not its
@@ -29,9 +35,9 @@
 use std::io;
 use std::process::ExitCode;
 
+use paper_compositor::{ClientRole, CompositorSurfaces, socket_path};
 use paper_home::{HomeApp, HomeScreen, ShelfEntry, ShelfGlyph, SystemFact};
 use paper_packages::{Manifest, ManifestError};
-use paper_sdk::LocalSurfaces;
 
 const HOME_MANIFEST: &str = include_str!("../paper.toml");
 const SETTINGS_MANIFEST: &str = include_str!("../../settings/paper.toml");
@@ -49,7 +55,7 @@ fn main() -> ExitCode {
         HomeApp::new(screen),
         io::stdin(),
         io::stdout(),
-        LocalSurfaces::new(),
+        CompositorSurfaces::new(socket_path(), ClientRole::Home, "Home"),
     );
     match outcome {
         Ok(_) => ExitCode::SUCCESS,

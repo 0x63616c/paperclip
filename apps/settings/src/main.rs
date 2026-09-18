@@ -10,11 +10,15 @@
 //! and write [`SettingsApp`] needs travels as a `SystemQuery` to whichever
 //! process is running this connection (`tools/paperctl/src/admin.rs`'s
 //! `AdminResponder` today) — see ADR-0028.
+//!
+//! Its pixels go to the compositor (WWW-81): [`paper_compositor::
+//! CompositorSurfaces`] replaces [`paper_sdk::LocalSurfaces`], so Settings is
+//! an ordinary compositor client with no special access to the panel.
 
 use std::io;
 use std::process::ExitCode;
 
-use paper_sdk::LocalSurfaces;
+use paper_compositor::{ClientRole, CompositorSurfaces, socket_path};
 use paper_settings::SettingsApp;
 
 fn main() -> ExitCode {
@@ -22,7 +26,7 @@ fn main() -> ExitCode {
         SettingsApp::new(),
         io::stdin(),
         io::stdout(),
-        LocalSurfaces::new(),
+        CompositorSurfaces::new(socket_path(), ClientRole::App, "Settings"),
     );
     match outcome {
         Ok(_) => ExitCode::SUCCESS,
