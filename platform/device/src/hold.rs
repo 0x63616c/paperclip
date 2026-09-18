@@ -12,7 +12,7 @@
 //!    spare.
 //! 2. Digest the frame **before** taking the display, so a blank or
 //!    unexpectedly-changed buffer is caught while the tablet is still stock's.
-//! 3. Wakelock, then [`Takeover`], then the vendor panel.
+//! 3. Wakelock, then [`Takeover`](crate::takeover::Takeover), then the vendor panel.
 //! 4. One full present, then sample sysfs through the hold.
 //! 5. Clear, release, re-read health, and check the vendor registry names
 //!    Xochitl again.

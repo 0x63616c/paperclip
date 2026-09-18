@@ -25,6 +25,7 @@ members = [
     "tests/system",
     "tests/conformance",
     "tests/failure-harness",
+    "xtask",
 ]
 
 [workspace.package]

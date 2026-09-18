@@ -34,7 +34,7 @@
 //! declarations generate exactly the symbols `libqsgepaper.so` exports.
 //!
 //! **Not proven: anything about the glass.** WWW-3 superseded the first half of
-//! what used to be written here — [`VendorPanel`] has been compiled against the
+//! what used to be written here — `VendorPanel` (`vendor-engine` only) has been compiled against the
 //! real library, has taken the display from stock three times and has driven
 //! the EPD rails through a panel-specific waveform table. What none of that
 //! established is whether the resulting *image* is correct: a wrong byte order

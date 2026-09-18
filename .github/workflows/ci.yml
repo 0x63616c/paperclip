@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+
+  device-check:
+    # Does the device half compile? Needs nothing but rustup — the target is
+    # pinned in rust-toolchain.toml (docs/development.md).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --target aarch64-unknown-linux-gnu
+
+  paperctl-device-build:
+    # What ships to /home/root/paperclip/bin: no windowing stack, because the
+    # tablet has none (docs/development.md).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p paperctl --no-default-features
+
+  feature-matrix:
+    # Every paperctl / paper-packages / paper-updater feature combination
+    # compiles, short of `vendor-engine` — that needs the proprietary vendor
+    # SDK (platform/device/native/README.md) and is never available in CI.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-hack
+      - run: |
+          cargo hack check -p paperctl -p paper-packages -p paper-updater \
+            --feature-powerset --exclude-features vendor-engine
+
+  signing-boundary:
+    # §12: the device build must not contain a code path that can sign a
+    # release. `--no-default-features` turns the `publishing` feature off at
+    # compile time (Cargo.toml); this asserts the built binary actually
+    # carries no signing symbol, so a feature-gating mistake fails here
+    # instead of shipping to the tablet.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p paperctl --no-default-features --release
+      - run: ./tools/assert-no-signing-path.sh target/release/paperctl

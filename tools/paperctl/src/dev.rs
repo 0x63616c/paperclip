@@ -24,8 +24,8 @@
 //! in the shared canvas by the time the window redraws — no cross-thread wake
 //! needed for that part, because `paper_sdk::desktop::Preview::pointer`
 //! already calls `window.request_redraw()` itself after every handled tap.
-//! [`crate::run`] drives the same [`Session`] against the real panel instead
-//! of a window (WWW-6).
+//! [`crate::run()`] drives the same [`Session`](crate::session::Session)
+//! against the real panel instead of a window (WWW-6).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -42,10 +42,10 @@ use crate::session::{self, SessionError};
 ///
 /// Everything the `apps` feature can reach: the dev-runnable app crates, their
 /// rules cores, the SDK and protocol underneath them, and `paperctl` itself.
-/// Not `apps/settings` or `apps/app-store` — neither is dev-runnable here (see
-/// [`DevError::UnknownApp`]) — but their source is not part of what a session
-/// actually executes, so leaving them out does not miss a rebuild those
-/// sessions need.
+/// Not `apps/settings` or `apps/app-store` — neither is dev-runnable here
+/// ([`DevAppArg`] is a closed enum and clap rejects anything else before this
+/// module runs) — but their source is not part of what a session actually
+/// executes, so leaving them out does not miss a rebuild those sessions need.
 const WATCHED_DIRS: &[&str] = &[
     "tools/paperctl/src",
     "apps/home/src",

@@ -40,7 +40,7 @@ impl RelativePath {
     /// result is always inside `root` as a string. It says nothing about what
     /// is on disk — a symlink at any component still escapes. Anything that
     /// then touches the filesystem must walk [`Self::components`] and refuse
-    /// links; see [`Manifest::validate_payload`](crate::Manifest::validate_payload).
+    /// links; see `paper_packages::Manifest::validate_payload`, which does.
     pub fn resolve_within(&self, root: &Path) -> PathBuf {
         let mut resolved = root.to_path_buf();
         for component in self.components() {

@@ -1,5 +1,7 @@
 # paperclip
 
+[![CI](https://github.com/0x63616c/paperclip/actions/workflows/ci.yml/badge.svg)](https://github.com/0x63616c/paperclip/actions/workflows/ci.yml)
+
 Personal application environment for the reMarkable Paper Pro: home screen,
 independent apps, private App Store, and a Rust dev workflow driven from a Mac.
 
@@ -18,7 +20,7 @@ for what the isolation does and does not actually enforce.
 ## Quick start
 
 ```sh
-cargo test --workspace
+just ci                                            # everything CI runs, reproduced locally
 cargo run -p paperctl -- preview --screen home     # h · c · f · n · esc
 cargo run -p paperctl -- screenshot --screen all --out-dir artifacts
 cargo run -p paperctl -- open --dry-run                # the frame a device run would present
@@ -66,6 +68,10 @@ Crates appear as their functionality lands; the destination layout is in
 - [Isolation](docs/isolation.md) — what §11 enforces, what it does not, and what is merely accepted
 - [Specification](docs/spec.md) — where the authoritative spec lives
 - [ADRs](docs/adr/) — decisions and what would make them wrong
+- [Domain glossary](CONTEXT.md) — terms this codebase uses with a specific meaning
+- [Contributing](CONTRIBUTING.md) — the loop, style, and what `just ci` runs
+- [Security policy](SECURITY.md) — what is signature-verified, and how to report a vulnerability
+- [Changelog](CHANGELOG.md)
 
 ## Two rules
 

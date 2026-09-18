@@ -11,7 +11,7 @@ use paper_sudoku_rules::{Cell, Digit};
 
 /// Where the 9x9 grid sits, and how big one cell is.
 ///
-/// Fitted to whole pixels, like [`paper_chess::BoardLayout`]: nine cells of
+/// Fitted to whole pixels, like `paper_chess::BoardLayout`: nine cells of
 /// 158.2 px leave a rounding seam somewhere, and on e-ink a seam that moves
 /// between frames is a visible artefact rather than a rounding detail.
 #[derive(Debug, Clone, Copy, PartialEq)]

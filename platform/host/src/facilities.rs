@@ -8,8 +8,8 @@
 //!
 //! Two constructors, and the difference between them is the whole point:
 //!
-//! * [`Facilities::probe`] reads the machine this process is running on.
-//! * [`Facilities::PAPER_PRO`] is a *recording* of what WWW-1 and WWW-11
+//! * [`probe`](crate::probe::probe) reads the machine this process is running on.
+//! * [`Facilities::paper_pro`] is a *recording* of what WWW-1 and WWW-11
 //!   observed on the tablet. It is evidence, transcribed; it is not a probe,
 //!   and [`FacilitySource`] keeps the two from being confused in a report.
 
@@ -137,7 +137,7 @@ impl SandboxTool {
 
 /// The facilities a host can build a session out of.
 ///
-/// Construct with [`Facilities::probe`] or take one of the recorded constants.
+/// Construct with [`probe`](crate::probe::probe) or take one of the recorded constants.
 /// Every field is an observation, not a preference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Facilities {

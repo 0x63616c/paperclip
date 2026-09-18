@@ -33,15 +33,20 @@
 //!
 //! ## What guarantees the restore
 //!
-//! Three layers, because the first two cannot cover everything:
+//! Four layers. ADR-0011 originally recorded three; a hardware incident
+//! showed the first two could not cover everything on their own, and added
+//! the layer numbered 0 below.
 //!
+//! 0. Putting the vendor locks back, before stock starts — release step 2 in
+//!    the table above. No later layer substitutes for it: the watchdog would
+//!    have started a Xochitl that aborted just the same.
 //! 1. [`Drop`], which runs on the ordinary path and on a panic unwind.
 //! 2. An interrupt flag set from a signal handler, which the session loop polls
 //!    so `SIGINT`/`SIGTERM`/`SIGHUP` return through `Drop` rather than past it.
-//! 3. A detached [`watchdog`](Takeover::arm_watchdog) that restores stock on its
-//!    own schedule. This is the only layer that survives `SIGKILL`, a segfault,
-//!    or the control channel dropping mid-session — which is exactly what the
-//!    tablet's own autosleep does to an SSH connection.
+//! 3. A detached watchdog, armed by [`Watchdog::arm`], that restores stock on
+//!    its own schedule. This is the only layer that survives `SIGKILL`, a
+//!    segfault, or the control channel dropping mid-session — which is
+//!    exactly what the tablet's own autosleep does to an SSH connection.
 //!
 //! `Drop` cannot report a failed restore, so call [`Takeover::release`]
 //! explicitly on the normal path and let the destructor be the net.
