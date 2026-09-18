@@ -12,8 +12,13 @@ default:
 fmt:
     cargo fmt --all --check
 
+# `--keep-going` throughout: cargo stops at the first crate that fails, so one
+# run reports one crate's errors and each fix only unmasks the next. That cost
+# four round-trips through CI in one evening (WWW-59, WWW-65, WWW-61's doc
+# links). Reporting every crate's findings at once is the difference between
+# one fix and four.
 clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --keep-going -- -D warnings
 
 # The same lints against the device target. Not redundant: `paperctl`'s Mac
 # half is `#[cfg(not(target_os = "linux"))]`, so code that is live on a Mac can
@@ -21,7 +26,7 @@ clippy:
 # Linux and caught six such findings that were invisible locally (WWW-65).
 # `check-device` does not cover this: it runs `cargo check`, not `clippy`.
 clippy-device:
-    cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings
+    cargo clippy --workspace --all-targets --keep-going --target aarch64-unknown-linux-gnu -- -D warnings
 
 test:
     cargo test --workspace
@@ -29,7 +34,7 @@ test:
 # `-D rustdoc::broken_intra_doc_links` only — the workspace does not yet ask
 # rustdoc for `-D warnings` across the board.
 doc:
-    RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --workspace --no-deps
+    RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --workspace --no-deps --keep-going
 
 # Does the device half compile? Needs nothing but rustup (docs/development.md).
 check-device:

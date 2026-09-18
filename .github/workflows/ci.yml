@@ -17,11 +17,14 @@ jobs:
       - run: cargo fmt --all --check
 
   clippy:
+    # `--keep-going` here and in `doc`: cargo stops at the first crate that
+    # fails, so one run reports one crate and each fix unmasks the next. That
+    # cost four round-trips in one evening (WWW-59, WWW-65, WWW-61).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
 
   clippy-device:
     # The same lints against the device target. `paperctl`'s Mac half is
@@ -33,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings
+      - run: cargo clippy --workspace --all-targets --keep-going --target aarch64-unknown-linux-gnu -- -D warnings
 
   test:
     runs-on: ubuntu-latest
@@ -47,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --workspace --no-deps
+      - run: cargo doc --workspace --no-deps --keep-going
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
 
