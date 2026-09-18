@@ -57,6 +57,8 @@ mod screens;
 #[cfg(feature = "apps")]
 mod session;
 mod setup;
+#[cfg(feature = "apps")]
+mod system;
 mod transport;
 mod upgrade;
 

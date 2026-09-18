@@ -34,3 +34,4 @@ device survey and several of these are bets.
 | [0025](0025-the-effects-spine-and-real-observability.md) | The effects spine and real observability |
 | [0026](0026-declared-release-manifest-and-the-publish-planner.md) | Declared release manifest, and the publish planner |
 | [0027](0027-paperclip-is-the-resident-stock-is-a-grantable-app.md) | Paperclip is the resident; stock is one of the things it may grant the display to |
+| [0028](0028-system-services-over-the-protocol.md) | System services over the protocol, and what stays out of this pass |

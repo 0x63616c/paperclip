@@ -302,6 +302,7 @@ impl Session {
                 Ok(())
             }
             AppMessage::Request(_) => Ok(()),
+            AppMessage::SystemQuery(_) => Ok(()),
             AppMessage::Saved(_) => Err(Violation::SavedWithoutExit),
             AppMessage::Diagnostic(_) => unreachable!("handled above"),
         }
@@ -400,6 +401,7 @@ const fn app_message_name(message: &AppMessage) -> &'static str {
         AppMessage::Ready(_) => "ready",
         AppMessage::Frame(_) => "frame",
         AppMessage::Request(_) => "request",
+        AppMessage::SystemQuery(_) => "system-query",
         AppMessage::Saved(_) => "saved",
         AppMessage::Diagnostic(_) => "diagnostic",
     }
@@ -415,6 +417,7 @@ mod tests {
         AppMessage, Damage, Diagnostic, DiagnosticLevel, DrawReason, FrameDone, FrameId,
         HostMessage, Ready, Saved, SessionId,
     };
+    use crate::system::{QueryId, SystemQuery, SystemQueryKind};
     use crate::version::{CURRENT, ProtocolVersion};
 
     fn session() -> Session {
@@ -461,6 +464,10 @@ mod tests {
             AppMessage::Saved(Saved {
                 reason: ExitReason::Sleep,
                 ok: true,
+            }),
+            AppMessage::SystemQuery(SystemQuery {
+                id: QueryId::FIRST,
+                kind: SystemQueryKind::Battery,
             }),
         ] {
             let mut session = session();
@@ -623,6 +630,26 @@ mod tests {
         assert!(matches!(
             session.on_app_message(&AppMessage::Request(Request::Redraw)),
             Err(Violation::AfterExit { message: "request" })
+        ));
+    }
+
+    /// A query for a system fact is no more legal after `prepare-to-exit`
+    /// than any other message — the app is on its way out, and an answer
+    /// that arrived after that would have nowhere useful to land.
+    #[test]
+    fn a_system_query_after_prepare_to_exit_is_a_violation() {
+        let mut session = running();
+        session
+            .prepare_to_exit_default(ExitReason::Sleep)
+            .expect("legal while running");
+        assert!(matches!(
+            session.on_app_message(&AppMessage::SystemQuery(SystemQuery {
+                id: QueryId::FIRST,
+                kind: SystemQueryKind::Time,
+            })),
+            Err(Violation::AfterExit {
+                message: "system-query"
+            })
         ));
     }
 

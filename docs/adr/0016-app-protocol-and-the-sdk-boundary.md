@@ -146,6 +146,11 @@ one, even when the weaker one is honest about its limits.
 ## Consequences
 
 - Apps depend on `paper_sdk` alone. `paper_protocol` is re-exported through it.
+  **Not yet true of `apps/settings`, `apps/home` and `apps/app-store`**, which
+  also link `paper_packages` directly — see ADR-0028 (WWW-50), which adds a
+  `paper_packages`-free no-grant system-facts tier every app (including these
+  three) can use, and records why closing the rest of this gap is deliberately
+  deferred rather than done under this ADR's original claim.
 - `paper_device`'s `ContactEvent` and `Tool` are gone; the decoders emit
   `PointerEvent` directly, which is what the type comment in WWW-3 predicted
   would happen once the SDK event was widened.

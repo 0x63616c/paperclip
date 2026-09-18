@@ -26,7 +26,7 @@ use std::thread;
 
 use paper_protocol::{
     Action, AppMessage, CURRENT, CodecError, Diagnostic, ExitReason, FrameDone, Hello, HostMessage,
-    LifecycleEvent, MAX_SHARED_GRANTS, ProtocolVersion, Ready, Saved, codec,
+    LifecycleEvent, MAX_SHARED_GRANTS, ProtocolVersion, QueryId, Ready, Saved, SystemQuery, codec,
 };
 
 use crate::app::{App, Context, Event};
@@ -148,6 +148,7 @@ where
         surface: &mut surface,
         writer: &mut writer,
         receiver,
+        next_query: QueryId::FIRST,
     }
     .drive()
 }
@@ -161,6 +162,7 @@ struct Loop<'a, A: App, S: Surface, W: Write> {
     surface: &'a mut S,
     writer: &'a mut W,
     receiver: Receiver<Incoming<A::Completion>>,
+    next_query: QueryId,
 }
 
 impl<A: App, S: Surface, W: Write> Loop<'_, A, S, W> {
@@ -181,6 +183,8 @@ impl<A: App, S: Surface, W: Write> Loop<'_, A, S, W> {
                     continue;
                 }
                 Incoming::Host(Ok(HostMessage::Pointer(pointer))) => Event::Pointer(pointer),
+                Incoming::Host(Ok(HostMessage::SystemAnswer(answer))) => Event::System(answer),
+                Incoming::Host(Ok(HostMessage::SystemEvent(event))) => Event::SystemChanged(event),
                 Incoming::Host(Ok(HostMessage::Lifecycle(LifecycleEvent::Suspended))) => {
                     Event::Suspended
                 }
@@ -199,8 +203,8 @@ impl<A: App, S: Surface, W: Write> Loop<'_, A, S, W> {
                 Incoming::Host(Ok(_)) => continue,
             };
 
-            let (action, outbox) = self.deliver(&event);
-            self.flush(outbox)?;
+            let (action, outbox, queries) = self.deliver(&event);
+            self.flush(outbox, queries)?;
             if let Some(request) = action.request() {
                 codec::write_message(self.writer, &AppMessage::Request(request))?;
             }
@@ -208,27 +212,45 @@ impl<A: App, S: Surface, W: Write> Loop<'_, A, S, W> {
         Ok(Outcome::HostClosed)
     }
 
-    /// Runs one callback and returns what it decided, plus anything it logged.
-    fn deliver(&mut self, event: &Event<A::Completion>) -> (Action, Vec<Diagnostic>) {
+    /// Runs one callback and returns what it decided, plus anything it logged
+    /// or asked the host for.
+    fn deliver(
+        &mut self,
+        event: &Event<A::Completion>,
+    ) -> (Action, Vec<Diagnostic>, Vec<SystemQuery>) {
         let mut outbox = Vec::new();
+        let mut queries = Vec::new();
         let action = {
-            let mut context =
-                Self::context(self.hello, &self.storage, &self.completer, &mut outbox);
+            let mut context = Self::context(
+                self.hello,
+                &self.storage,
+                &self.completer,
+                &mut outbox,
+                &mut self.next_query,
+                &mut queries,
+            );
             self.app.event(event, &mut context)
         };
-        (action, outbox)
+        (action, outbox, queries)
     }
 
     fn draw(&mut self, frame: paper_protocol::FrameId) -> Result<(), RuntimeError> {
         let mut outbox = Vec::new();
+        let mut queries = Vec::new();
         {
-            let mut context =
-                Self::context(self.hello, &self.storage, &self.completer, &mut outbox);
+            let mut context = Self::context(
+                self.hello,
+                &self.storage,
+                &self.completer,
+                &mut outbox,
+                &mut self.next_query,
+                &mut queries,
+            );
             self.app.draw(self.surface.canvas(), &mut context);
         }
         let damage = self.app.damage();
         self.surface.publish(&damage)?;
-        self.flush(outbox)?;
+        self.flush(outbox, queries)?;
         codec::write_message(self.writer, &AppMessage::Frame(FrameDone { frame, damage }))?;
         Ok(())
     }
@@ -240,9 +262,16 @@ impl<A: App, S: Surface, W: Write> Loop<'_, A, S, W> {
         deadline: std::time::Duration,
     ) -> Result<Outcome, RuntimeError> {
         let mut outbox = Vec::new();
+        let mut queries = Vec::new();
         let saved = {
-            let mut context =
-                Self::context(self.hello, &self.storage, &self.completer, &mut outbox);
+            let mut context = Self::context(
+                self.hello,
+                &self.storage,
+                &self.completer,
+                &mut outbox,
+                &mut self.next_query,
+                &mut queries,
+            );
             // Whatever the event handler returns is ignored: the app is
             // leaving, and a `Redraw` requested on the way out would be a
             // frame nobody sees.
@@ -257,23 +286,36 @@ impl<A: App, S: Surface, W: Write> Loop<'_, A, S, W> {
                 }
             }
         };
-        self.flush(outbox)?;
+        // A system query sent on the way out has nowhere to land — the app is
+        // leaving before any answer could arrive — so only diagnostics flush
+        // here, and anything queued in `queries` is dropped on purpose.
+        self.flush(outbox, Vec::new())?;
         codec::write_message(self.writer, &AppMessage::Saved(Saved { reason, ok: saved }))?;
         Ok(Outcome::Exited { reason, saved })
     }
 
-    fn flush(&mut self, outbox: Vec<Diagnostic>) -> Result<(), RuntimeError> {
+    fn flush(
+        &mut self,
+        outbox: Vec<Diagnostic>,
+        queries: Vec<SystemQuery>,
+    ) -> Result<(), RuntimeError> {
         for diagnostic in outbox {
             codec::write_message(self.writer, &AppMessage::Diagnostic(diagnostic))?;
+        }
+        for query in queries {
+            codec::write_message(self.writer, &AppMessage::SystemQuery(query))?;
         }
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn context<'c>(
         hello: &'c Hello,
         storage: &'c Storage,
         completer: &'c Completer<A::Completion>,
         outbox: &'c mut Vec<Diagnostic>,
+        next_query: &'c mut QueryId,
+        queries: &'c mut Vec<SystemQuery>,
     ) -> Context<'c, A::Completion> {
         Context::new(
             hello.session,
@@ -285,6 +327,8 @@ impl<A: App, S: Surface, W: Write> Loop<'_, A, S, W> {
             storage,
             completer,
             outbox,
+            next_query,
+            queries,
         )
     }
 }
@@ -298,5 +342,160 @@ fn pump<C: Send + 'static, R: Read>(reader: &mut R, sender: &std::sync::mpsc::Se
         if sender.send(Incoming::Host(message)).is_err() || fatal {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+    use std::io::Cursor;
+    use std::sync::{Arc, Mutex};
+
+    use paper_protocol::{
+        AppId, AppPaths, DrawReason, DrawRequest, FrameId, Hello, LaunchReason, PixelFormat,
+        QueryId, SessionId, SurfaceDescriptor, SystemAnswer, SystemQueryKind, SystemValue,
+        TimeFact,
+    };
+
+    use super::*;
+    use crate::app::{App, Context, Event, SaveError};
+    use crate::canvas::Canvas;
+    use crate::display::SCREEN;
+    use crate::surface::LocalSurfaces;
+
+    /// A [`Write`] several threads can share, so a test can inspect what an
+    /// app wrote after `run` — which owns the writer for its own lifetime —
+    /// has returned.
+    #[derive(Clone, Default)]
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("writer lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// An app that asks for a system fact on its first draw, and records the
+    /// answer whenever one arrives.
+    #[derive(Clone, Default)]
+    struct QueryingApp {
+        seen: Arc<Mutex<Option<SystemAnswer>>>,
+    }
+
+    impl App for QueryingApp {
+        type Completion = Infallible;
+
+        fn event(
+            &mut self,
+            event: &Event<Self::Completion>,
+            _context: &mut Context<'_, Self::Completion>,
+        ) -> Action {
+            if let Event::System(answer) = event {
+                *self.seen.lock().expect("seen lock") = Some(answer.clone());
+            }
+            Action::None
+        }
+
+        fn draw(&mut self, _canvas: &mut Canvas, context: &mut Context<'_, Self::Completion>) {
+            context.query_system(SystemQueryKind::Time);
+        }
+
+        fn save(&mut self, _context: &mut Context<'_, Self::Completion>) -> Result<(), SaveError> {
+            Ok(())
+        }
+    }
+
+    fn app_id() -> AppId {
+        "dev.calum.test".parse().expect("a valid id")
+    }
+
+    /// A hand-encoded byte stream a host would send: `Hello`, a first draw
+    /// request, an answer to the query that draw is expected to send, then
+    /// `Goodbye`.
+    fn host_stream() -> Vec<u8> {
+        let mut wire = Vec::new();
+        let hello = HostMessage::Hello(Hello {
+            protocol: CURRENT,
+            session: SessionId::new(1),
+            app: app_id(),
+            version: semver::Version::new(0, 1, 0),
+            launch: LaunchReason::Fresh,
+            surface: SurfaceDescriptor::packed(SCREEN, PixelFormat::Argb8888),
+            capabilities: Vec::new(),
+            paths: AppPaths {
+                assets: std::env::temp_dir(),
+                private: std::env::temp_dir(),
+                temp: std::env::temp_dir(),
+                shared: Vec::new(),
+            },
+        });
+        codec::write_message(&mut wire, &hello).unwrap();
+        codec::write_message(
+            &mut wire,
+            &HostMessage::Draw(DrawRequest {
+                frame: FrameId::FIRST,
+                reason: DrawReason::First,
+                viewport: SCREEN,
+            }),
+        )
+        .unwrap();
+        codec::write_message(
+            &mut wire,
+            &HostMessage::SystemAnswer(SystemAnswer {
+                id: QueryId::FIRST,
+                result: Ok(SystemValue::Time(TimeFact {
+                    unix_millis: 1_700_000_000_000,
+                })),
+            }),
+        )
+        .unwrap();
+        codec::write_message(&mut wire, &HostMessage::Goodbye).unwrap();
+        wire
+    }
+
+    /// A query an app sends from `draw` reaches the wire as `SystemQuery`,
+    /// and the answer the host sends back reaches the app as `Event::System`
+    /// — the full round trip WWW-50 adds, exercised without a real socket.
+    #[test]
+    fn a_system_query_sent_from_draw_is_answered_through_event_system() {
+        let app = QueryingApp::default();
+        let seen = app.seen.clone();
+        let writer = SharedWriter::default();
+        let written = writer.0.clone();
+
+        let outcome = run(
+            app,
+            Cursor::new(host_stream()),
+            writer,
+            LocalSurfaces::new(),
+        )
+        .expect("the session runs to completion");
+        assert_eq!(outcome, Outcome::HostClosed);
+
+        assert_eq!(
+            seen.lock().unwrap().as_ref().map(|answer| answer.id),
+            Some(QueryId::FIRST),
+            "the app never saw the answer to its own query"
+        );
+
+        let mut wire = Cursor::new(written.lock().unwrap().clone());
+        let mut sent_query = false;
+        while let Ok(message) = codec::read_message::<_, AppMessage>(&mut wire) {
+            if matches!(
+                message,
+                AppMessage::SystemQuery(SystemQuery {
+                    kind: SystemQueryKind::Time,
+                    ..
+                })
+            ) {
+                sent_query = true;
+            }
+        }
+        assert!(sent_query, "draw's query never reached the wire");
     }
 }

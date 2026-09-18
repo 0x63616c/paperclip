@@ -51,6 +51,7 @@ pub mod limits;
 pub mod message;
 pub mod path;
 pub mod session;
+pub mod system;
 pub mod version;
 
 pub use capability::Capability;
@@ -64,7 +65,7 @@ pub use input::{
 pub use lifecycle::{Action, ExitReason, LaunchReason, LifecycleEvent, Request};
 pub use limits::{
     EXIT_DEADLINE, FRAME_DEADLINE, MAX_DAMAGE_RECTS, MAX_DIAGNOSTIC_BYTES, MAX_MESSAGE_BYTES,
-    MAX_SHARED_GRANTS, MIN_EXIT_DEADLINE, READY_DEADLINE,
+    MAX_SHARED_GRANTS, MAX_SYSTEM_QUERIES_PER_SECOND, MIN_EXIT_DEADLINE, READY_DEADLINE,
 };
 pub use message::{
     AppMessage, AppPaths, Damage, Diagnostic, DiagnosticLevel, DiagnosticRecord, DrawReason,
@@ -73,4 +74,8 @@ pub use message::{
 };
 pub use path::{PathError, RelativePath};
 pub use session::{HostFault, Session, State, Violation};
+pub use system::{
+    BatteryFact, BatteryState, NetworkFact, PlatformFact, QueryId, SystemAnswer, SystemDenial,
+    SystemDenialReason, SystemEvent, SystemQuery, SystemQueryKind, SystemValue, TimeFact,
+};
 pub use version::{CURRENT, ParseError, ProtocolVersion};

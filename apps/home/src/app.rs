@@ -8,10 +8,16 @@
 
 use std::convert::Infallible;
 
-use paper_sdk::{Action, App, Canvas, Context, Event, SaveError};
+use paper_sdk::{
+    Action, App, BatteryFact, BatteryState, Canvas, Context, Event, SaveError, SystemEvent,
+    SystemQueryKind, SystemValue,
+};
 
 use crate::screen::HomeScreen;
 use crate::shelf::ShelfLayout;
+
+/// The label [`HomeScreen::set_fact`] files the battery reading under.
+const BATTERY_FACT: &str = "Battery";
 
 /// The Home app.
 ///
@@ -20,10 +26,15 @@ use crate::shelf::ShelfLayout;
 /// a host-side concern (which storage layout, which catalog) Home itself has
 /// no business knowing. Whoever launches Home builds the entry list and hands
 /// it over.
+///
+/// The battery fact is different: it needs no grant (WWW-50, ADR-0028), so
+/// Home asks for it itself, once, on its first frame, and updates the fact in
+/// place whenever the host pushes a change.
 #[derive(Debug)]
 pub struct HomeApp {
     screen: HomeScreen,
     layout: Option<ShelfLayout>,
+    asked_battery: bool,
 }
 
 impl HomeApp {
@@ -32,7 +43,20 @@ impl HomeApp {
         Self {
             screen,
             layout: None,
+            asked_battery: false,
         }
+    }
+
+    fn apply_battery(&mut self, fact: BatteryFact) {
+        let charging = matches!(fact.state, BatteryState::Charging | BatteryState::Full);
+        self.screen.set_fact(
+            BATTERY_FACT,
+            format!(
+                "{}%{}",
+                fact.percent,
+                if charging { " (charging)" } else { "" }
+            ),
+        );
     }
 }
 
@@ -46,17 +70,76 @@ impl App for HomeApp {
         event: &Event<Self::Completion>,
         _context: &mut Context<'_, Self::Completion>,
     ) -> Action {
-        let (Event::Pointer(pointer), Some(layout)) = (event, &self.layout) else {
-            return Action::None;
-        };
-        self.screen.press(layout, pointer)
+        match (event, &self.layout) {
+            (Event::Pointer(pointer), Some(layout)) => self.screen.press(layout, pointer),
+            (Event::System(answer), _) => match &answer.result {
+                Ok(SystemValue::Battery(fact)) => {
+                    self.apply_battery(*fact);
+                    Action::Redraw
+                }
+                _ => Action::None,
+            },
+            (Event::SystemChanged(SystemEvent::Battery(fact)), _) => {
+                self.apply_battery(*fact);
+                Action::Redraw
+            }
+            _ => Action::None,
+        }
     }
 
-    fn draw(&mut self, canvas: &mut Canvas, _context: &mut Context<'_, Self::Completion>) {
+    fn draw(&mut self, canvas: &mut Canvas, context: &mut Context<'_, Self::Completion>) {
+        if !self.asked_battery {
+            self.asked_battery = true;
+            context.query_system(SystemQueryKind::Battery);
+        }
         self.layout = Some(crate::screen::render(canvas, &self.screen));
     }
 
     fn save(&mut self, _context: &mut Context<'_, Self::Completion>) -> Result<(), SaveError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use paper_sdk::{BatteryFact, BatteryState};
+
+    use super::{BATTERY_FACT, HomeApp};
+    use crate::screen::HomeScreen;
+
+    fn app() -> HomeApp {
+        HomeApp::new(HomeScreen::default())
+    }
+
+    #[test]
+    fn a_discharging_battery_shows_only_the_percentage() {
+        let mut app = app();
+        app.apply_battery(BatteryFact {
+            percent: 62,
+            state: BatteryState::Discharging,
+        });
+        let fact = app
+            .screen
+            .facts
+            .iter()
+            .find(|fact| fact.label == BATTERY_FACT)
+            .expect("the fact was filed");
+        assert_eq!(fact.value, "62%");
+    }
+
+    #[test]
+    fn a_charging_battery_says_so() {
+        let mut app = app();
+        app.apply_battery(BatteryFact {
+            percent: 40,
+            state: BatteryState::Charging,
+        });
+        let fact = app
+            .screen
+            .facts
+            .iter()
+            .find(|fact| fact.label == BATTERY_FACT)
+            .expect("the fact was filed");
+        assert_eq!(fact.value, "40% (charging)");
     }
 }

@@ -49,6 +49,14 @@ use paper_sdk::{
 };
 use paper_settings::{LiveHost, SettingsApp};
 use paper_sudoku::SudokuApp;
+use paper_sys::{NmcliNetwork, SystemPowerSource, SystemProcess, SystemWallClock};
+
+use crate::system::SystemResponder;
+
+/// The concrete responder every live session answers `SystemQuery`s with —
+/// the real backends, not a fake (WWW-50).
+type LiveSystemResponder =
+    SystemResponder<SystemPowerSource, NmcliNetwork<SystemProcess>, SystemWallClock>;
 
 const HOME_MANIFEST: &str = include_str!("../../../apps/home/paper.toml");
 const CHESS_MANIFEST: &str = include_str!("../../../apps/chess/paper.toml");
@@ -163,6 +171,9 @@ pub(crate) struct Session {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     damage: Arc<Mutex<Option<Damage>>>,
     app_thread: thread::JoinHandle<Result<paper_sdk::Outcome, paper_sdk::RuntimeError>>,
+    /// Answers this app's `SystemQuery`s and notices battery/network changes
+    /// to push (WWW-50).
+    system: LiveSystemResponder,
 }
 
 impl Session {
@@ -224,6 +235,9 @@ impl Session {
         &mut self,
         reason: DrawReason,
     ) -> Result<Option<Request>, SessionError> {
+        for event in self.system.changes() {
+            codec::write_message(&mut self.host, &HostMessage::SystemEvent(event))?;
+        }
         let frame = self.next_frame;
         self.next_frame = self.next_frame.next();
         codec::write_message(
@@ -239,6 +253,10 @@ impl Session {
             match codec::read_message::<_, AppMessage>(&mut self.host)? {
                 AppMessage::Frame(_) => return Ok(request),
                 AppMessage::Request(seen) => request = Some(seen),
+                AppMessage::SystemQuery(query) => {
+                    let answer = self.system.answer(query);
+                    codec::write_message(&mut self.host, &HostMessage::SystemAnswer(answer))?;
+                }
                 AppMessage::Diagnostic(diagnostic) => {
                     eprintln!("paperctl: [app] {diagnostic:?}");
                 }
@@ -591,6 +609,7 @@ fn open_session_common(
         shared,
         damage: damage_slot,
         app_thread,
+        system: LiveSystemResponder::new(),
     };
     session.request_frame(DrawReason::First)?;
     Ok(session)
@@ -677,7 +696,7 @@ mod tests {
     use paper_protocol::{DrawReason, FrameId, PixelFormat, SurfaceDescriptor};
     use paper_sdk::{Canvas, SCREEN};
 
-    use super::{READ_TIMEOUT, Session};
+    use super::{LiveSystemResponder, READ_TIMEOUT, Session};
 
     /// A stand-in for an app whose event/draw loop never returns — the fault
     /// `paper-fault-app`'s `hang` mode injects. Nothing writes to `app_side`
@@ -698,6 +717,7 @@ mod tests {
             shared: Arc::new(Mutex::new(Canvas::new(SCREEN).expect("allocates"))),
             damage: Arc::new(Mutex::new(None)),
             app_thread,
+            system: LiveSystemResponder::new(),
         }
     }
 

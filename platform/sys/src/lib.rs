@@ -1,13 +1,16 @@
-//! The effects spine (WWW-46).
+//! The effects spine (WWW-46, extended WWW-50).
 //!
-//! Four small traits, each with exactly one real adapter:
+//! Small traits, each with exactly one real adapter:
 //!
-//! | Trait          | Real adapter | Built on       |
-//! |----------------|--------------|----------------|
-//! | [`Clock`]      | [`SystemClock`]   | —          |
-//! | [`Process`]    | [`SystemProcess`] | —          |
-//! | [`UnitControl`]| [`Systemctl`]     | [`Process`]|
-//! | [`Storage`]    | [`Filesystem`]    | —          |
+//! | Trait          | Real adapter        | Built on       |
+//! |----------------|----------------------|----------------|
+//! | [`Clock`]      | [`SystemClock`]      | —          |
+//! | [`Process`]    | [`SystemProcess`]    | —          |
+//! | [`UnitControl`]| [`Systemctl`]        | [`Process`]|
+//! | [`Storage`]    | [`Filesystem`]       | —          |
+//! | [`WallClock`]  | [`SystemWallClock`]  | —          |
+//! | [`PowerSource`]| [`SystemPowerSource`]| —          |
+//! | [`Network`]    | [`NmcliNetwork`]     | [`Process`]|
 //!
 //! The fakes that make these testable without a tablet — `FakeClock`,
 //! `FakeProcess`, `FakeUnitControl`, `FakeStorage` — live in `platform/testing`,
@@ -24,11 +27,17 @@
 //! systemd.
 
 mod clock;
+mod network;
+mod power;
 mod process;
 mod storage;
 mod unit;
+mod wallclock;
 
 pub use clock::{Clock, SystemClock};
+pub use network::{Network, NetworkReading, NmcliNetwork};
+pub use power::{BatteryReading, ChargeDirection, PowerSource, SystemPowerSource};
 pub use process::{Process, ProcessCommand, ProcessError, ProcessOutput, SystemProcess};
 pub use storage::{Filesystem, Storage, StorageError};
 pub use unit::{Systemctl, UnitControl, UnitError, wait_active};
+pub use wallclock::{SystemWallClock, WallClock};

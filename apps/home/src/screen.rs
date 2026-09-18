@@ -42,6 +42,22 @@ pub struct HomeScreen {
 }
 
 impl HomeScreen {
+    /// Sets `label`'s value, replacing it if already listed or appending it
+    /// if not.
+    ///
+    /// Still true to the type's own doc: the screen does not go looking for
+    /// `label`'s value, it is only told how to file one that arrived from
+    /// somewhere else (WWW-50 — an async system-fact answer, in
+    /// [`HomeApp`](crate::HomeApp)'s case).
+    pub fn set_fact(&mut self, label: &str, value: impl Into<String>) {
+        let value = value.into();
+        if let Some(fact) = self.facts.iter_mut().find(|fact| fact.label == label) {
+            fact.value = value;
+        } else {
+            self.facts.push(SystemFact::new(label, value));
+        }
+    }
+
     /// Handles a pointer event against the shelf `layout` a draw already
     /// produced, and says what the app should ask the platform for.
     ///
@@ -182,6 +198,29 @@ mod tests {
 
     fn canvas() -> Canvas {
         Canvas::new(SCREEN).expect("screen-sized canvas")
+    }
+
+    #[test]
+    fn set_fact_replaces_an_existing_label_rather_than_duplicating_it() {
+        let mut screen = screen();
+        screen.set_fact("Renderer", "GPU");
+        assert_eq!(
+            screen.facts,
+            vec![
+                SystemFact::new("Display", "1620 x 2160"),
+                SystemFact::new("Renderer", "GPU"),
+            ]
+        );
+    }
+
+    #[test]
+    fn set_fact_appends_a_label_that_was_not_already_listed() {
+        let mut screen = screen();
+        screen.set_fact("Battery", "87%");
+        assert_eq!(
+            screen.facts.last(),
+            Some(&SystemFact::new("Battery", "87%"))
+        );
     }
 
     #[test]

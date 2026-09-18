@@ -1,4 +1,4 @@
-//! Fakes for `paper_sys`'s four effects.
+//! Fakes for `paper_sys`'s effects.
 
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -6,8 +6,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use paper_sys::{
-    Clock, Process, ProcessCommand, ProcessError, ProcessOutput, Storage, StorageError,
-    UnitControl, UnitError,
+    BatteryReading, Clock, Network, NetworkReading, PowerSource, Process, ProcessCommand,
+    ProcessError, ProcessOutput, Storage, StorageError, UnitControl, UnitError, WallClock,
 };
 
 /// A clock that only moves when [`Clock::sleep`] is called, so a test that
@@ -345,10 +345,89 @@ impl Storage for FakeStorage {
     }
 }
 
+/// A [`WallClock`] set to whatever a test scripts, so a fact carrying a time
+/// does not depend on when the test happened to run.
+#[derive(Debug, Clone, Copy)]
+pub struct FakeWallClock {
+    millis: u64,
+}
+
+impl Default for FakeWallClock {
+    fn default() -> Self {
+        Self::at(0)
+    }
+}
+
+impl FakeWallClock {
+    /// A clock reading `millis` milliseconds since the Unix epoch.
+    pub fn at(millis: u64) -> Self {
+        Self { millis }
+    }
+}
+
+impl WallClock for FakeWallClock {
+    fn now_unix_millis(&self) -> u64 {
+        self.millis
+    }
+}
+
+/// A [`PowerSource`] that answers from a script rather than reading
+/// `/sys/class/power_supply`.
+#[derive(Debug, Clone, Default)]
+pub struct FakePowerSource {
+    reading: Option<BatteryReading>,
+}
+
+impl FakePowerSource {
+    /// A source with no reading yet — [`PowerSource::read`] answers `None`
+    /// until [`Self::set`] is called, the same as a device with no battery
+    /// node this reader could find.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The next [`PowerSource::read`] answers `reading`.
+    pub fn set(&mut self, reading: BatteryReading) {
+        self.reading = Some(reading);
+    }
+}
+
+impl PowerSource for FakePowerSource {
+    fn read(&self) -> Option<BatteryReading> {
+        self.reading
+    }
+}
+
+/// A [`Network`] that answers from a script rather than shelling out to
+/// `nmcli`.
+#[derive(Debug, Clone, Default)]
+pub struct FakeNetwork {
+    reading: Option<NetworkReading>,
+}
+
+impl FakeNetwork {
+    /// A source with no reading yet — [`Network::read`] answers `None` until
+    /// [`Self::set`] is called, the same as `nmcli` failing to run at all.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The next [`Network::read`] answers `reading`.
+    pub fn set(&mut self, reading: NetworkReading) {
+        self.reading = Some(reading);
+    }
+}
+
+impl Network for FakeNetwork {
+    fn read(&self) -> Option<NetworkReading> {
+        self.reading.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paper_sys::{Systemctl, UnitControl, wait_active};
+    use paper_sys::{ChargeDirection, Systemctl, UnitControl, wait_active};
 
     #[test]
     fn systemctl_start_builds_the_expected_argv() {
@@ -457,6 +536,34 @@ mod tests {
         assert!(
             !control.is_active("a.service"),
             "start was accepted but never came up"
+        );
+    }
+
+    #[test]
+    fn fake_wall_clock_reads_whatever_it_was_set_to() {
+        let clock = FakeWallClock::at(1_700_000_000_000);
+        assert_eq!(clock.now_unix_millis(), 1_700_000_000_000);
+    }
+
+    #[test]
+    fn fake_power_source_answers_none_until_set() {
+        let mut source = FakePowerSource::new();
+        assert!(source.read().is_none());
+        source.set(BatteryReading {
+            percent: 42,
+            direction: ChargeDirection::Charging,
+        });
+        assert_eq!(source.read().unwrap().percent, 42);
+    }
+
+    #[test]
+    fn fake_network_answers_none_until_set() {
+        let mut network = FakeNetwork::new();
+        assert!(network.read().is_none());
+        network.set(paper_sys::NetworkReading::DISCONNECTED);
+        assert_eq!(
+            network.read(),
+            Some(paper_sys::NetworkReading::DISCONNECTED)
         );
     }
 

@@ -42,7 +42,8 @@ use std::fmt;
 
 use paper_protocol::{
     Action, AppId, Capability, Diagnostic, DiagnosticLevel, ExitReason, LaunchReason, PointerEvent,
-    SessionId, Size, SurfaceDescriptor,
+    QueryId, SessionId, Size, SurfaceDescriptor, SystemAnswer, SystemEvent, SystemQuery,
+    SystemQueryKind,
 };
 
 use crate::canvas::Canvas;
@@ -88,6 +89,20 @@ pub enum Event<C> {
 
     /// A worker thread finished.
     Completed(C),
+
+    /// The answer to a [`Context::query_system`] call (WWW-50).
+    ///
+    /// May arrive several callbacks after the query was sent — the host
+    /// answers when it can, not necessarily before the next frame — so an app
+    /// that cares about the answer keeps [`SystemAnswer::id`] around to match
+    /// it against the query it sent.
+    System(SystemAnswer),
+
+    /// A system fact changed without being asked about (WWW-50).
+    ///
+    /// Push, not poll: an app that wants to show battery or network state
+    /// does not have to query on a timer to stay current.
+    SystemChanged(SystemEvent),
 }
 
 /// Why an app could not save.
@@ -144,6 +159,8 @@ pub struct Context<'a, C> {
     storage: &'a Storage,
     completer: &'a Completer<C>,
     outbox: &'a mut Vec<Diagnostic>,
+    next_query: &'a mut QueryId,
+    queries: &'a mut Vec<SystemQuery>,
 }
 
 impl<'a, C: Send + 'static> Context<'a, C> {
@@ -159,6 +176,8 @@ impl<'a, C: Send + 'static> Context<'a, C> {
         storage: &'a Storage,
         completer: &'a Completer<C>,
         outbox: &'a mut Vec<Diagnostic>,
+        next_query: &'a mut QueryId,
+        queries: &'a mut Vec<SystemQuery>,
     ) -> Self {
         Self {
             session,
@@ -170,6 +189,8 @@ impl<'a, C: Send + 'static> Context<'a, C> {
             storage,
             completer,
             outbox,
+            next_query,
+            queries,
         }
     }
 
@@ -274,6 +295,21 @@ impl<'a, C: Send + 'static> Context<'a, C> {
     /// [`Self::log`] at error.
     pub fn error(&mut self, message: impl Into<String>) {
         self.log(DiagnosticLevel::Error, message);
+    }
+
+    /// Asks the host for a no-grant system fact — time, battery, network or
+    /// platform (§ project description, WWW-50, ADR-0028).
+    ///
+    /// Returns the id the answer will carry on [`Event::System`], which may
+    /// arrive on a later callback: this call only sends the question. No
+    /// grant is required or checked, and the host may still refuse with a
+    /// [`SystemDenial`](paper_protocol::SystemDenial) — a backend can be
+    /// unavailable, or this app can simply be asking too often.
+    pub fn query_system(&mut self, kind: SystemQueryKind) -> QueryId {
+        let id = *self.next_query;
+        *self.next_query = id.next();
+        self.queries.push(SystemQuery { id, kind });
+        id
     }
 }
 

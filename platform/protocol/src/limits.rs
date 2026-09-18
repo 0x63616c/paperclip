@@ -69,6 +69,16 @@ pub const FRAME_DEADLINE: Duration = Duration::from_millis(500);
 /// is going on.
 pub const EXIT_DEADLINE: Duration = Duration::from_secs(3);
 
+/// Most [`SystemQuery`](crate::SystemQuery) messages an app may send in any
+/// rolling one-second window before the host starts answering with
+/// [`SystemDenialReason::RateLimited`](crate::SystemDenialReason::RateLimited).
+///
+/// System facts change slowly — nothing behind this wire needs polling faster
+/// than a person can look at the panel — so a generous per-second budget is
+/// already well above any legitimate use and still stops a runaway app from
+/// turning itself into a query flood against the host.
+pub const MAX_SYSTEM_QUERIES_PER_SECOND: u32 = 10;
+
 /// Shortest deadline an app will ever be given to save.
 ///
 /// Stated so an app can size its save path against a worst case rather than

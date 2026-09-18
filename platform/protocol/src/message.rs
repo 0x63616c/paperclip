@@ -25,6 +25,15 @@
 //! launched, and the host attaches them itself — see
 //! [`Diagnostic::tagged`], which is the only place they meet. An app that
 //! wants to be a different app has to become a different process.
+//!
+//! ## The vocabulary grew once
+//!
+//! [`AppMessage::SystemQuery`] and [`HostMessage::SystemAnswer`] /
+//! [`HostMessage::SystemEvent`] (WWW-50, ADR-0028) are the first addition
+//! since this contract was drawn: an app may now ask the host for time,
+//! battery and network facts, and the host may push a change without being
+//! asked. Six messages now, not five — see [`system`](crate::system) for the
+//! vocabulary and why it stops there.
 
 use std::path::PathBuf;
 
@@ -33,6 +42,7 @@ use crate::geometry::{Rect, Size};
 use crate::id::AppId;
 use crate::input::PointerEvent;
 use crate::lifecycle::{ExitReason, LaunchReason, LifecycleEvent, Request};
+use crate::system::{SystemAnswer, SystemEvent, SystemQuery};
 use crate::version::ProtocolVersion;
 
 /// Identifies one run of one app, from launch to exit.
@@ -492,15 +502,21 @@ pub enum HostMessage {
     Pointer(PointerEvent),
     /// Draw a frame.
     Draw(DrawRequest),
+    /// The answer to a [`SystemQuery`] the app sent.
+    SystemAnswer(SystemAnswer),
+    /// A system fact changed; no query prompted this (WWW-50).
+    SystemEvent(SystemEvent),
     /// The connection is closing. Nothing follows.
     Goodbye,
 }
 
 /// Everything an app may say to the host.
 ///
-/// Note what is absent: no identity, no capability request, no path, no
-/// "launch that". An app's whole vocabulary is five messages, three of which
-/// are answers to something the host asked for.
+/// Note what is still absent: no identity, no capability request, no path, no
+/// "launch that". [`Self::SystemQuery`] (WWW-50) is the one addition to §8's
+/// original sketch that lets an app *ask* the host something rather than only
+/// answering what the host asked — see [`system`](crate::system) for why it
+/// is scoped to time, battery, network and platform facts and nothing wider.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 #[non_exhaustive]
@@ -509,8 +525,10 @@ pub enum AppMessage {
     Ready(Ready),
     /// A frame is drawn.
     Frame(FrameDone),
-    /// One of the three things an app may ask for.
+    /// One of the four things an app may ask for.
     Request(Request),
+    /// Asks the host for a no-grant system fact.
+    SystemQuery(SystemQuery),
     /// Saving is finished.
     Saved(Saved),
     /// A line for the log.

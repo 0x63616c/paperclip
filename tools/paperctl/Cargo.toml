@@ -61,6 +61,7 @@ paper-sdk = { workspace = true }
 paper-settings = { workspace = true, optional = true }
 paper-sudoku = { workspace = true, optional = true }
 paper-sudoku-rules = { workspace = true, optional = true }
+paper-sys = { workspace = true }
 paper-telemetry = { workspace = true }
 paper-updater = { workspace = true }
 semver = { workspace = true }
@@ -71,6 +72,7 @@ toml = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+paper-testing = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
