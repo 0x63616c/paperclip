@@ -174,6 +174,12 @@ pub(crate) struct DeclaredApp {
     pub id: String,
     pub version: Version,
     pub content_digest: String,
+    /// Where the app lives, relative to the repository root (`apps/chess`).
+    ///
+    /// The id is what a catalog knows an app by; the directory is what a build
+    /// step needs, and one cannot be derived from the other without assuming a
+    /// naming convention that nothing enforces.
+    pub source_dir: String,
 }
 
 /// The platform declared in the tree.
@@ -263,6 +269,7 @@ pub(crate) fn read_declared_apps(repo_root: &Path) -> Result<Vec<DeclaredApp>, P
             id: raw.app.id,
             version,
             content_digest: content_digest(&bytes),
+            source_dir: format!("{APPS_DIR}/{}", dir_name.to_string_lossy()),
         });
     }
     apps.sort_by(|a, b| a.id.cmp(&b.id));
@@ -368,6 +375,11 @@ pub(crate) struct PlanEntry {
     pub action: Action,
     pub expected_digest: String,
     pub published_digest: Option<String>,
+    /// For an app, its directory under `apps/`; `None` for the platform,
+    /// which is built from `release.toml` and the whole workspace rather than
+    /// from one directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_dir: Option<String>,
 }
 
 /// The whole answer to "what needs publishing?".
@@ -419,6 +431,7 @@ fn classify(
     tag: String,
     expected_digest: String,
     published: &[PublishedRelease],
+    source_dir: Option<String>,
 ) -> PlanEntry {
     let (action, recorded) = match published_digest(&tag, published) {
         None => (Action::Publish, None),
@@ -430,6 +443,7 @@ fn classify(
         version: version.to_string(),
         tag,
         action,
+        source_dir,
         expected_digest,
         published_digest: recorded,
     }
@@ -449,6 +463,7 @@ pub(crate) fn build_plan(
         format!("platform-v{}", platform.version),
         platform.content_digest.clone(),
         published,
+        None,
     );
     let app_entries = apps
         .iter()
@@ -459,6 +474,7 @@ pub(crate) fn build_plan(
                 format!("{}-v{}", app.id, app.version),
                 app.content_digest.clone(),
                 published,
+                Some(app.source_dir.clone()),
             )
         })
         .collect();
@@ -489,6 +505,7 @@ mod tests {
             id: id.to_owned(),
             version: version.parse().unwrap(),
             content_digest: digest.to_owned(),
+            source_dir: format!("apps/{}", id.rsplit('.').next().unwrap()),
         }
     }
 

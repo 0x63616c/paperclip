@@ -1,0 +1,153 @@
+# Publishing, driven by a version bump rather than by a push (WWW-62, ADR-0026).
+#
+# Most pushes publish nothing. `cargo xtask plan-release` compares what the tree
+# *declares* — `apps/<app>/paper.toml` for the catalog apps, `release.toml` for
+# the platform — against what is already published, and only what is declared
+# and missing gets built. That comparison is against published state rather than
+# against the parent commit on purpose: a force-push, a push of several commits,
+# a revert, or a re-run after a red build all break a `git diff HEAD^` trigger,
+# and none of them break this one. Running it twice is harmless.
+#
+# Everything here is unsigned. Signing happens on a machine that holds the key,
+# which is never a GitHub runner (§12, WWW-63). What that machine needs is small
+# — ADR-0013 signs a few hundred bytes of TOML, detached, never the archives —
+# so this workflow doing the building costs nothing in separation.
+#
+# Nothing proprietary is needed. `vendor-engine` can only be enabled by
+# `platform/device` and `tools/paperctl`; `paper-host` has no `[features]` table
+# at all, so every component of a platform release cross-compiles with an
+# ordinary GCC. `paperctl` itself is the one artefact that needs the vendor
+# library, and it is deliberately not part of a release bundle — it lives
+# outside `releases/` as the recovery bootstrap.
+name: Release
+
+on:
+  # Gated on CI, not on the push: a release built from a red tree is a rollback
+  # target nobody wants.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # The `.cargo/config.toml` linker is a `zig cc` wrapper, for a Mac that has
+  # zig and not a cross GCC. A Linux runner has the real thing from apt, and
+  # the vendor C++ ABI wants libstdc++ anyway (tools/cross/build-device.sh).
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+jobs:
+  plan:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.plan.outputs.apps }}
+      platform: ${{ steps.plan.outputs.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: Swatinem/rust-cache@v2
+      - id: plan
+        # Exits non-zero when a declared version is already published with
+        # different content. That is the finding, not a tool failure, and it
+        # must stop the run rather than be skipped quietly.
+        run: |
+          cargo xtask plan-release --format json | tee plan.json
+          jq -c '[.apps[] | select(.action == "publish")]' plan.json \
+            | sed 's/^/apps=/' >> "$GITHUB_OUTPUT"
+          jq -r 'if .platform.action == "publish" then
+                   "platform=" + (.platform | @json)
+                 else "platform=" end' plan.json >> "$GITHUB_OUTPUT"
+
+  app:
+    needs: plan
+    if: needs.plan.outputs.apps != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      # One failed app must not cancel the others: they are independent
+      # releases that happen to have been planned together.
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.plan.outputs.apps) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Stage the entrypoint
+        run: ./tools/package-app.sh "$(basename '${{ matrix.app.source_dir }}')"
+      - name: Build the archive
+        # `paperctl package` holds no signing key — only `publish` does — so
+        # this is the whole of what CI can honestly produce.
+        run: |
+          cargo run -p paperctl -- package '${{ matrix.app.source_dir }}' \
+            --out '${{ matrix.app.name }}-${{ matrix.app.version }}.paperpkg'
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The digest line is what makes the next plan idempotent: it records
+        # what was declared at publish time, so a re-run reports `up_to_date`
+        # rather than publishing again (ADR-0026). It is parsed with
+        # `strip_prefix` against the raw line, so it must start at column one —
+        # hence a notes file rather than an indented inline string.
+        run: |
+          printf '%s\n\n%s\n' \
+            'paperclip-digest: ${{ matrix.app.expected_digest }}' \
+            'Unsigned. The catalog entry and its signature are produced off-CI.' \
+            > notes.md
+          gh release create '${{ matrix.app.tag }}' \
+            --title '${{ matrix.app.name }} ${{ matrix.app.version }}' \
+            --notes-file notes.md \
+            '${{ matrix.app.name }}-${{ matrix.app.version }}.paperpkg'
+
+  platform:
+    needs: plan
+    if: needs.plan.outputs.platform != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build the four components
+        # `REQUIRED_COMPONENTS` (platform/updater/src/manifest.rs). The bundle
+        # itself is not assembled here: `paperctl upgrade package` signs
+        # `platform.toml` *inside* the tar, so there is no unsigned bundle to
+        # produce. The binaries are what CI can give the signing machine.
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu \
+            -p paper-host --bin paperclip-host \
+            -p paper-home --bin home \
+            -p paper-app-store --bin app-store \
+            -p paper-settings --bin settings
+          mkdir -p bundle/bin
+          for binary in paperclip-host home app-store settings; do
+            cp "target/aarch64-unknown-linux-gnu/release/$binary" "bundle/bin/$binary"
+          done
+          ( cd bundle && sha256sum bin/* > SHA256SUMS && cat SHA256SUMS )
+          tar -czf platform-components.tar.gz -C bundle .
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plan='${{ needs.plan.outputs.platform }}'
+          tag=$(jq -r .tag <<<"$plan")
+          version=$(jq -r .version <<<"$plan")
+          digest=$(jq -r .expected_digest <<<"$plan")
+          printf '%s\n\n%s\n' \
+            "paperclip-digest: $digest" \
+            'Unsigned platform components. `paperctl upgrade package` assembles and signs the bundle from these, on a machine holding the key.' \
+            > notes.md
+          gh release create "$tag" \
+            --title "Paperclip $version" \
+            --notes-file notes.md \
+            platform-components.tar.gz bundle/SHA256SUMS
