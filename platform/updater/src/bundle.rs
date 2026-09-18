@@ -6,6 +6,7 @@
 //! platform.toml        the manifest, signed
 //! platform.toml.sig    its detached signature
 //! bin/paperclip-host
+//! bin/paperclip-compositor
 //! bin/home
 //! bin/app-store
 //! bin/settings
@@ -55,7 +56,7 @@ pub struct Description<'a> {
     pub rollback_to_state: u32,
     /// Release notes.
     pub notes: String,
-    /// Extra files to ship beyond the four required components, relative to
+    /// Extra files to ship beyond the required components, relative to
     /// the source directory.
     pub extras: &'a [&'a str],
 }

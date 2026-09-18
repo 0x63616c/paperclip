@@ -419,10 +419,11 @@ impl Fixture {
             Some(_) => self.bin_dir.join("paper-fault-app"),
         };
         copy_executable(&host, &bin.join("paperclip-host"))?;
-        // Home, the App Store and Settings ship with the platform (§13 plus
-        // this project's own decision). Real ELF binaries, because the
-        // supervisor's `home` rung reads the header of the one it is given.
-        for name in ["home", "app-store", "settings"] {
+        // The compositor, Home, the App Store and Settings ship with the
+        // platform (§13 plus this project's own decisions, WWW-86 for the
+        // compositor). Real ELF binaries, because the supervisor's `home`
+        // rung reads the header of the one it is given.
+        for name in ["paperclip-compositor", "home", "app-store", "settings"] {
             copy_executable(&self.bin_dir.join("paper-fault-app"), &bin.join(name))?;
         }
         let extras: &[&str] = if let Some(ladder) = ladder {
@@ -572,7 +573,7 @@ impl Fixture {
             self.bin_dir.join("paper-fault-app")
         };
         copy_executable(&host, &source.join("bin/paperclip-host"))?;
-        for name in ["home", "app-store", "settings"] {
+        for name in ["paperclip-compositor", "home", "app-store", "settings"] {
             copy_executable(
                 &self.bin_dir.join("paper-fault-app"),
                 &source.join("bin").join(name),

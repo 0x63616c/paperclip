@@ -9,7 +9,7 @@
 //!   releases/<version>/       one complete platform release, immutable
 //!     platform.toml           the signed manifest
 //!     platform.toml.sig
-//!     bin/{paperclip-host,home,app-store,settings}
+//!     bin/{paperclip-host,paperclip-compositor,home,app-store,settings}
 //!   current   -> releases/0.4.0
 //!   previous  -> releases/0.3.1
 //!   staging/<transaction>/    extraction in progress

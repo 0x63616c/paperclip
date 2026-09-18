@@ -255,6 +255,10 @@ build_release() {
     for name in home app-store settings; do
         cp "$here/target/aarch64-unknown-linux-gnu/release/$name" "$dest/bin/$name"
     done
+    # Built separately, with `vendor-engine` (WWW-86) — see the compositor
+    # build below.
+    cp "$here/target/device-container/release/paperclip-compositor" \
+        "$dest/bin/paperclip-compositor"
     include=""
     if [ -n "$ladder" ]; then
         printf '%s\n' "$ladder" > "$dest/ladder"
@@ -280,6 +284,13 @@ stage_bundle() {
 log "building $to"
 (cd "$here" && cargo build --release --target aarch64-unknown-linux-gnu \
     -p paper-host -p paper-home -p paper-app-store -p paper-settings -p paper-fault-app)
+# The compositor needs `vendor-engine` to open the real panel (ADR-0039,
+# WWW-86) rather than falling back to `MemoryPanel`, and that needs the GCC
+# toolchain `tools/cross/build-device.sh` builds under; `zig cc` cannot link
+# the vendor C++ ABI (that script's own doc comment has the symbol-mangling
+# reason). Built once and reused by every `build_release` call below — the
+# acceptance run only varies the supervisor, never the compositor.
+"$here/tools/cross/build-device.sh" --bin paperclip-compositor paper-compositor
 build_release "$to" paperclip-host ""
 
 # `docs/updating.md` names this as the first step on any tablet ("no

@@ -525,7 +525,7 @@ impl Upgrade<'_> {
         // bits — a mode an attacker controls is not a mode — so nothing that
         // came out of the bundle is executable yet. The app installer sets the
         // bit on the one entrypoint its manifest names; a platform release has
-        // four, and they are exactly the components under `bin/`.
+        // several, and they are exactly the components under `bin/`.
         //
         // After verification, never before: a file whose digest has not been
         // checked must not be made executable, even for the moment between two

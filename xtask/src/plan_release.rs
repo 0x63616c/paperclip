@@ -76,13 +76,18 @@ const APP_MANIFEST_FILE_NAME: &str = "paper.toml";
 /// words: "not a default app: it ships through the catalog and is versioned on
 /// its own".
 ///
-/// Derived from `REQUIRED_COMPONENTS` rather than written out, so a fourth
+/// Derived from `REQUIRED_COMPONENTS` rather than written out, so a new
 /// bundled app cannot be added there and silently double-publish here.
+///
+/// `paperclip-host` and `paperclip-compositor` are excluded alongside the
+/// apps: both are platform binaries with no `apps/<name>/paper.toml` of their
+/// own (WWW-86) — the compositor lives under `platform/compositor`, not
+/// `apps/`, the same reason the host is excluded.
 fn bundled_app_dirs() -> Vec<&'static str> {
     paper_updater::manifest::REQUIRED_COMPONENTS
         .iter()
         .copied()
-        .filter(|name| *name != "paperclip-host")
+        .filter(|name| *name != "paperclip-host" && *name != "paperclip-compositor")
         .collect()
 }
 /// The platform release manifest, at the repository root (WWW-61,
@@ -726,11 +731,12 @@ mod tests {
     }
 
     #[test]
-    fn every_bundled_component_but_the_host_is_an_app_directory() {
-        // `bundled_app_dirs` drops `paperclip-host` because it is the
-        // supervisor, not an app with a `paper.toml`. If a future component is
-        // added to `REQUIRED_COMPONENTS` this catches it here rather than
-        // through a silently double-published app.
+    fn every_bundled_component_but_the_host_and_compositor_is_an_app_directory() {
+        // `bundled_app_dirs` drops `paperclip-host` and `paperclip-compositor`
+        // because neither is an app with a `paper.toml` — the supervisor and
+        // the compositor are platform binaries, not catalog-shaped apps. If a
+        // future component is added to `REQUIRED_COMPONENTS` this catches it
+        // here rather than through a silently double-published app.
         assert_eq!(bundled_app_dirs(), vec!["home", "app-store", "settings"]);
     }
 

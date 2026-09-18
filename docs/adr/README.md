@@ -46,3 +46,4 @@ device survey and several of these are bets.
 | [0037](0037-compositor-accept-loop-and-crash-hang-isolation.md) | The compositor accept loop, its client wire, and crash/hang isolation |
 | [0038](0038-sleep-and-lock-as-a-compositor-overlay.md) | Sleep and lock as a compositor overlay, not a session hack |
 | [0039](0039-everything-is-an-app-the-compositor-as-a-service.md) | Everything is an app: the compositor as a long-running service |
+| [0040](0040-staging-the-compositor-into-the-platform-release.md) | Staging the compositor into the platform release |

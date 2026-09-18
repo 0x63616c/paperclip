@@ -1,13 +1,15 @@
 //! The signed platform manifest: one version of the whole platform (§13).
 //!
-//! # One document, one signature, four required components
+//! # One document, one signature, five required components
 //!
 //! §13 says the Host, protocol support, platform integration, Home and the App
-//! Store form **one tested platform release**, and this project's own decision
-//! adds Settings to the set that always ships. So a platform release is not
-//! four independently versioned things that happen to be installed together —
-//! it is one version, and the manifest names every binary in it with its size
-//! and digest.
+//! Store form **one tested platform release**, and this project's own decisions
+//! add Settings to the set that always ships (ADR-0015) and the compositor as
+//! the one process that opens the panel on behalf of all of them (ADR-0039,
+//! staged into a release by WWW-86). So a platform release is not five
+//! independently versioned things that happen to be installed together — it is
+//! one version, and the manifest names every binary in it with its size and
+//! digest.
 //!
 //! The signature covers the manifest bytes, exactly as
 //! [`paper_packages::release`] does it and for the same reason: the bytes are
@@ -58,7 +60,13 @@ pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 /// Not configurable, and not `#[non_exhaustive]`. §13 makes these one tested
 /// release; a manifest that omits one is describing something that has not
 /// been tested as a platform, whatever else it is.
-pub const REQUIRED_COMPONENTS: [&str; 4] = ["paperclip-host", "home", "app-store", "settings"];
+pub const REQUIRED_COMPONENTS: [&str; 5] = [
+    "paperclip-host",
+    "paperclip-compositor",
+    "home",
+    "app-store",
+    "settings",
+];
 
 /// One binary in a platform release.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,8 +233,8 @@ impl PlatformManifest {
             if !seen.contains(required) {
                 return Err(UpdateError::Manifest {
                     reason: format!(
-                        "no `{required}` component; §13 makes the host, Home, the App Store and \
-                         Settings one tested release"
+                        "no `{required}` component; §13 makes the host, the compositor, Home, \
+                         the App Store and Settings one tested release"
                     ),
                 });
             }

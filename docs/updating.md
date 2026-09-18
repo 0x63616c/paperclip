@@ -2,8 +2,8 @@
 
 Two operations, both driven from the Mac over SSH with `paperctl`. Apps update
 through the App Store and are not this document; this is Paperclip itself — the
-Host, Home, the App Store and Settings, which ship as **one release** and move
-together (§13).
+Host, the compositor, Home, the App Store and Settings, which ship as **one
+release** and move together (§13).
 
 > **Not yet run on hardware.** Everything here is implemented and exercised in
 > the Linux VM harness (`docs/device/www-8-upgrade-harness.md`; WWW-41 added
@@ -58,12 +58,13 @@ still has to reach the tablet by hand: `docs/device/www-69-preflight.md`.
 
 ## What a release is
 
-One version, one signed manifest, four binaries:
+One version, one signed manifest, five binaries:
 
 ```
 platform.toml        version, protocol, state versions, a digest per component
 platform.toml.sig    signed with the publishing key, under its own domain
 bin/paperclip-host
+bin/paperclip-compositor
 bin/home
 bin/app-store
 bin/settings
@@ -79,17 +80,29 @@ version, protocol, and the two state numbers below (WWW-61, ADR-0026).
 Bumping it is the only thing needed to ask for a new platform release; it is
 not the crate version, which stays `0.1.0` from `[workspace.package]`.
 
+`./tools/stage-platform.sh [output-dir]` does the steps below in one call and
+is what to run in practice; they are spelled out here for what each one does.
+Four of the five components link no vendor code and cross-compile with the
+`zig cc` wrapper already configured for the device target. `paperclip-
+compositor` is the exception (WWW-86): it is the one process that opens the
+panel (ADR-0039), so it must be built with `vendor-engine` or it silently
+falls back to `MemoryPanel` — and linking the vendor C++ ABI needs
+`tools/cross/build-device.sh`'s Docker/Qt-headers path, not `zig cc`
+(ADR-0009; the symbol-mangling reason is in that script's own doc comment).
+
 On the Mac, with the publishing key:
 
 ```sh
 cargo build --release --target aarch64-unknown-linux-gnu \
     -p paper-host -p paper-home -p paper-app-store -p paper-settings
+./tools/cross/build-device.sh --bin paperclip-compositor paper-compositor
 
 mkdir -p build/bin
-cp target/aarch64-unknown-linux-gnu/release/paperclip-host build/bin/
-cp target/aarch64-unknown-linux-gnu/release/home           build/bin/
-cp target/aarch64-unknown-linux-gnu/release/app-store      build/bin/
-cp target/aarch64-unknown-linux-gnu/release/settings       build/bin/
+cp target/aarch64-unknown-linux-gnu/release/paperclip-host  build/bin/
+cp target/aarch64-unknown-linux-gnu/release/home            build/bin/
+cp target/aarch64-unknown-linux-gnu/release/app-store       build/bin/
+cp target/aarch64-unknown-linux-gnu/release/settings        build/bin/
+cp target/device-container/release/paperclip-compositor     build/bin/
 
 paperctl upgrade package \
     --source build \

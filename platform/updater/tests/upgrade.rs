@@ -259,7 +259,13 @@ impl Fixture {
         let source = self.bundles.join(format!("src-{version}-{state_version}"));
         let bin = source.join("bin");
         std::fs::create_dir_all(&bin).expect("a source tree");
-        for name in ["paperclip-host", "home", "app-store", "settings"] {
+        for name in [
+            "paperclip-host",
+            "paperclip-compositor",
+            "home",
+            "app-store",
+            "settings",
+        ] {
             std::fs::write(
                 bin.join(name),
                 elf(0xB7, format!("{name} {version}").as_bytes()),
@@ -409,7 +415,13 @@ fn the_committed_release_is_executable() {
     install_first(&fixture, &session, "0.3.1");
 
     let release = fixture.layout.release_dir(&Version::new(0, 3, 1));
-    for name in ["paperclip-host", "home", "app-store", "settings"] {
+    for name in [
+        "paperclip-host",
+        "paperclip-compositor",
+        "home",
+        "app-store",
+        "settings",
+    ] {
         let path = release.join("bin").join(name);
         let mode = std::fs::metadata(&path)
             .expect("a committed component")
@@ -638,7 +650,13 @@ fn a_bundle_signed_by_a_stranger_is_refused_and_nothing_is_selected() {
     let stranger = SecretKey::generate().expect("a key");
     let source = fixture.bundles.join("src-stranger");
     std::fs::create_dir_all(source.join("bin")).expect("a source tree");
-    for name in ["paperclip-host", "home", "app-store", "settings"] {
+    for name in [
+        "paperclip-host",
+        "paperclip-compositor",
+        "home",
+        "app-store",
+        "settings",
+    ] {
         std::fs::write(source.join("bin").join(name), elf(0xB7, name.as_bytes()))
             .expect("a component");
     }
@@ -702,7 +720,13 @@ fn a_component_that_does_not_match_the_signed_manifest_is_refused() {
     // not what it covers.
     let source = fixture.bundles.join("src-swapped");
     std::fs::create_dir_all(source.join("bin")).expect("a source tree");
-    for name in ["paperclip-host", "home", "app-store", "settings"] {
+    for name in [
+        "paperclip-host",
+        "paperclip-compositor",
+        "home",
+        "app-store",
+        "settings",
+    ] {
         std::fs::write(source.join("bin").join(name), elf(0xB7, name.as_bytes()))
             .expect("a component");
     }
@@ -753,7 +777,13 @@ fn a_file_in_the_bundle_that_the_manifest_does_not_name_is_refused() {
 
     let source = fixture.bundles.join("src-stowaway");
     std::fs::create_dir_all(source.join("bin")).expect("a source tree");
-    for name in ["paperclip-host", "home", "app-store", "settings"] {
+    for name in [
+        "paperclip-host",
+        "paperclip-compositor",
+        "home",
+        "app-store",
+        "settings",
+    ] {
         std::fs::write(source.join("bin").join(name), elf(0xB7, name.as_bytes()))
             .expect("a component");
     }
@@ -808,7 +838,7 @@ fn a_manifest_missing_a_required_component_is_refused() {
         source.path(),
         &description(Version::new(0, 4, 0), 1, 1, &[]),
     )
-    .expect_err("a platform release without Settings is not a platform release");
+    .expect_err("a platform release missing a required component is not a platform release");
     assert!(matches!(error, UpdateError::Component { .. }), "{error:?}");
 }
 

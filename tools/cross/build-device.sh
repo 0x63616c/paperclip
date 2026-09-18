@@ -1,14 +1,26 @@
 #!/bin/sh
 # Build a Paperclip binary for the tablet, with the vendor waveform engine.
 #
-#   ./tools/cross/build-device.sh <example-name>     # a paper-device example
-#   ./tools/cross/build-device.sh --bin paperctl     # the command line itself
+#   ./tools/cross/build-device.sh <example-name>                    # a paper-device example
+#   ./tools/cross/build-device.sh --bin paperctl                    # the command line itself
+#   ./tools/cross/build-device.sh --bin paperclip-compositor paper-compositor
+#
+# `--bin <bin-name> [<package-name>]` builds one binary; `<package-name>`
+# defaults to `<bin-name>` (right for `paperctl`, whose package and binary
+# share a name) and is given explicitly when they differ, as for the
+# compositor (package `paper-compositor`, binary `paperclip-compositor`,
+# WWW-86).
 #
 # `--bin paperctl` is the one a person runs: `paperctl open` presents a screen
 # on the panel and gives the display back (WWW-23). It is built with
 # `--no-default-features` plus `vendor-engine`, because the tablet has no
 # windowing stack and must not contain a code path that can sign a release
-# (§12) — the same reasoning as the `paperctl stock` build.
+# (§12) — the same reasoning as the `paperctl stock` build. `paperclip-
+# compositor` needs `vendor-engine` for a different reason (WWW-86): it is
+# the one process that ever opens the panel (ADR-0039), and without the
+# feature it only ever falls back to `MemoryPanel`
+# (`platform/compositor/src/bin/paperclip-compositor.rs`'s
+# `default_panel_kind`) — a build that runs but never reaches the glass.
 #
 # Runs in an aarch64 Debian bookworm container, and both halves of that matter:
 #
@@ -32,8 +44,9 @@
 
 kind=example
 target=takeover
+package=""
 case "${1:-}" in
-    --bin) kind=bin; target=${2:?--bin needs a name} ;;
+    --bin) kind=bin; target=${2:?--bin needs a name}; package=${3:-$target} ;;
     "") ;;
     *) target=$1 ;;
 esac
@@ -53,7 +66,7 @@ docker run --rm --platform linux/arm64 \
     -v "$qt:/qt:ro" \
     -v "$vendor:/vendor:ro" \
     -v "$HOME/.cargo/registry:/root/.cargo/registry" \
-    -e "KIND=$kind" -e "TARGET=$target" \
+    -e "KIND=$kind" -e "TARGET=$target" -e "PACKAGE=$package" \
     debian:bookworm-slim sh -euc '
         export DEBIAN_FRONTEND=noninteractive
         apt-get -qq update >/dev/null
@@ -70,7 +83,7 @@ docker run --rm --platform linux/arm64 \
         export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=cc
         cd /src
         if [ "$KIND" = bin ]; then
-            cargo build --release -p "$TARGET" --bin "$TARGET" \
+            cargo build --release -p "$PACKAGE" --bin "$TARGET" \
                 --no-default-features --features vendor-engine \
                 --target-dir /src/target/device-container
         else

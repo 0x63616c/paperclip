@@ -168,11 +168,14 @@ catalog app at `apps/<app>/bin/<app>`, for a different command
 (`paperctl package apps/<app>`). Making one script cover both would mean an
 argument that changes what directory shape it produces for two things staged
 for two different consumers — a worse abstraction than two scripts that each
-do one job. `stage-platform.sh` needs no Docker/Qt either: none of the four
-components links `paper-device`'s `vendor-engine` feature (`paperclip-host`
-because that feature is off by default; the three apps for the same
-ADR-0022 reason Chess and Sudoku do not), so the `aarch64-linux-gnu-cc`
-wrapper is enough.
+do one job. `stage-platform.sh` needed no Docker/Qt either, at the time: none
+of the four components linked `paper-device`'s `vendor-engine` feature
+(`paperclip-host` because that feature is off by default; the three apps for
+the same ADR-0022 reason Chess and Sudoku do not), so the `aarch64-linux-gnu-cc`
+wrapper was enough. **No longer the whole story**: ADR-0040 (WWW-86) adds a
+fifth required component, `paperclip-compositor`, which *does* need
+`vendor-engine` and is staged through `tools/cross/build-device.sh`'s
+Docker/Qt path instead. The four components named here are unaffected.
 
 Verified: `cargo tree -p paper-home -p paper-app-store -p paper-settings`
 carries no `paper-device` edge; `cargo build --release --target
