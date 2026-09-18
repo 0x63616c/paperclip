@@ -40,7 +40,7 @@ mod linux {
 
     use paper_host::facilities::Facilities;
     use paper_host::linux::recovery::RecoveryConfig;
-    use paper_host::linux::systemd::{self, Systemd};
+    use paper_host::linux::systemd;
     use paper_host::units::{SessionGrants, SessionPaths, SessionSpec, UnitSet};
     use paper_packages::{AppId, InstallPolicy, InstalledApp, Manifest};
     use paper_updater::SessionControl as _;
@@ -132,10 +132,15 @@ mod linux {
         )
         .map_err(|error| format!("writing the supervisor config: {error}"))?;
 
-        install_units(paths)?;
+        // `SystemdSession::bring_up` (WWW-74) writes `UnitSet::for_supervisor`
+        // — everything except the per-app unit, deliberately: that one needs
+        // a specific app's `SessionGrants`, which `bring_up` has no app to
+        // derive. Write it here, before `bring_up`, so its one `daemon-reload`
+        // picks up both sets in a single pass.
+        install_home_unit(paths)?;
 
         let recovery = RecoveryConfig::default();
-        let session = SystemdSession::new(recovery, paths.state.clone());
+        let session = SystemdSession::new(recovery, paths.clone());
         session
             .bring_up()
             .map_err(|error| format!("starting the supervisor: {error}"))?;
@@ -165,11 +170,11 @@ mod linux {
         Ok(())
     }
 
-    /// Writes the runtime session units into `/run/systemd/system` and
-    /// reloads systemd. `/run` is a tmpfs (ADR-0008): every boot has to do
-    /// this again, which is the whole reason a persistent launcher unit is
-    /// needed to trigger it in the first place.
-    fn install_units(paths: &SessionPaths) -> Result<(), String> {
+    /// Writes `paperclip-app@home.service`, the one unit `bring_up`
+    /// deliberately leaves out (WWW-74's `UnitSet::for_supervisor`). Does
+    /// not `daemon-reload` itself — `bring_up`'s own reload, called right
+    /// after this, picks it up along with the units it writes.
+    fn install_home_unit(paths: &SessionPaths) -> Result<(), String> {
         let facilities = paper_host::probe::probe().unwrap_or_else(|error| {
             tracing::warn!(
                 "the live facilities probe failed ({error}); falling back to the recorded \
@@ -191,18 +196,15 @@ mod linux {
             .clone();
         let grants = SessionGrants::derive(&app, &granted, &spec.paths);
         let set = UnitSet::plan(&spec, &grants, &facilities);
+        let app_unit = set
+            .get(paper_host::units::APP_UNIT)
+            .expect("UnitSet::plan always includes the per-app unit");
 
         std::fs::create_dir_all(&spec.paths.runtime_units)
             .map_err(|error| format!("creating {}: {error}", spec.paths.runtime_units.display()))?;
-        for file in &set.files {
-            let path = spec.paths.runtime_units.join(&file.name);
-            std::fs::write(&path, &file.contents)
-                .map_err(|error| format!("writing {}: {error}", path.display()))?;
-        }
-
-        Systemd::default()
-            .daemon_reload()
-            .map_err(|error| format!("daemon-reload: {error}"))
+        let path = spec.paths.runtime_units.join(&app_unit.name);
+        std::fs::write(&path, &app_unit.contents)
+            .map_err(|error| format!("writing {}: {error}", path.display()))
     }
 
     /// Asks the supervisor to bring Home to the foreground, the same way an

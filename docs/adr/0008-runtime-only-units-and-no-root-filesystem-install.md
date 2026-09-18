@@ -241,10 +241,14 @@ Mac-tested: the decision core (`paper_boot::policy`, `::counter`,
 counter surviving a simulated process restart against the same durable
 primitive (`paper_packages::store::atomic_write`) the platform's own
 `current`/`previous` selection uses. Cross-compiled and clippy-clean for
-`aarch64-unknown-linux-gnu`: the full orchestration in
-`paperclip-launcher` — writing the session units, starting the supervisor via
-`paper_updater::linux::SystemdSession` (reused, not reimplemented), polling
-`state=home`.
+`aarch64-unknown-linux-gnu`: the full orchestration in `paperclip-launcher` —
+starting the supervisor via `paper_updater::linux::SystemdSession` (reused,
+not reimplemented; WWW-74, landed while this amendment was in progress, made
+its `bring_up()` write the four units the supervisor itself needs, so
+`paperclip-launcher` now only writes the one unit `bring_up()` deliberately
+leaves out — the per-app unit, because it needs Home's specific
+`SessionGrants` and `bring_up()` has no app to derive them for) — and polling
+`state=home`, not the readiness ladder `bring_up()`'s own caller would use.
 
 **Not proven here:** the VM harness does not yet exercise
 `paperclip-launcher` end to end — three failed renders actually rolling back
