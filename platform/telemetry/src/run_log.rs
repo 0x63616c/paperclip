@@ -1,5 +1,6 @@
 //! The Mac-side run history behind `paperctl logs` (ADR-0023), now a
-//! `tracing` [`Layer`] instead of a manually-called wrapper (WWW-46).
+//! `tracing` [`Layer`](tracing_subscriber::Layer) instead of a manually-called
+//! wrapper (WWW-46).
 //!
 //! Before this change, recording a run meant every command's own code called
 //! `runlog::wrap` — and two call sites out of nine did (`deploy`, `open`);
