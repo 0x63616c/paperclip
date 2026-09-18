@@ -12,8 +12,9 @@
 //! makes this path's frequency worth measuring (WWW-81).
 //!
 //! Always presents the whole extent regardless of what the client's
-//! [`Damage`] claimed. `Damage::Full` is always a correct superset (per its
-//! own doc, "the host may present more than this claims"), and a partial
+//! [`Damage`](paper_protocol::Damage) claimed. `Damage::Full` is always a
+//! correct superset (per its own doc, "the host may present more than this
+//! claims"), and a partial
 //! blit straight into the panel's buffer is an optimisation this ticket does
 //! not need to make the crash/hang acceptance criteria true.
 

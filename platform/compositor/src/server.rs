@@ -4,7 +4,7 @@
 //! ## Non-blocking is the whole answer to "a wedged client stalls nobody"
 //!
 //! Every fd this module touches — the listener, a pending connection, a
-//! registered client — is set non-blocking the moment it exists. [`poll`]
+//! registered client — is set non-blocking the moment it exists. `poll`
 //! (`libc::poll`, not `mio`/`tokio`: this workspace has no async runtime,
 //! see `platform/compositor/Cargo.toml`) is the only place [`Compositor`]
 //! ever waits, and it waits on every fd at once with one bounded timeout. A
@@ -16,7 +16,7 @@
 //!
 //! ## EOF teardown touches exactly the dead client
 //!
-//! [`Compositor::disconnect`] removes one entry from `clients`, dropping its
+//! `Compositor::disconnect` removes one entry from `clients`, dropping its
 //! [`Surface`] and [`Pool`] (which `munmap`s, see `pool.rs`) and closing its
 //! socket. Nothing else in [`Compositor`] — the listener, `poll`'s fd list
 //! for every other client, the panel — is touched by that call, which is
