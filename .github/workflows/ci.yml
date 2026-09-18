@@ -7,6 +7,17 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The `.cargo/config.toml` linker and `CC_*` both point at the `zig cc`
+  # wrapper, which is right on a Mac and wrong here: zig is not installed on a
+  # GitHub runner, so the wrapper exits 127. Point both at the real cross
+  # toolchain instead, which the release workflow already uses and which is what
+  # the device's C++ ABI wants anyway (tools/cross/build-device.sh).
+  #
+  # This only started mattering with WWW-68: `ring`, pulled in by the HTTPS
+  # catalog transport's TLS, is the first device-build dependency with C sources
+  # of its own, so a cross *compiler* is now needed and not just a linker.
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+  CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
 
 jobs:
   fmt:
@@ -36,6 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - run: cargo clippy --workspace --all-targets --keep-going --target aarch64-unknown-linux-gnu -- -D warnings
 
   test:
@@ -54,6 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - run: cargo doc --workspace --no-deps --keep-going --target aarch64-unknown-linux-gnu
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
@@ -65,6 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - run: cargo check --workspace --target aarch64-unknown-linux-gnu
 
   paperctl-device-build:
