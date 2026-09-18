@@ -46,11 +46,15 @@ jobs:
       - run: cargo test --workspace
 
   doc:
+    # `--target aarch64-unknown-linux-gnu`: an intra-doc link to a
+    # `#[cfg(target_os = "linux")]` item cannot resolve on a triple whose
+    # `target_os` isn't linux (WWW-67), so this documents the device rather
+    # than relying on the runner's own OS to happen to match.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --workspace --no-deps --keep-going
+      - run: cargo doc --workspace --no-deps --keep-going --target aarch64-unknown-linux-gnu
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
 

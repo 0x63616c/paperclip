@@ -33,8 +33,14 @@ test:
 
 # `-D rustdoc::broken_intra_doc_links` only — the workspace does not yet ask
 # rustdoc for `-D warnings` across the board.
+#
+# `--target aarch64-unknown-linux-gnu`: an intra-doc link to a
+# `#[cfg(target_os = "linux")]` item (WWW-67) cannot resolve on the host
+# triple's own `target_os`, so this recipe documents the device rather than
+# the Mac it runs on — same split `clippy-device`/`check-device` already
+# make, for the same reason.
 doc:
-    RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --workspace --no-deps --keep-going
+    RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --workspace --no-deps --keep-going --target aarch64-unknown-linux-gnu
 
 # Does the device half compile? Needs nothing but rustup (docs/development.md).
 check-device:
