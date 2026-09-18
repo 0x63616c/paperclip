@@ -6,10 +6,9 @@
 //! (WWW-22 scope) and draw without returning anything to hit-test.
 
 use paper_sdk::chrome;
-use paper_sdk::{Canvas, Point, Rect, TextStyle, palette};
-
-use crate::host::{
-    CatalogStatus, DiagnosticEntry, GrantSummary, InstalledAppSummary, PlatformInfo, StorageUsage,
+use paper_sdk::{
+    Canvas, CatalogStatus, DiagnosticEntry, GrantSummary, InstalledAppSummary, PlatformFact, Point,
+    Rect, StorageUsage, TextStyle, palette,
 };
 
 /// Height of one row in a list page.
@@ -312,7 +311,7 @@ pub(crate) fn draw_catalog(canvas: &mut Canvas, area: Rect, catalog: &CatalogSta
 }
 
 /// Draws the platform page.
-pub(crate) fn draw_platform(canvas: &mut Canvas, area: Rect, platform: &PlatformInfo) {
+pub(crate) fn draw_platform(canvas: &mut Canvas, area: Rect, platform: &PlatformFact) {
     let facts = [
         (
             "PAPERCLIP VERSION",
@@ -359,9 +358,9 @@ pub(crate) fn draw_diagnostics(canvas: &mut Canvas, area: Rect, entries: &[Diagn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paper_packages::Capability;
     use paper_sdk::SCREEN;
     use paper_sdk::chrome::MIN_TOUCH_TARGET;
+    use paper_sdk::{Capability, StorageBucket};
 
     fn canvas() -> Canvas {
         Canvas::new(SCREEN).expect("screen-sized canvas")
@@ -423,15 +422,15 @@ mod tests {
         assert!(canvas.ink_coverage() > 0.0);
     }
 
-    fn grants() -> Vec<crate::host::GrantSummary> {
+    fn grants() -> Vec<GrantSummary> {
         vec![
-            crate::host::GrantSummary {
+            GrantSummary {
                 app_id: "dev.calum.chess".parse().unwrap(),
                 app_name: "Chess".to_owned(),
                 capability: Capability::Storage,
                 in_use: true,
             },
-            crate::host::GrantSummary {
+            GrantSummary {
                 app_id: "dev.calum.chess".parse().unwrap(),
                 app_name: "Chess".to_owned(),
                 capability: Capability::Sharing,
@@ -472,14 +471,14 @@ mod tests {
         let mut empty = canvas();
         let used = StorageUsage {
             free_bytes: 0,
-            buckets: vec![crate::host::StorageBucket {
+            buckets: vec![StorageBucket {
                 label: "DATA".to_owned(),
                 bytes: 1_000_000,
             }],
         };
         let none_used = StorageUsage {
             free_bytes: 1_000_000,
-            buckets: vec![crate::host::StorageBucket {
+            buckets: vec![StorageBucket {
                 label: "DATA".to_owned(),
                 bytes: 0,
             }],

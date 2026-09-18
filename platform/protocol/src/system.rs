@@ -17,6 +17,15 @@
 //! **Denials are machine-readable.** [`SystemDenial`] distinguishes a backend
 //! that has nothing to report from an app that asked too often, rather than
 //! collapsing both into one generic failure.
+//!
+//! **The vocabulary grew a second time.** [`SystemQueryKind::Admin`] and
+//! [`SystemValue::Admin`] (WWW-71, ADR-0028) carry
+//! [`crate::admin::AdminQuery`] and [`crate::admin::AdminValue`] — Settings'
+//! nine admin operations, gated by caller identity rather than by a grant.
+//! See [`crate::admin`] for that vocabulary and why it is not part of the
+//! no-grant tier above.
+
+use crate::admin::{AdminQuery, AdminValue};
 
 /// Correlates a [`SystemQuery`] with the [`SystemAnswer`] it produced.
 ///
@@ -51,8 +60,12 @@ impl QueryId {
     }
 }
 
-/// Which no-grant system fact an app is asking for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+/// Which system fact, or admin operation, an app is asking for.
+///
+/// Not [`Copy`]: [`Self::Admin`] carries an [`AdminQuery`], which names an
+/// [`AppId`](crate::AppId) it acts on and so cannot be. The four no-grant
+/// facts above it stay cheap to construct either way.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum SystemQueryKind {
@@ -64,10 +77,13 @@ pub enum SystemQueryKind {
     Network,
     /// Platform version facts.
     Platform,
+    /// One of Settings' nine admin operations (WWW-71). Gated by caller
+    /// identity at the host, not by a grant — see [`crate::admin`].
+    Admin(AdminQuery),
 }
 
 /// An app asking the host for one system fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SystemQuery {
     /// Matched against the [`SystemAnswer`] that answers it.
     pub id: QueryId,
@@ -155,6 +171,8 @@ pub enum SystemValue {
     Network(NetworkFact),
     /// Answers [`SystemQueryKind::Platform`].
     Platform(PlatformFact),
+    /// Answers [`SystemQueryKind::Admin`].
+    Admin(AdminValue),
 }
 
 /// Why a [`SystemQuery`] was refused.
@@ -178,6 +196,11 @@ pub enum SystemDenialReason {
     /// a minor protocol version ahead of an older host (protocol bumps are
     /// additive; see the crate root's versioning docs).
     Unsupported,
+    /// An [`SystemQueryKind::Admin`] query arrived on a connection that is
+    /// not `dev.calum.settings` (WWW-71). Distinct from
+    /// [`Self::BackendUnavailable`]: the backend is fine, the caller is not
+    /// entitled to ask.
+    NotPermitted,
 }
 
 /// Why a [`SystemQuery`] was refused, with an optional human-readable detail

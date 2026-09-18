@@ -30,6 +30,8 @@
 //! already defines the command line, rather than a second, hand-maintained
 //! copy of it).
 
+#[cfg(feature = "apps")]
+mod admin;
 #[cfg(not(target_os = "linux"))]
 mod deploy;
 #[cfg(feature = "desktop")]

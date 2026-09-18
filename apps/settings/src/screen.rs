@@ -1,30 +1,40 @@
 //! Composing the Settings screen.
 //!
-//! [`SettingsScreen`] holds a snapshot of what [`SettingsHost`] reported plus
-//! the small amount of UI-only state a press can change: which page is
+//! [`SettingsScreen`] holds a cached snapshot of what the host last answered
+//! plus the small amount of UI-only state a press can change: which page is
 //! showing, and which destructive action (if any) is waiting on a
-//! confirmation. Nothing here calls into the Host except [`Self::confirm`] —
-//! opening a dialog is free, and going through with it is the one place a
-//! transaction actually happens (§6).
+//! confirmation. It calls nobody itself (§6, WWW-71, ADR-0028): every read
+//! and write is a [`paper_sdk::AdminQuery`] [`crate::app::SettingsApp`] sends
+//! and applies, because the host answers asynchronously and a screen that
+//! blocked on one would be blocking the event loop it is drawn from.
 
-use paper_packages::{AppId, Capability};
-use paper_sdk::chrome;
-use paper_sdk::{Action, Canvas, Point, PointerEvent, Rect, Size};
+use paper_sdk::{
+    Action, AdminQuery, AdminValue, AppId, Canvas, Capability, CatalogStatus, DiagnosticEntry,
+    GrantSummary, InstalledAppSummary, PlatformFact, Point, PointerEvent, Rect, Size,
+    StorageBucket, StorageUsage, chrome,
+};
 
 use crate::confirm::{self, ConfirmDialog, ConfirmLayout};
-use crate::host::{
-    CatalogStatus, DiagnosticEntry, GrantSummary, HostOpError, InstalledAppSummary, PlatformInfo,
-    SettingsHost, StorageUsage,
-};
 use crate::nav::{self, NavLayout, SettingsPage};
 use crate::pages::{self, AppsLayout, GrantsLayout};
 
-/// What confirming the open dialog would do.
+/// What confirming the open dialog would ask the host to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum PendingKind {
+pub(crate) enum PendingKind {
     Rollback(AppId),
     Uninstall(AppId),
     Revoke(AppId, Capability),
+}
+
+impl PendingKind {
+    /// The query that carries this action to the host.
+    pub(crate) fn into_query(self) -> AdminQuery {
+        match self {
+            PendingKind::Rollback(app) => AdminQuery::Rollback { app },
+            PendingKind::Uninstall(app) => AdminQuery::Uninstall { app },
+            PendingKind::Revoke(app, capability) => AdminQuery::RevokeGrant { app, capability },
+        }
+    }
 }
 
 /// A destructive action waiting on its confirmation.
@@ -43,25 +53,20 @@ pub struct SettingsScreen {
     storage: StorageUsage,
     grants: Vec<GrantSummary>,
     catalog: CatalogStatus,
-    platform: PlatformInfo,
+    platform: PlatformFact,
     diagnostics: Vec<DiagnosticEntry>,
     pending: Option<PendingAction>,
 }
 
-/// What one press asked the host to do, and whether the Host transaction it
-/// went through with failed.
-///
-/// The error is carried rather than logged here: this crate has no
-/// [`Context`](paper_sdk::Context) and no logger, and a caller that has one
-/// (the app) reports it, while a caller that does not (the desktop preview)
-/// drops it.
-#[derive(Debug, Clone, PartialEq)]
+/// What one press decided, for [`crate::app::SettingsApp`] to act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Press {
     /// What the platform should do next.
     pub action: Action,
-    /// Why the Host refused, when this press confirmed a destructive action
-    /// and the Host did not carry it out.
-    pub error: Option<HostOpError>,
+    /// A write to ask the host for, when this press confirmed a destructive
+    /// action. The dialog has already closed by the time this is `Some` —
+    /// see the module doc on why a press cannot wait for the host's answer.
+    pub(crate) admin: Option<PendingKind>,
 }
 
 impl Press {
@@ -69,7 +74,7 @@ impl Press {
     fn ignored() -> Self {
         Self {
             action: Action::None,
-            error: None,
+            admin: None,
         }
     }
 
@@ -77,23 +82,135 @@ impl Press {
     fn redraw() -> Self {
         Self {
             action: Action::Redraw,
-            error: None,
+            admin: None,
         }
     }
 }
 
+/// The placeholder text shown for a fact this screen has not been told yet.
+const LOADING: &str = "\u{2026}";
+
 impl SettingsScreen {
-    /// Snapshots everything `host` reports right now, showing the apps page.
-    pub fn from_host(host: &dyn SettingsHost) -> Self {
+    /// A screen with nothing loaded yet, showing the apps page.
+    ///
+    /// [`crate::app::SettingsApp`] fills this in as its admin queries are
+    /// answered ([`Self::apply`]) — there is no synchronous constructor that
+    /// reads a real store, because there is no longer a store this crate can
+    /// reach directly (WWW-71).
+    pub fn loading() -> Self {
         Self {
             page: SettingsPage::Apps,
-            apps: host.installed_apps(),
-            storage: host.storage_usage(),
-            grants: host.grants(),
-            catalog: host.catalog_status(),
-            platform: host.platform_info(),
-            diagnostics: host.diagnostics(),
+            apps: Vec::new(),
+            storage: StorageUsage {
+                free_bytes: 0,
+                buckets: Vec::new(),
+            },
+            grants: Vec::new(),
+            catalog: CatalogStatus {
+                endpoint: LOADING.to_owned(),
+                last_fetch: None,
+                reachable: false,
+            },
+            platform: PlatformFact {
+                paperclip_version: env!("CARGO_PKG_VERSION").to_owned(),
+                firmware: LOADING.to_owned(),
+                active_release: LOADING.to_owned(),
+            },
+            diagnostics: Vec::new(),
             pending: None,
+        }
+    }
+
+    /// A screen pre-populated with fixture data.
+    ///
+    /// Not device evidence: every value here is invented so the pages have
+    /// something legible to draw without a real host answering. Used by the
+    /// desktop preview (`paperctl preview`/`paperctl open`, which render a
+    /// screen directly rather than through a session) and by this crate's own
+    /// tests, so there is exactly one fixture rather than one per caller.
+    pub fn preview() -> Self {
+        let chess: AppId = "dev.calum.chess".parse().expect("valid fixture id");
+        Self {
+            page: SettingsPage::Apps,
+            apps: vec![InstalledAppSummary {
+                id: chess.clone(),
+                name: "Chess".to_owned(),
+                active_version: "0.2.0".to_owned(),
+                previous_version: Some("0.1.0".to_owned()),
+                data_bytes: 2_400_000,
+            }],
+            storage: StorageUsage {
+                free_bytes: 41_300_000,
+                buckets: vec![
+                    StorageBucket {
+                        label: "DATA / CHESS".to_owned(),
+                        bytes: 2_400_000,
+                    },
+                    StorageBucket {
+                        label: "SHARED".to_owned(),
+                        bytes: 0,
+                    },
+                    StorageBucket {
+                        label: "STAGING".to_owned(),
+                        bytes: 0,
+                    },
+                    StorageBucket {
+                        label: "RELEASES".to_owned(),
+                        bytes: 18_700_000,
+                    },
+                ],
+            },
+            grants: vec![
+                GrantSummary {
+                    app_id: chess.clone(),
+                    app_name: "Chess".to_owned(),
+                    capability: Capability::Storage,
+                    in_use: true,
+                },
+                GrantSummary {
+                    app_id: chess,
+                    app_name: "Chess".to_owned(),
+                    capability: Capability::Sharing,
+                    in_use: false,
+                },
+            ],
+            catalog: CatalogStatus {
+                endpoint: "HTTPS://CATALOG.LOCAL".to_owned(),
+                last_fetch: Some("2026-09-16 21:04".to_owned()),
+                reachable: true,
+            },
+            platform: PlatformFact {
+                paperclip_version: "0.1.0".to_owned(),
+                firmware: "3.28.0.172".to_owned(),
+                active_release: "STAGE 4".to_owned(),
+            },
+            diagnostics: vec![DiagnosticEntry {
+                when: "2026-09-16 21:04".to_owned(),
+                message: "NO ERRORS RECORDED THIS SESSION".to_owned(),
+            }],
+            pending: None,
+        }
+    }
+
+    /// Files one admin answer's value under the field it belongs to.
+    ///
+    /// A write's own `Result` is not applied here: whether a rollback,
+    /// uninstall or revoke succeeded is [`crate::app::SettingsApp`]'s
+    /// business (it decides whether to warn and which reads to refresh),
+    /// not this screen's — this screen only ever shows what the host most
+    /// recently reported, never a write's outcome directly.
+    pub fn apply(&mut self, value: AdminValue) {
+        match value {
+            AdminValue::InstalledApps(apps) => self.apps = apps,
+            AdminValue::StorageUsage(storage) => self.storage = storage,
+            AdminValue::Grants(grants) => self.grants = grants,
+            AdminValue::CatalogStatus(catalog) => self.catalog = catalog,
+            AdminValue::PlatformInfo(platform) => self.platform = platform,
+            AdminValue::Diagnostics(diagnostics) => self.diagnostics = diagnostics,
+            AdminValue::Rollback(_) | AdminValue::Uninstall(_) | AdminValue::RevokeGrant(_) => {}
+            // `AdminValue` is `#[non_exhaustive]`: a future minor protocol
+            // bump can add a variant this build predates.
+            _ => {}
         }
     }
 
@@ -210,44 +327,31 @@ impl SettingsScreen {
         });
     }
 
-    /// Backs out of the open confirmation without calling the Host.
+    /// Backs out of the open confirmation without asking the host anything.
     pub fn cancel(&mut self) {
         self.pending = None;
     }
 
-    /// Goes through with the open confirmation and refreshes the snapshot
-    /// from `host`. Does nothing if nothing is pending.
-    pub fn confirm(&mut self, host: &mut dyn SettingsHost) -> Result<(), HostOpError> {
-        let Some(pending) = self.pending.take() else {
-            return Ok(());
-        };
-        let result = match pending.kind {
-            PendingKind::Rollback(id) => host.rollback(&id),
-            PendingKind::Uninstall(id) => host.uninstall(&id),
-            PendingKind::Revoke(id, capability) => host.revoke_grant(&id, capability),
-        };
-        self.refresh(&*host);
-        result
+    /// Closes the open confirmation and hands back what it asked for, if
+    /// anything was pending.
+    ///
+    /// The dialog closes here, before the host has answered: see the module
+    /// doc. [`crate::app::SettingsApp`] is the caller, and turns `Some` into
+    /// the [`AdminQuery`] that actually performs the write.
+    pub(crate) fn confirm(&mut self) -> Option<PendingKind> {
+        self.pending.take().map(|pending| pending.kind)
     }
 
     /// Handles one pointer event against the layout that was drawn for it.
     ///
     /// The single entry point every caller uses — the app and the desktop
     /// preview both route presses through this, so "what a tap does" has one
-    /// implementation rather than one per host (ADR-0018). The per-region
-    /// handlers above stay public because they are what this dispatch is
-    /// tested against, but nothing outside this crate needs to call them in
-    /// order.
+    /// implementation rather than one per host (ADR-0018).
     ///
     /// Order matters and is the modal rule: while a confirmation is open it
     /// absorbs every press, including one that lands on the page underneath
     /// its scrim.
-    pub fn press(
-        &mut self,
-        layout: &SettingsLayout,
-        pointer: &PointerEvent,
-        host: &mut dyn SettingsHost,
-    ) -> Press {
+    pub fn press(&mut self, layout: &SettingsLayout, pointer: &PointerEvent) -> Press {
         if !pointer.is_tap() {
             return Press::ignored();
         }
@@ -261,7 +365,7 @@ impl SettingsScreen {
             if confirm.confirm.contains(at) {
                 return Press {
                     action: Action::Redraw,
-                    error: self.confirm(host).err(),
+                    admin: self.confirm(),
                 };
             }
             // The scrim. A press here resolves nothing, and must not reach
@@ -274,7 +378,7 @@ impl SettingsScreen {
         {
             return Press {
                 action: Action::ReturnToStock,
-                error: None,
+                admin: None,
             };
         }
 
@@ -294,20 +398,6 @@ impl SettingsScreen {
         } else {
             Press::ignored()
         }
-    }
-
-    /// Re-reads everything from `host`.
-    ///
-    /// The snapshot this screen draws is taken once, so anything that
-    /// changed the store behind its back — an install, an uninstall from
-    /// another app — is invisible until someone asks for a fresh one.
-    pub fn refresh(&mut self, host: &dyn SettingsHost) {
-        self.apps = host.installed_apps();
-        self.storage = host.storage_usage();
-        self.grants = host.grants();
-        self.catalog = host.catalog_status();
-        self.platform = host.platform_info();
-        self.diagnostics = host.diagnostics();
     }
 }
 
@@ -432,7 +522,7 @@ pub fn render(canvas: &mut Canvas, screen: &SettingsScreen) -> SettingsLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::PlaceholderHost;
+    use paper_sdk::AdminError;
     use paper_sdk::SCREEN;
 
     fn canvas() -> Canvas {
@@ -445,11 +535,10 @@ mod tests {
 
     #[test]
     fn layout_needs_no_canvas_and_matches_what_render_draws_for_every_page() {
-        let host = PlaceholderHost::new();
         for page in SettingsPage::ALL {
             let screen = SettingsScreen {
                 page,
-                ..SettingsScreen::from_host(&host)
+                ..SettingsScreen::preview()
             };
             let drawn = render(&mut canvas(), &screen);
             assert_eq!(layout(SCREEN, &screen), drawn, "{page:?}");
@@ -458,11 +547,8 @@ mod tests {
 
     #[test]
     fn attempting_rollback_with_no_previous_release_opens_nothing() {
-        let mut host = PlaceholderHost::new();
-        host.rollback(&chess_id())
-            .expect("first rollback clears the previous release");
-        let mut screen = SettingsScreen::from_host(&host);
-        assert!(!screen.apps[0].has_previous_release());
+        let mut screen = SettingsScreen::preview();
+        screen.apps[0].previous_version = None;
 
         screen.begin_rollback(0);
         assert!(
@@ -473,8 +559,7 @@ mod tests {
 
     #[test]
     fn rollback_with_a_previous_release_opens_a_dialog_naming_it() {
-        let host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
+        let mut screen = SettingsScreen::preview();
         screen.begin_rollback(0);
         let pending = screen
             .pending
@@ -491,8 +576,7 @@ mod tests {
 
     #[test]
     fn uninstalling_an_app_with_data_present_warns_about_losing_it() {
-        let host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
+        let mut screen = SettingsScreen::preview();
         assert!(
             screen.apps[0].data_bytes > 0,
             "the fixture should have data to lose"
@@ -516,8 +600,7 @@ mod tests {
 
     #[test]
     fn uninstalling_an_app_with_no_data_does_not_claim_data_will_be_lost() {
-        let host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
+        let mut screen = SettingsScreen::preview();
         screen.apps[0].data_bytes = 0;
 
         screen.begin_uninstall(0);
@@ -530,8 +613,7 @@ mod tests {
 
     #[test]
     fn revoking_a_grant_currently_in_use_warns_about_interrupting_it() {
-        let host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
+        let mut screen = SettingsScreen::preview();
         assert!(
             screen.grants[0].in_use,
             "the fixture's first grant should be in use"
@@ -553,8 +635,7 @@ mod tests {
 
     #[test]
     fn revoking_a_grant_not_in_use_does_not_warn_about_interrupting_it() {
-        let host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
+        let mut screen = SettingsScreen::preview();
         assert!(
             !screen.grants[1].in_use,
             "the fixture's second grant should be idle"
@@ -575,42 +656,56 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_a_pending_action_does_not_call_the_host() {
-        let mut host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
+    fn cancelling_a_pending_action_asks_the_host_nothing() {
+        let mut screen = SettingsScreen::preview();
         screen.begin_uninstall(0);
         screen.cancel();
         assert!(screen.pending.is_none());
-        assert_eq!(
-            screen.confirm(&mut host),
-            Ok(()),
-            "nothing pending, nothing to do"
-        );
-        assert_eq!(
-            host.installed_apps().len(),
-            1,
-            "cancelling must not touch the host"
+        assert_eq!(screen.confirm(), None, "nothing pending, nothing to ask");
+    }
+
+    #[test]
+    fn confirming_a_destructive_action_closes_the_dialog_and_names_the_write() {
+        let mut screen = SettingsScreen::preview();
+        screen.begin_uninstall(0);
+        let kind = screen.confirm();
+        assert!(screen.pending.is_none());
+        assert_eq!(kind, Some(PendingKind::Uninstall(chess_id())));
+    }
+
+    #[test]
+    fn applying_an_admin_value_updates_the_matching_field_and_nothing_else() {
+        let mut screen = SettingsScreen::loading();
+        assert!(screen.apps.is_empty());
+
+        screen.apply(AdminValue::InstalledApps(vec![InstalledAppSummary {
+            id: chess_id(),
+            name: "Chess".to_owned(),
+            active_version: "0.2.0".to_owned(),
+            previous_version: None,
+            data_bytes: 0,
+        }]));
+        assert_eq!(screen.apps.len(), 1);
+        assert!(
+            screen.grants.is_empty(),
+            "an InstalledApps answer must not touch grants"
         );
     }
 
     #[test]
-    fn confirming_an_uninstall_calls_the_host_and_refreshes_the_snapshot() {
-        let mut host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
-        screen.begin_uninstall(0);
-        assert_eq!(screen.confirm(&mut host), Ok(()));
-        assert!(screen.pending.is_none());
-        assert!(
-            screen.apps.is_empty(),
-            "the snapshot should reflect the uninstall"
+    fn a_write_s_own_result_is_not_applied_to_the_screen() {
+        let mut screen = SettingsScreen::preview();
+        let apps_before = screen.apps.clone();
+        screen.apply(AdminValue::Uninstall(Err(AdminError::NotInstalled)));
+        assert_eq!(
+            screen.apps, apps_before,
+            "a write's Result carries no display data of its own"
         );
-        assert!(host.installed_apps().is_empty());
     }
 
     #[test]
     fn a_press_on_a_tab_switches_the_page_unless_a_dialog_is_open() {
-        let host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
+        let mut screen = SettingsScreen::preview();
         let mut canvas = canvas();
         let layout = render(&mut canvas, &screen);
 
@@ -630,8 +725,7 @@ mod tests {
 
     #[test]
     fn the_footer_return_action_disappears_while_confirming() {
-        let host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
+        let mut screen = SettingsScreen::preview();
         let mut canvas = canvas();
         assert!(render(&mut canvas, &screen).return_to_stock.is_some());
 
@@ -643,8 +737,7 @@ mod tests {
 
     #[test]
     fn every_page_renders_without_going_blank_or_solid() {
-        let host = PlaceholderHost::new();
-        let mut screen = SettingsScreen::from_host(&host);
+        let mut screen = SettingsScreen::preview();
         for page in SettingsPage::ALL {
             screen.page = page;
             let mut canvas = canvas();

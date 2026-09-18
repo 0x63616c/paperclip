@@ -23,7 +23,7 @@ use paper_sdk::chrome::MIN_TOUCH_TARGET;
 use paper_sdk::{
     Canvas, ContactId, DisplayMapping, Point, Pointer, PointerEvent, PointerPhase, SCREEN, Size,
 };
-use paper_settings::{PlaceholderHost, SettingsScreen};
+use paper_settings::SettingsScreen;
 use paper_sudoku::{PadKey, SudokuScreen};
 use paper_sudoku_rules::{Cell, Difficulty, Digit, Game as SudokuGame};
 
@@ -149,8 +149,7 @@ fn both_screens_render_at_the_target_panel_geometry() {
 
 #[test]
 fn the_settings_screen_renders_at_the_target_panel_geometry() {
-    let host = PlaceholderHost::new();
-    let screen = SettingsScreen::from_host(&host);
+    let screen = SettingsScreen::preview();
     let mut canvas = screen_canvas();
     paper_settings::render(&mut canvas, &screen);
 

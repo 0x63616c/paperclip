@@ -9,7 +9,7 @@ use paper_packages::inventory::{AppEntry, CatalogStatus, Inventory};
 #[cfg(feature = "desktop")]
 use paper_sdk::{Action, PointerEvent, PointerPhase};
 use paper_sdk::{Canvas, SCREEN};
-use paper_settings::{PageLayout, PlaceholderHost, SettingsLayout, SettingsScreen};
+use paper_settings::{PageLayout, SettingsLayout, SettingsScreen};
 use paper_sudoku::{SudokuLayout, SudokuScreen};
 use paper_sudoku_rules::{Cell, Difficulty, Game as SudokuGame};
 
@@ -155,10 +155,6 @@ pub(crate) struct Screens {
     chess: ChessScreen,
     chess_game: Game,
     settings: SettingsScreen,
-    // Only the preview window drives Settings interactively; the device build
-    // renders and presents, so it carries neither the host nor the handlers.
-    #[cfg(feature = "desktop")]
-    settings_host: PlaceholderHost,
     app_store: AppStoreScreen,
     sudoku: SudokuScreen,
     sudoku_game: SudokuGame,
@@ -202,8 +198,7 @@ impl Screens {
             status: format!("V{}", home_manifest.version()),
         };
 
-        let settings_host = PlaceholderHost::new();
-        let settings = SettingsScreen::from_host(&settings_host);
+        let settings = SettingsScreen::preview();
         let sudoku_manifest = parse_built_in("sudoku", SUDOKU_MANIFEST)?;
         let app_store = AppStoreScreen::new(preview_inventory(
             &chess_manifest,
@@ -218,8 +213,6 @@ impl Screens {
             chess: ChessScreen::new(),
             chess_game: Game::new(),
             settings,
-            #[cfg(feature = "desktop")]
-            settings_host,
             app_store,
             sudoku,
             sudoku_game,
@@ -344,13 +337,13 @@ impl Screens {
                     return;
                 };
                 // `SettingsScreen::press` is the real interaction logic, the
-                // same call `SettingsApp` makes: the preview only acts on what
-                // it asks for. Its error is dropped because this is fixture
-                // data — a failed placeholder transaction has nothing useful
-                // to tell a preview window.
-                let press = self
-                    .settings
-                    .press(&layout, &event, &mut self.settings_host);
+                // same call `SettingsApp` makes: the preview only navigates.
+                // Confirming a destructive action closes the dialog (real,
+                // interactive) but asks no host anything — a preview has no
+                // `AdminResponder` behind it, the same "the preview navigates;
+                // it does not install" the App Store preview settles for
+                // below.
+                let press = self.settings.press(&layout, &event);
                 if press.action == Action::ReturnToStock {
                     // There is no stock reMarkable behind a preview window, so
                     // the nearest honest answer is the shelf.
@@ -450,8 +443,8 @@ fn parse_built_in(app: &'static str, text: &str) -> Result<Manifest, CommandErro
 mod golden {
     use paper_device::FrameDigest;
     use paper_protocol::{ExitReason, PixelFormat, SurfaceDescriptor};
-    use paper_sdk::SCREEN;
-    use paper_settings::{PlaceholderHost, SettingsApp};
+    use paper_sdk::{Canvas, SCREEN};
+    use paper_settings::{SettingsApp, SettingsScreen};
 
     use super::{Screen, Screens};
     use crate::session::{DevApp, open_session_with};
@@ -565,32 +558,28 @@ mod golden {
     /// The frame `SettingsApp` draws at launch, taken from a real session:
     /// `paper_sdk::run`, a real socket, the app's own `draw`.
     ///
-    /// The table above freezes what `paper_settings::render` draws when the
-    /// preview calls it directly. That says nothing about what the *app*
-    /// shows when the platform starts it, which is what a Settings tile on
-    /// the shelf actually reaches — and until WWW-37 there was no app to
-    /// start. Asserting the two are the same frame is what keeps the reviewed
-    /// picture and the launched one from drifting apart; it is deliberately
-    /// not a second digest constant, because two constants drift and one
-    /// cannot.
-    ///
-    /// The Host is the fixture, not the store this machine happens to have:
-    /// a digest that changed with whatever is installed locally would assert
-    /// nothing. What a real session uses is `LiveHost` — see
-    /// `session::open_session`.
+    /// Before WWW-71, this compared the launched app's first frame against
+    /// the table above's frozen Settings entry: the Host it was built over
+    /// answered synchronously, so a fixture Host meant the very first frame
+    /// already showed real data. Over the protocol (WWW-71, ADR-0028) the
+    /// launch reads are necessarily still in flight when the first frame is
+    /// drawn — see the module doc on `paper_settings::app` — so the honest
+    /// first frame is the loading state, not the fixture `GOLDEN` freezes for
+    /// the preview's direct render. This asserts that honest state is what a
+    /// launched Settings tile actually shows, rather than something blank or
+    /// stale.
     #[test]
-    fn the_settings_app_launches_into_the_frame_the_settings_screen_is_frozen_at() {
-        let (_, frozen, ink) = GOLDEN
-            .into_iter()
-            .find(|(screen, _, _)| *screen == Screen::Settings)
-            .expect("the table freezes the Settings screen");
+    fn the_settings_app_launches_showing_the_loading_state_until_the_host_answers() {
+        let mut expected_canvas = Canvas::new(SCREEN).expect("a canvas");
+        paper_settings::render(&mut expected_canvas, &SettingsScreen::loading());
+        let expected = FrameDigest::of(&expected_canvas).expect("digests");
 
         let root = std::env::temp_dir().join(format!(
-            "paperctl-settings-app-golden-{}",
+            "paperctl-settings-app-loading-{}",
             std::process::id()
         ));
         let session = open_session_with(
-            DevApp::Settings(Box::new(SettingsApp::new(PlaceholderHost::new()))),
+            DevApp::Settings(Box::new(SettingsApp::new())),
             &root,
             SurfaceDescriptor::packed(SCREEN, PixelFormat::Argb8888),
         )
@@ -602,9 +591,8 @@ mod golden {
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(
-            (digest.to_hex().as_str(), digest.ink_per_mille()),
-            (frozen, ink),
-            "the launched Settings app drew {digest}, not the frozen screen"
+            digest, expected,
+            "the launched Settings app's first frame is not the loading state"
         );
     }
 

@@ -41,16 +41,17 @@ use paper_packages::{InstallPolicy, InstalledApp, Manifest, ManifestError};
 use paper_protocol::{
     AppId, AppMessage, AppPaths, Capability, Damage, DrawReason, DrawRequest, ExitReason, FrameId,
     Hello, HostMessage, LaunchReason, LifecycleEvent, PixelFormat, PointerEvent, Request, Saved,
-    SessionId, SurfaceDescriptor, codec,
+    SessionId, SurfaceDescriptor, SystemAnswer, SystemQueryKind, SystemValue, codec,
 };
 use paper_render_test_card::RenderTestCardApp;
 use paper_sdk::{
     App, Canvas, Context, Event, SCREEN, SaveError, Surface, SurfaceError, SurfaceProvider,
 };
-use paper_settings::{LiveHost, SettingsApp};
+use paper_settings::SettingsApp;
 use paper_sudoku::SudokuApp;
 use paper_sys::{NmcliNetwork, SystemPowerSource, SystemProcess, SystemWallClock};
 
+use crate::admin::AdminResponder;
 use crate::system::SystemResponder;
 
 /// The concrete responder every live session answers `SystemQuery`s with —
@@ -171,9 +172,17 @@ pub(crate) struct Session {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     damage: Arc<Mutex<Option<Damage>>>,
     app_thread: thread::JoinHandle<Result<paper_sdk::Outcome, paper_sdk::RuntimeError>>,
+    /// Who this session's app is, according to the `Hello` this loop itself
+    /// sent — never asserted by the app (§8's launch-time identity rule) —
+    /// and what [`AdminResponder::answer`] gates `SystemQueryKind::Admin`
+    /// queries against (WWW-71).
+    app_id: AppId,
     /// Answers this app's `SystemQuery`s and notices battery/network changes
     /// to push (WWW-50).
     system: LiveSystemResponder,
+    /// Answers this app's `SystemQueryKind::Admin` queries against a real
+    /// store, gated to `app_id` (WWW-71, ADR-0028).
+    admin: AdminResponder,
 }
 
 impl Session {
@@ -254,7 +263,19 @@ impl Session {
                 AppMessage::Frame(_) => return Ok(request),
                 AppMessage::Request(seen) => request = Some(seen),
                 AppMessage::SystemQuery(query) => {
-                    let answer = self.system.answer(query);
+                    let answer = match &query.kind {
+                        SystemQueryKind::Admin(admin_query) => {
+                            let result = self
+                                .admin
+                                .answer(admin_query.clone(), &self.app_id)
+                                .map(SystemValue::Admin);
+                            SystemAnswer {
+                                id: query.id,
+                                result,
+                            }
+                        }
+                        _ => self.system.answer(&query),
+                    };
                     codec::write_message(&mut self.host, &HostMessage::SystemAnswer(answer))?;
                 }
                 AppMessage::Diagnostic(diagnostic) => {
@@ -447,14 +468,14 @@ pub(crate) fn open_session(
             storage_root,
             surface,
         ),
-        // The real store, not the fixture the desktop preview draws: a
-        // Settings page that invented its numbers would be worse than one
-        // that reports an empty store, which is what a Mac with no
-        // `PAPERCLIP_ROOT` honestly has. See `paper_settings::LiveHost`.
+        // Settings asks this session for everything it shows — installed
+        // apps, storage, grants, catalog, platform, diagnostics — over the
+        // protocol now (WWW-71); it no longer opens a store of its own. See
+        // `crate::admin::AdminResponder`, which every session builds over
+        // the same real store a Mac with no `PAPERCLIP_ROOT` honestly reports
+        // as empty rather than inventing numbers for.
         "settings" => open_session_with(
-            DevApp::Settings(Box::new(SettingsApp::new(LiveHost::new(
-                Layout::from_environment(),
-            )))),
+            DevApp::Settings(Box::new(SettingsApp::new())),
             storage_root,
             surface,
         ),
@@ -609,7 +630,9 @@ fn open_session_common(
         shared,
         damage: damage_slot,
         app_thread,
+        app_id: manifest.id().clone(),
         system: LiveSystemResponder::new(),
+        admin: AdminResponder::new(Layout::from_environment()),
     };
     session.request_frame(DrawReason::First)?;
     Ok(session)
@@ -696,7 +719,7 @@ mod tests {
     use paper_protocol::{DrawReason, FrameId, PixelFormat, SurfaceDescriptor};
     use paper_sdk::{Canvas, SCREEN};
 
-    use super::{LiveSystemResponder, READ_TIMEOUT, Session};
+    use super::{AdminResponder, LiveSystemResponder, READ_TIMEOUT, Session};
 
     /// A stand-in for an app whose event/draw loop never returns — the fault
     /// `paper-fault-app`'s `hang` mode injects. Nothing writes to `app_side`
@@ -717,7 +740,9 @@ mod tests {
             shared: Arc::new(Mutex::new(Canvas::new(SCREEN).expect("allocates"))),
             damage: Arc::new(Mutex::new(None)),
             app_thread,
+            app_id: "dev.calum.test".parse().expect("a valid id"),
             system: LiveSystemResponder::new(),
+            admin: AdminResponder::new(paper_packages::store::Layout::new(std::env::temp_dir())),
         }
     }
 

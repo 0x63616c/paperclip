@@ -6,22 +6,20 @@
 //! boundary. This is `bin/settings`, the file `apps/settings/paper.toml`
 //! names as the entrypoint.
 //!
-//! [`LiveHost`] over [`Layout::from_environment`] is the same real store
-//! `paperctl run`'s own "settings" session opens
-//! (`tools/paperctl/src/session.rs`), not a fixture: unlike Home and the App
-//! Store, Settings needs no manifest of its own or anyone else's to start —
-//! every read and write goes through the `Layout` it is handed.
+//! Unlike before WWW-71, this process opens no store of its own: every read
+//! and write [`SettingsApp`] needs travels as a `SystemQuery` to whichever
+//! process is running this connection (`tools/paperctl/src/admin.rs`'s
+//! `AdminResponder` today) — see ADR-0028.
 
 use std::io;
 use std::process::ExitCode;
 
-use paper_packages::store::Layout;
 use paper_sdk::LocalSurfaces;
-use paper_settings::{LiveHost, SettingsApp};
+use paper_settings::SettingsApp;
 
 fn main() -> ExitCode {
     let outcome = paper_sdk::run(
-        SettingsApp::new(LiveHost::new(Layout::from_environment())),
+        SettingsApp::new(),
         io::stdin(),
         io::stdout(),
         LocalSurfaces::new(),

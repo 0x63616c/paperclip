@@ -1,9 +1,9 @@
 //! The destructive-action confirmation overlay.
 //!
 //! Uninstall, rollback and revoke are Host transactions
-//! ([`SettingsHost`](crate::host::SettingsHost)) that cannot be undone once
-//! asked for. Every one of them builds one of these before calling the Host
-//! at all, and states plainly what will be lost — the WWW-22 requirement that
+//! ([`AdminQuery`](paper_sdk::AdminQuery)) that cannot be undone once asked
+//! for. Every one of them builds one of these before the confirmation is even
+//! shown, and states plainly what will be lost — the WWW-22 requirement that
 //! "a destructive action confirms first and says what will be lost."
 
 use paper_sdk::chrome::{self, MARGIN, MIN_TOUCH_TARGET};

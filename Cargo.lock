@@ -1780,10 +1780,8 @@ dependencies = [
 name = "paper-settings"
 version = "0.1.0"
 dependencies = [
- "paper-packages",
  "paper-protocol",
  "paper-sdk",
- "tempfile",
 ]
 
 [[package]]

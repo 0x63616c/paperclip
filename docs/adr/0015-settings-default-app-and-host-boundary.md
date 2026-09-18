@@ -1,6 +1,14 @@
 # ADR-0015 — Settings is a default app, and its Host boundary
 
-**Status:** accepted (Stage 6/7, WWW-22).
+**Status:** accepted (Stage 6/7, WWW-22). The Host boundary this ADR states
+is unchanged; the implementation below is not — `paper_settings::host`
+(`SettingsHost`, `LiveHost`, `PlaceholderHost`) no longer exists. WWW-71
+(ADR-0028) moved the boundary onto the wire itself: every read and write
+named below is now an `AdminQuery`/`AdminValue`, answered host-side by
+`tools/paperctl/src/admin.rs`'s `AdminResponder`, and `apps/settings` no
+longer links `paper-packages` at all. This section is kept as the historical
+record of why the boundary exists and what it originally looked like; see
+ADR-0028 for the current shape.
 
 ## Context
 

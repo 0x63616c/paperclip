@@ -13,12 +13,10 @@ name = "settings"
 path = "src/main.rs"
 
 [dependencies]
-paper-packages = { workspace = true }
 paper-sdk = { workspace = true }
 
 [dev-dependencies]
 paper-protocol = { workspace = true }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

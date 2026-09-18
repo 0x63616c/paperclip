@@ -41,6 +41,7 @@
 //! is refused explicitly at both package time and launch time rather than
 //! being negotiated down.
 
+pub mod admin;
 pub mod capability;
 pub mod codec;
 pub mod geometry;
@@ -54,6 +55,10 @@ pub mod session;
 pub mod system;
 pub mod version;
 
+pub use admin::{
+    AdminError, AdminQuery, AdminValue, CatalogStatus, DiagnosticEntry, GrantSummary,
+    InstalledAppSummary, StorageBucket, StorageUsage,
+};
 pub use capability::Capability;
 pub use codec::CodecError;
 pub use geometry::{Point, Rect, Size};

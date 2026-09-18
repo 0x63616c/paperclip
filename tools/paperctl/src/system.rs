@@ -5,9 +5,9 @@
 //! Lives here, not in `platform/host`, because [`Session`](crate::session::Session)
 //! is the one real process this workspace runs apps under today — `platform/host`
 //! is the systemd/cgroup supervisor crate and never touches the wire protocol.
-//! The Settings admin surface (`SettingsHost`'s nine methods) is deliberately
-//! not part of this responder; see the ADR for why that stays out of scope
-//! here.
+//! The Settings admin surface (`SettingsHost`'s nine methods) is a separate,
+//! gated responder — [`crate::admin::AdminResponder`] — rather than part of
+//! this one; see that module and the ADR for why.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -22,18 +22,36 @@ use paper_sys::{
     SystemProcess, SystemWallClock, WallClock,
 };
 
+/// The platform version facts both the no-grant `Platform` query and
+/// [`crate::admin::AdminQuery::PlatformInfo`] answer with — one computation,
+/// not two copies that can drift.
+///
+/// Neither is verified against real device evidence yet: firmware and the
+/// active release are honest placeholders until a device session confirms
+/// them, the same gap `platform/protocol/src/system.rs`'s own `PlatformFact`
+/// doc records.
+pub(crate) fn platform_fact() -> PlatformFact {
+    PlatformFact {
+        paperclip_version: env!("CARGO_PKG_VERSION").to_owned(),
+        firmware: "NOT VERIFIED".to_owned(),
+        active_release: "NOT VERIFIED".to_owned(),
+    }
+}
+
 /// A rolling one-second budget of queries.
 ///
 /// Per session rather than global: one misbehaving app must not cost every
-/// other running app its own battery reading.
+/// other running app its own battery reading. [`crate::admin::AdminResponder`]
+/// uses this same type for its own, separate budget — see its module doc for
+/// why that is a second instance rather than a shared counter.
 #[derive(Debug, Default)]
-struct RateWindow {
+pub(crate) struct RateWindow {
     sent: VecDeque<Instant>,
 }
 
 impl RateWindow {
     /// Whether one more query is allowed right now, recording it if so.
-    fn allow(&mut self, now: Instant) -> bool {
+    pub(crate) fn allow(&mut self, now: Instant) -> bool {
         while let Some(&oldest) = self.sent.front() {
             if now.duration_since(oldest) >= Duration::from_secs(1) {
                 self.sent.pop_front();
@@ -89,7 +107,7 @@ impl<P: PowerSource, N: Network, W: WallClock> SystemResponder<P, N, W> {
     }
 
     /// Answers one query, denying it if this session has asked too often.
-    pub(crate) fn answer(&mut self, query: SystemQuery) -> SystemAnswer {
+    pub(crate) fn answer(&mut self, query: &SystemQuery) -> SystemAnswer {
         if !self.window.allow(Instant::now()) {
             return SystemAnswer {
                 id: query.id,
@@ -98,11 +116,11 @@ impl<P: PowerSource, N: Network, W: WallClock> SystemResponder<P, N, W> {
         }
         SystemAnswer {
             id: query.id,
-            result: self.value(query.kind),
+            result: self.value(&query.kind),
         }
     }
 
-    fn value(&mut self, kind: SystemQueryKind) -> Result<SystemValue, SystemDenial> {
+    fn value(&mut self, kind: &SystemQueryKind) -> Result<SystemValue, SystemDenial> {
         match kind {
             SystemQueryKind::Time => Ok(SystemValue::Time(TimeFact {
                 unix_millis: self.clock.now_unix_millis(),
@@ -119,16 +137,11 @@ impl<P: PowerSource, N: Network, W: WallClock> SystemResponder<P, N, W> {
                 self.last_network = Some(fact.clone());
                 Ok(SystemValue::Network(fact))
             }
-            SystemQueryKind::Platform => Ok(SystemValue::Platform(PlatformFact {
-                paperclip_version: env!("CARGO_PKG_VERSION").to_owned(),
-                // Neither is verified against real device evidence yet — see
-                // `paper_settings::host::LiveHost::platform_info`, which
-                // reports the same honest placeholder rather than a guess.
-                firmware: "NOT VERIFIED".to_owned(),
-                active_release: "NOT VERIFIED".to_owned(),
-            })),
+            SystemQueryKind::Platform => Ok(SystemValue::Platform(platform_fact())),
             // `SystemQueryKind` is `#[non_exhaustive]`: a future minor
-            // protocol bump can add a kind this build predates.
+            // protocol bump can add a kind this build predates. `Admin` is
+            // never reached here — `Session::request_frame` routes it to
+            // `crate::admin::AdminResponder` before this method is called.
             _ => Err(SystemDenial::new(SystemDenialReason::Unsupported)),
         }
     }
@@ -195,7 +208,7 @@ mod tests {
     #[test]
     fn a_backend_with_nothing_to_report_is_a_named_denial_not_a_guess() {
         let mut responder = responder();
-        let answer = responder.answer(SystemQuery {
+        let answer = responder.answer(&SystemQuery {
             id: QueryId::new(1),
             kind: SystemQueryKind::Battery,
         });
@@ -212,7 +225,7 @@ mod tests {
             percent: 71,
             direction: ChargeDirection::Discharging,
         });
-        let answer = responder.answer(SystemQuery {
+        let answer = responder.answer(&SystemQuery {
             id: QueryId::new(1),
             kind: SystemQueryKind::Battery,
         });
@@ -228,7 +241,7 @@ mod tests {
     #[test]
     fn time_reads_the_injected_clock() {
         let mut responder = responder();
-        let answer = responder.answer(SystemQuery {
+        let answer = responder.answer(&SystemQuery {
             id: QueryId::new(1),
             kind: SystemQueryKind::Time,
         });
@@ -248,13 +261,13 @@ mod tests {
             direction: ChargeDirection::Full,
         });
         for i in 0..MAX_SYSTEM_QUERIES_PER_SECOND {
-            let answer = responder.answer(SystemQuery {
+            let answer = responder.answer(&SystemQuery {
                 id: QueryId::new(u64::from(i)),
                 kind: SystemQueryKind::Battery,
             });
             assert!(answer.result.is_ok(), "query {i} should be within budget");
         }
-        let denied = responder.answer(SystemQuery {
+        let denied = responder.answer(&SystemQuery {
             id: QueryId::new(999),
             kind: SystemQueryKind::Battery,
         });
