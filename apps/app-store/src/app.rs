@@ -545,6 +545,30 @@ mod tests {
         }
     }
 
+    /// Draws until the operation in flight settles — `Damage::Full`, which
+    /// only `Completion::Done` produces — rather than asserting on whatever
+    /// state the very next frame happens to catch.
+    ///
+    /// `Request::Install` hands the download to its own `std::thread::spawn`
+    /// (not `Context::spawn`, `dispatch`'s own doc explains why), so nothing
+    /// here blocks until that thread's `Completion::Done` reaches the event
+    /// loop; a draw asked for right after the tap can race it. Same pattern
+    /// as `apps/app-store/tests/app.rs`'s `wait_for_settle`, applied to a
+    /// `FailingSource` whose `install` returns before the thread that runs it
+    /// has necessarily been scheduled.
+    fn wait_for_settle(host_reader: &mut UnixStream, host_writer: &mut UnixStream) -> Damage {
+        let mut frame = 2;
+        loop {
+            let damage = draw(host_reader, host_writer, frame);
+            if damage == Damage::Full {
+                return damage;
+            }
+            assert!(frame < 50, "the operation never finished");
+            frame += 1;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn pointer_up(at: paper_protocol::Point) -> HostMessage {
         HostMessage::Pointer(PointerEvent::new(
             at,
@@ -669,8 +693,14 @@ mod tests {
         send(&mut host_reader, &mut host_writer, &pointer_up(install_at));
 
         // No panic reaching here is most of the assertion; the rest is that
-        // the session is still alive and answering normally afterwards.
-        assert_eq!(draw(&mut host_reader, &mut host_writer, 2), Damage::Full);
+        // the session is still alive and answering normally afterwards. The
+        // failure runs on its own thread (`dispatch`'s doc), so the draw
+        // that observes it has to wait for it to settle rather than assert
+        // on whichever frame it happens to catch (WWW-64).
+        assert_eq!(
+            wait_for_settle(&mut host_reader, &mut host_writer),
+            Damage::Full
+        );
 
         finish_session(host_reader, host_writer, handle);
     }
