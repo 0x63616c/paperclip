@@ -36,6 +36,26 @@ outside `/home/root/paperclip`.
 Copy the public key into `/home/root/paperclip/keys/` before the first upgrade
 — setup says so when it is missing.
 
+## The first upgrade on a tablet
+
+Nothing to diff against yet: `paperctl upgrade status` reports `current
+none`, because there is no fallback release. `tools/device-acceptance/run.sh`
+asserts `--from` against that same output, so a first-ever install passes
+`--from none` — the literal string, matching the literal `none` the status
+line prints. No bootstrap step beyond `setup` above is needed; `upgrade run`
+does not care whether the release it is replacing is a real version or
+nothing.
+
+Before spending the tablet's start budget on a real attempt, run the same
+script with `--check-only --from none` (plus `--device`, if not
+auto-discovered). It evaluates the four preconditions — reachable, start
+budget, display free, `--from` matches — and prints a verdict for each
+without touching the tablet: no build, no upgrade, no `paperctl stock`. See
+`tools/device-acceptance/run.sh`'s own usage comment for the full flag.
+
+What has to be built and signed on the Mac before a first install, and what
+still has to reach the tablet by hand: `docs/device/www-69-preflight.md`.
+
 ## What a release is
 
 One version, one signed manifest, four binaries:

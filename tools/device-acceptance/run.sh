@@ -30,12 +30,25 @@
 #
 # `--from` is asserted, not assumed: the run refuses to start unless the
 # tablet is already on exactly that version, because every later assertion is
-# a diff against a known starting point.
+# a diff against a known starting point. On a tablet nothing has ever been
+# installed on, `paperctl upgrade status` reports `current none` (there is no
+# fallback release to diff against yet) — pass `--from none` literally in
+# that case; the same equality check applies without any other change.
 #
 # Idempotent: every exit path — a precondition refusal, a step failure, or a
 # clean finish — restores stock and reports `paperctl upgrade status`. Running
 # it again after a failure is always safe; running it again after a pass
 # requires a fresh `--to`, because §12 published versions are immutable.
+#
+# `--check-only` evaluates the four preconditions below — reachable, start
+# budget, display free, `--from` matches — and prints a verdict for each,
+# then exits. It touches nothing: no workdir, no build, no `paperctl stock`,
+# no upgrade. Only `--from` (and optionally `--device`) are needed with it;
+# `--key`/`--trust`/`--to`/`--fail-to` are for the real run and are not
+# required. Today the only way to learn whether a session can proceed is to
+# start one — `--check-only` is what to run instead (WWW-69).
+#
+#   tools/device-acceptance/run.sh --check-only --from 0.3.1 [--device remarkable-wifi]
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -46,6 +59,7 @@ from=
 to=
 fail_to=
 device=
+check_only=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -56,11 +70,19 @@ while [ $# -gt 0 ]; do
         --fail-to) fail_to=$2; shift 2 ;;
         --device) device=$2; shift 2 ;;
         --workdir) workdir=$2; shift 2 ;;
+        --check-only) check_only=1; shift ;;
         *) echo "run: unknown argument $1" >&2; exit 2 ;;
     esac
 done
 
-for name_value in "key:$key" "trust:$trust" "from:$from" "to:$to" "fail-to:$fail_to"; do
+# `--check-only` only ever reads the tablet, so it needs none of the
+# credentials or version numbers the real run does.
+if [ "$check_only" -eq 1 ]; then
+    required="from:$from"
+else
+    required="key:$key trust:$trust from:$from to:$to fail-to:$fail_to"
+fi
+for name_value in $required; do
     name=${name_value%%:*}
     value=${name_value#*:}
     [ -n "$value" ] || { echo "run: --$name is required" >&2; exit 2; }
@@ -72,28 +94,48 @@ log() { printf '%s  %s\n' "$(date -u +%H:%M:%S)" "$1"; }
 fail() { log "REFUSED  $1"; exit 1; }
 
 # --- preconditions -----------------------------------------------------
+#
+# Four checks, in the order a real run refuses on: reachable, start budget,
+# display free, `--from` matches. In a real run, `note` below is `fail` —
+# stop at the first refusal, exactly as before. Under `--check-only`, `note`
+# instead records the failure and keeps going, so all four get a verdict in
+# one pass instead of one guess per session.
 
-resolve_host() {
-    if [ -n "$device" ]; then
-        printf '%s' "$device"
-        return
+ok=1
+note() {
+    if [ "$check_only" -eq 1 ]; then
+        ok=0
+        log "FAIL     $1"
+    else
+        fail "$1"
     fi
-    $paperctl devices --output json | python3 -c '
+}
+
+verdict_and_exit() {
+    if [ "$ok" -eq 1 ]; then
+        log "READY    all four preconditions pass"
+        exit 0
+    fi
+    log "NOT READY  see FAIL lines above"
+    exit 1
+}
+
+if [ -n "$device" ]; then
+    ssh_host=$device
+else
+    ssh_host=$($paperctl devices --output json | python3 -c '
 import json, sys
 found = json.load(sys.stdin)
 reachable = [d for d in found if d.get("reachable")]
 if not reachable:
     sys.exit(1)
 print(reachable[0]["host"])
-' || fail "no reachable tablet; run \`paperctl devices\` to see what auto-discovery found"
-}
-
-ssh_host=$(resolve_host)
+' 2>/dev/null) || ssh_host=
+fi
 # Every later `paperctl` call passes `--device "$ssh_host"` explicitly,
 # pinned to this one resolution: re-resolving per call would let a second
 # device that becomes reachable mid-run silently take over from the one every
 # earlier assertion was made against.
-log "device   $ssh_host"
 
 ssh_raw() {
     ssh -o BatchMode=yes -o ConnectTimeout=5 "$ssh_host" "$@"
@@ -102,7 +144,21 @@ ssh_raw() {
 # Precondition 1: the tablet is reachable at all. USB de-enumerates in deep
 # sleep and the interface disappears from the host entirely (WWW-41) — this
 # is the check that tells that apart from a tablet that is merely asleep.
-ssh_raw true 2>/dev/null || fail "cannot reach $ssh_host over SSH; if this is USB, wake the tablet first"
+if [ -z "$ssh_host" ]; then
+    note "reachable      no reachable tablet; run \`paperctl devices\` to see what auto-discovery found, or pass --device"
+    log "SKIP     start-budget   tablet unreachable"
+    log "SKIP     display-free   tablet unreachable"
+    log "SKIP     from-matches   tablet unreachable"
+    verdict_and_exit
+elif ssh_raw true 2>/dev/null; then
+    log "PASS     reachable      $ssh_host"
+else
+    note "reachable      cannot reach $ssh_host over SSH; if this is USB, wake the tablet first"
+    log "SKIP     start-budget   tablet unreachable"
+    log "SKIP     display-free   tablet unreachable"
+    log "SKIP     from-matches   tablet unreachable"
+    verdict_and_exit
+fi
 
 # Precondition 2: paperctl's own start-budget ledger. `systemctl reset-failed`
 # does not clear it; only time does, so refusing here is the only safe move —
@@ -113,23 +169,40 @@ recent_starts=$(ssh_raw '
     f=/tmp/paperclip-xochitl-starts
     [ -f "$f" ] || { echo 0; exit; }
     awk -v now="$now" "now - \$1 < 600" "$f" | wc -l
-')
-[ "$recent_starts" -lt 3 ] || fail "xochitl start budget: $recent_starts starts in the last 600s (limit 3); wait for the window to clear"
-log "start budget  $recent_starts/3 in the last 600s"
+' 2>/dev/null) || recent_starts=
+if [ -n "$recent_starts" ] && [ "$recent_starts" -lt 3 ] 2>/dev/null; then
+    log "PASS     start-budget   $recent_starts/3 in the last 600s"
+else
+    note "start-budget   xochitl start budget: ${recent_starts:-unknown} starts in the last 600s (limit 3); wait for the window to clear"
+fi
 
 # Precondition 3: nothing already holds the display. A stray `paperctl`
 # process from a prior session that never released `/dev/dri/card0` would
 # make this run's own takeover ambiguous about who is holding what.
 holder=$(ssh_raw 'fuser /dev/dri/card0 2>/dev/null' || true)
-[ -z "$holder" ] || fail "/dev/dri/card0 is held by pid(s) $holder; clear that session before running this"
-log "display        free"
+if [ -z "$holder" ]; then
+    log "PASS     display-free   free"
+else
+    note "display-free   /dev/dri/card0 is held by pid(s) $holder; clear that session before running this"
+fi
 
 # Precondition 4: the tablet is where this run's assertions assume it is.
 # Every step below diffs against `--from`; starting from anywhere else would
-# make a pass meaningless and a failure ambiguous.
+# make a pass meaningless and a failure ambiguous. On a tablet nothing has
+# ever been installed on, `current` reads literally `none` — `--from none`
+# matches that the same way any other value matches a real version.
 current=$($paperctl upgrade status --device "$ssh_host" | awk '/^current/{print $2}')
-[ "$current" = "$from" ] || fail "tablet is on $current, not --from $from; update --from or roll the tablet back first"
-log "current        $current"
+if [ "$current" = "$from" ]; then
+    log "PASS     from-matches   current $current"
+elif [ "$current" = "none" ]; then
+    note "from-matches   tablet has nothing installed yet (current none); pass --from none for a first-ever install"
+else
+    note "from-matches   tablet is on $current, not --from $from; update --from or roll the tablet back first"
+fi
+
+if [ "$check_only" -eq 1 ]; then
+    verdict_and_exit
+fi
 
 mkdir -p "$workdir"
 trap 'log "restoring stock"; $paperctl stock --device "$ssh_host" >/dev/null 2>&1 || true; log "final status"; $paperctl upgrade status --device "$ssh_host" || true' EXIT
