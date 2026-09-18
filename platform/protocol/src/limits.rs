@@ -86,3 +86,14 @@ pub const MAX_SYSTEM_QUERIES_PER_SECOND: u32 = 10;
 /// this does not send [`PrepareToExit`](crate::LifecycleEvent::PrepareToExit)
 /// at all — it kills the process, and the app finds out by being restarted.
 pub const MIN_EXIT_DEADLINE: Duration = Duration::from_millis(250);
+
+/// Largest total size, in bytes, of a client's
+/// [`ShmPoolDescriptor`](crate::ShmPoolDescriptor) — both buffers together.
+///
+/// A full panel frame is 1620 x 2160 ARGB8888, ~14 MiB; two of those is
+/// ~28 MiB. Set with headroom above that rather than derived from it, so a
+/// client asking for a pool this large or larger is rejected before the
+/// compositor attempts the `mmap` — the size travels over the wire before any
+/// memory is touched, so a hostile client cannot use it to force an
+/// oversized allocation.
+pub const MAX_POOL_BYTES: u64 = 64 * 1024 * 1024;

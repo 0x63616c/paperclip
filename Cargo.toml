@@ -8,6 +8,7 @@
 resolver = "3"
 members = [
     "platform/protocol",
+    "platform/compositor",
     "platform/packages",
     "platform/sdk",
     "platform/device",
@@ -44,6 +45,7 @@ repository = "https://github.com/0x63616c/paperclip"
 
 [workspace.dependencies]
 paper-protocol = { path = "platform/protocol" }
+paper-compositor = { path = "platform/compositor" }
 # `default-features = false` here: the default feature is `publishing`, which
 # is the half that holds a signing key. A consumer that needs it says so
 # (`paperctl`), and the device build cannot pick it up by accident (§12).

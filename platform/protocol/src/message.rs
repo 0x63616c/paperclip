@@ -210,6 +210,79 @@ impl SurfaceDescriptor {
     }
 }
 
+/// One of a client's two shared-memory buffers (WWW-52, WWW-77).
+///
+/// Two, not one and not a pool of arbitrary size: a client draws its next
+/// frame into the slot the host is not currently reading, so drawing and
+/// presenting never contend for the same bytes. Two is also the minimum that
+/// makes that true — one buffer would put drawing and presenting back in the
+/// same memory, and a third buys no further overlap once the compositor
+/// serialises presents (WWW-52's tinywl precedent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BufferSlot {
+    /// The first buffer.
+    A,
+    /// The second buffer.
+    B,
+}
+
+impl BufferSlot {
+    /// The other slot.
+    pub const fn other(self) -> Self {
+        match self {
+            Self::A => Self::B,
+            Self::B => Self::A,
+        }
+    }
+}
+
+/// The shape of a client's shared-memory pool: two [`BufferSlot`]s, laid out
+/// back to back, each the shape one [`SurfaceDescriptor`] already describes.
+///
+/// This is additive, not a replacement for [`SurfaceDescriptor`]: `Hello.surface`
+/// keeps describing the single fd-mapped area WWW-4's supervisor hands an app
+/// today (ADR-0022) — nothing here changes that message. This is the shape a
+/// client's pool takes once it is a compositor client instead (WWW-81,
+/// deliberately staged behind this ticket), described up front so
+/// `platform/compositor`'s buffer lifecycle has something concrete to
+/// validate against now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ShmPoolDescriptor {
+    /// The layout shared by both slots.
+    pub buffer: SurfaceDescriptor,
+}
+
+impl ShmPoolDescriptor {
+    /// Bytes one slot occupies, or `None` if `buffer` does not describe a
+    /// usable surface (see [`SurfaceDescriptor::bytes`]).
+    pub fn slot_bytes(self) -> Option<u64> {
+        self.buffer.bytes()
+    }
+
+    /// Total bytes the pool occupies: both slots, or `None` on the same terms
+    /// as [`Self::slot_bytes`], or if doubling it would overflow.
+    pub fn pool_bytes(self) -> Option<u64> {
+        self.slot_bytes()?.checked_mul(2)
+    }
+
+    /// Byte offset of `slot` within the pool, or `None` on the same terms as
+    /// [`Self::slot_bytes`].
+    ///
+    /// `A` is always first. There is no client-chosen offset: unlike a raw
+    /// Wayland `wl_shm_pool`, this pool has exactly two slots and the
+    /// compositor lays them out, which is what makes "offset outside the
+    /// pool" a case [`Self::pool_bytes`] rules out by construction rather
+    /// than one a runtime check has to catch per message.
+    pub fn slot_offset(self, slot: BufferSlot) -> Option<u64> {
+        let slot_bytes = self.slot_bytes()?;
+        match slot {
+            BufferSlot::A => Some(0),
+            BufferSlot::B => Some(slot_bytes),
+        }
+    }
+}
+
 /// What an app may do with a shared directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -538,8 +611,8 @@ pub enum AppMessage {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppMessage, Damage, Diagnostic, DiagnosticLevel, FrameDone, FrameId, HostMessage,
-        PixelFormat, SessionId, SurfaceDescriptor,
+        AppMessage, BufferSlot, Damage, Diagnostic, DiagnosticLevel, FrameDone, FrameId,
+        HostMessage, PixelFormat, SessionId, ShmPoolDescriptor, SurfaceDescriptor,
     };
     use crate::geometry::Size;
     use crate::id::AppId;
@@ -605,6 +678,39 @@ mod tests {
         assert!(!diagnostic.message.is_empty());
         // Still valid UTF-8, i.e. it did not cut a two-byte character in half.
         assert!(diagnostic.message.chars().all(|c| c == '\u{e9}'));
+    }
+
+    /// `A` is always first, and doubling one slot's size is the whole pool —
+    /// the layout `platform/compositor`'s buffer lifecycle validates against.
+    #[test]
+    fn a_pool_lays_out_two_slots_back_to_back() {
+        let pool = ShmPoolDescriptor {
+            buffer: SurfaceDescriptor::packed(Size::new(1620, 2160), PixelFormat::Argb8888),
+        };
+        let slot_bytes = pool.slot_bytes().unwrap();
+        assert_eq!(slot_bytes, 1620 * 4 * 2160);
+        assert_eq!(pool.pool_bytes(), Some(slot_bytes * 2));
+        assert_eq!(pool.slot_offset(BufferSlot::A), Some(0));
+        assert_eq!(pool.slot_offset(BufferSlot::B), Some(slot_bytes));
+        assert_eq!(BufferSlot::A.other(), BufferSlot::B);
+        assert_eq!(BufferSlot::B.other(), BufferSlot::A);
+    }
+
+    /// An impossible per-slot surface (see
+    /// `an_impossible_surface_has_no_size`) has no pool shape either, rather
+    /// than one computed from nonsense.
+    #[test]
+    fn a_pool_over_an_impossible_surface_has_no_size() {
+        let pool = ShmPoolDescriptor {
+            buffer: SurfaceDescriptor {
+                extent: Size::new(100, 100),
+                stride_bytes: 399,
+                format: PixelFormat::Argb8888,
+            },
+        };
+        assert_eq!(pool.slot_bytes(), None);
+        assert_eq!(pool.pool_bytes(), None);
+        assert_eq!(pool.slot_offset(BufferSlot::A), None);
     }
 
     /// The identity on a log line comes from the host's own record, not from

@@ -39,3 +39,4 @@ device survey and several of these are bets.
 | [0030](0030-signing-off-the-build-machine.md) | Signing off the build machine |
 | [0031](0031-layout-as-a-value-and-one-damage-accumulator.md) | Layout as a value, and one damage accumulator |
 | [0032](0032-refreshing-the-recovery-bootstrap.md) | Refreshing the recovery bootstrap: when it runs, how staleness is surfaced, and closing a no-live-binary window |
+| [0033](0033-compositor-core-buffer-lifecycle.md) | The compositor core: pool descriptor, buffer lifecycle, and what stays out of this stage |
