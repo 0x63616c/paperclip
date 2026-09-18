@@ -22,6 +22,9 @@ const BUTTON_WIDTH: f32 = 248.0;
 const BUTTON_HEIGHT: f32 = 128.0;
 /// Height of the banner shown above the list, whatever it says.
 const BANNER_HEIGHT: f32 = 96.0;
+/// Height of the card shown in place of the list when there is nothing to
+/// show — nothing installed, and the catalog offers nothing either.
+const EMPTY_CARD_HEIGHT: f32 = 320.0;
 
 /// Where the list view put everything interactive.
 #[derive(Debug, Clone, PartialEq)]
@@ -196,10 +199,9 @@ fn draw_list(canvas: &mut Canvas, area: Rect, screen: &AppStoreScreen, layout: &
     }
 
     if screen.rows().is_empty() {
-        canvas.draw_text(
-            "NOTHING INSTALLED, AND THE CATALOG OFFERS NOTHING.",
-            Point::new(area.x, cursor + 8.0),
-            TextStyle::new(30.0, palette::INK_SOFT),
+        draw_empty_card(
+            canvas,
+            Rect::new(area.x, cursor, area.width, EMPTY_CARD_HEIGHT),
         );
     }
 
@@ -249,6 +251,33 @@ fn draw_row(canvas: &mut Canvas, screen: &AppStoreScreen, entry: &AppEntry, layo
     if let (Some(label), Some(rect)) = (screen.primary_label(&entry.app), layout.action) {
         chrome::draw_action(canvas, rect, label, entry.state == AppState::Failing);
     }
+}
+
+/// Draws the placeholder shown in place of the list when there is nothing to
+/// show, inside `body`.
+///
+/// A filled, bordered card rather than bare text: a screen with nothing
+/// installed and nothing offered is otherwise almost nothing but background
+/// (a status bar and an outlined refresh button), and a first frame that
+/// thin is indistinguishable, to `FrameDigest::looks_drawn`
+/// (`platform/device/src/hold.rs`), from one that never drew at all —
+/// `paperctl run` refused to present exactly that frame on real hardware.
+fn draw_empty_card(canvas: &mut Canvas, body: Rect) {
+    canvas.fill_round_rect(body, 20.0, palette::TILE);
+    canvas.stroke_round_rect(body, 20.0, palette::HAIRLINE, 2.0);
+
+    canvas.draw_text(
+        "NOTHING INSTALLED",
+        Point::new(body.x + 32.0, body.y + 40.0),
+        TextStyle::new(38.0, palette::INK)
+            .with_weight(0.12)
+            .with_tracking(0.06),
+    );
+    canvas.draw_text(
+        "THE CATALOG OFFERS NOTHING TO INSTALL RIGHT NOW.",
+        Point::new(body.x + 32.0, body.y + 100.0),
+        TextStyle::new(26.0, palette::INK_SOFT).with_tracking(0.04),
+    );
 }
 
 /// Where the detail view's back, primary and rollback actions land, inside
@@ -695,6 +724,26 @@ mod tests {
         assert!(
             canvas.ink_coverage() > 0.0,
             "an empty store must still draw its chrome"
+        );
+    }
+
+    /// `platform/device/src/hold.rs`'s `FrameDigest::looks_drawn` refuses to
+    /// present a first frame under 1% ink, to catch a session that never
+    /// really drew anything. An empty store used to clear that bar with
+    /// nothing but thin text strokes and an outlined refresh button — enough
+    /// for [`something_is_actually_drawn`] above, not enough for
+    /// `looks_drawn`, and `paperctl run app-store` refused to present it on
+    /// real hardware as a result. The empty-state card exists to clear this
+    /// with real margin.
+    #[test]
+    fn an_empty_store_clears_the_looks_drawn_threshold() {
+        let mut canvas = Canvas::new(SCREEN).expect("a canvas");
+        render(&mut canvas, &screen());
+        assert!(
+            canvas.ink_coverage() >= 0.01,
+            "an empty store's first frame scored {:.4} ink coverage, under the \
+             1% `FrameDigest::looks_drawn` treats as a real screen",
+            canvas.ink_coverage()
         );
     }
 }
