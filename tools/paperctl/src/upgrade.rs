@@ -149,11 +149,10 @@ pub(crate) struct RunArgs {
     root: RootArgs,
 }
 
-impl RunArgs {
-    /// The argv a remote `paperctl upgrade run` on the tablet should be
-    /// given — the bundle and trust paths forward verbatim; see the module
-    /// doc on why nothing is staged across the link.
-    #[cfg(not(target_os = "linux"))]
+#[cfg(not(target_os = "linux"))]
+impl crate::transport::dispatch::RemoteCommand for RunArgs {
+    /// The bundle and trust paths forward verbatim; see the module doc on
+    /// why nothing is staged across the link.
     fn remote_argv(&self) -> Vec<String> {
         let mut argv = vec![
             "upgrade".to_owned(),
@@ -169,6 +168,10 @@ impl RunArgs {
         argv.push("--root".to_owned());
         argv.push(self.root.root.display().to_string());
         argv
+    }
+
+    fn shape(&self) -> crate::transport::dispatch::RemoteShape {
+        crate::transport::dispatch::RemoteShape::Blocking
     }
 }
 
@@ -192,10 +195,8 @@ pub(crate) struct RollbackArgs {
     root: RootArgs,
 }
 
-impl RollbackArgs {
-    /// The argv a remote `paperctl upgrade rollback` on the tablet should be
-    /// given.
-    #[cfg(not(target_os = "linux"))]
+#[cfg(not(target_os = "linux"))]
+impl crate::transport::dispatch::RemoteCommand for RollbackArgs {
     fn remote_argv(&self) -> Vec<String> {
         let mut argv = vec!["upgrade".to_owned(), "rollback".to_owned()];
         for key in &self.trust {
@@ -207,6 +208,10 @@ impl RollbackArgs {
         argv.push("--root".to_owned());
         argv.push(self.root.root.display().to_string());
         argv
+    }
+
+    fn shape(&self) -> crate::transport::dispatch::RemoteShape {
+        crate::transport::dispatch::RemoteShape::Blocking
     }
 }
 
@@ -238,9 +243,8 @@ pub(crate) struct RemoveArgs {
     device: crate::transport::DeviceArgs,
 }
 
-impl RemoveArgs {
-    /// The argv a remote `paperctl remove` on the tablet should be given.
-    #[cfg(not(target_os = "linux"))]
+#[cfg(not(target_os = "linux"))]
+impl crate::transport::dispatch::RemoteCommand for RemoveArgs {
     fn remote_argv(&self) -> Vec<String> {
         let mut argv = vec!["remove".to_owned()];
         if self.remove_app_data {
@@ -256,6 +260,10 @@ impl RemoveArgs {
         argv.push("--root".to_owned());
         argv.push(self.root.root.display().to_string());
         argv
+    }
+
+    fn shape(&self) -> crate::transport::dispatch::RemoteShape {
+        crate::transport::dispatch::RemoteShape::Blocking
     }
 }
 
@@ -471,11 +479,7 @@ fn bootstrap(args: &BootstrapArgs) -> Result<(), CommandError> {
 pub(crate) fn remove(args: &RemoveArgs) -> Result<(), CommandError> {
     #[cfg(not(target_os = "linux"))]
     if let Some(explicit) = args.device.as_deref() {
-        let (host, source) = crate::transport::remote::resolve_device(Some(explicit))?;
-        println!("device   {host} ({source})");
-        paper_telemetry::run_log::record_device(&host);
-        crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
-        return Ok(());
+        return crate::transport::dispatch::dispatch(Some(explicit), args);
     }
 
     let platform = args.root.layout();
@@ -529,21 +533,13 @@ fn trusted(paths: &[PathBuf]) -> Result<TrustedKeys, CommandError> {
 /// exactly as if typed there directly; nothing is staged across the link.
 #[cfg(not(target_os = "linux"))]
 fn upgrade(args: &RunArgs, device: Option<&str>) -> Result<(), CommandError> {
-    let (host, source) = crate::transport::remote::resolve_device(device)?;
-    println!("device   {host} ({source})");
-    paper_telemetry::run_log::record_device(&host);
-    crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
-    Ok(())
+    crate::transport::dispatch::dispatch(device, args)
 }
 
 /// The Mac-side half of `upgrade rollback`; see [`upgrade`].
 #[cfg(not(target_os = "linux"))]
 fn rollback(args: &RollbackArgs, device: Option<&str>) -> Result<(), CommandError> {
-    let (host, source) = crate::transport::remote::resolve_device(device)?;
-    println!("device   {host} ({source})");
-    paper_telemetry::run_log::record_device(&host);
-    crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
-    Ok(())
+    crate::transport::dispatch::dispatch(device, args)
 }
 
 #[cfg(target_os = "linux")]
@@ -636,6 +632,7 @@ fn report_outcome(outcome: &Outcome) {
 #[cfg(all(test, not(target_os = "linux")))]
 mod tests {
     use super::*;
+    use crate::transport::dispatch::RemoteCommand as _;
 
     #[test]
     fn run_args_remote_argv_forwards_bundle_and_trust_verbatim() {

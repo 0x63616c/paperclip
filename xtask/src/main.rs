@@ -5,6 +5,7 @@
 
 mod adr;
 mod device_bundle;
+mod docs;
 mod install_hooks;
 mod plan_release;
 
@@ -23,6 +24,8 @@ enum XtaskError {
     PlanRelease(#[from] plan_release::PlanError),
     #[error(transparent)]
     InstallHooks(#[from] install_hooks::InstallHooksError),
+    #[error(transparent)]
+    Docs(#[from] docs::DocsError),
 }
 
 #[derive(Debug, Parser)]
@@ -55,6 +58,13 @@ enum Command {
     /// automatically on every workspace build (`xtask/build.rs`); this is
     /// for a checkout that never triggers that, or to confirm it took.
     InstallHooks,
+    /// Shell completions and a man page for `paperctl`, generated from its
+    /// own `clap` derive (WWW-48).
+    Docs {
+        /// Where to write `completions/` and `man/`.
+        #[arg(long, default_value = "artifacts/docs")]
+        out_dir: PathBuf,
+    },
 }
 
 /// How `plan-release` prints its result.
@@ -126,6 +136,16 @@ fn main() -> ExitCode {
                                 "not a git checkout, or .githooks/pre-commit is missing: skipped",
                         }
                     )
+                })
+                .map_err(XtaskError::from),
+        ),
+        Command::Docs { out_dir } => exit_code(
+            docs::run(&out_dir)
+                .map(|generated| {
+                    for path in &generated.completions {
+                        println!("completion: {}", path.display());
+                    }
+                    println!("man pages:  {}", generated.man_dir.display());
                 })
                 .map_err(XtaskError::from),
         ),

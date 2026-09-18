@@ -62,11 +62,10 @@ pub(crate) struct RunArgs {
     device: crate::transport::DeviceArgs,
 }
 
-impl RunArgs {
-    /// The argv a remote `paperctl run` on the tablet should be given —
-    /// everything this half was, except `--present-only` and `--report-to`,
+#[cfg(not(target_os = "linux"))]
+impl crate::transport::dispatch::RemoteCommand for RunArgs {
+    /// Everything this half was, except `--present-only` and `--report-to`,
     /// which only mean something to the half that opens the vendor engine.
-    #[cfg(not(target_os = "linux"))]
     fn remote_argv(&self) -> Vec<String> {
         vec![
             "run".to_owned(),
@@ -75,6 +74,17 @@ impl RunArgs {
             "--session-budget".to_owned(),
             self.session_budget.to_string(),
         ]
+    }
+
+    /// Run detached and polled, not blocking: WWW-23 found a live SSH
+    /// session does not reliably survive a long-lived takeover, and an
+    /// interactive session can run for the whole of `--session-budget`
+    /// (default 30 minutes), far longer than any one SSH channel should be
+    /// trusted for.
+    fn shape(&self) -> crate::transport::dispatch::RemoteShape {
+        crate::transport::dispatch::RemoteShape::Detached {
+            hold: std::time::Duration::from_secs(self.session_budget),
+        }
     }
 }
 
@@ -124,22 +134,9 @@ pub(crate) fn run(args: &RunArgs) -> Result<(), CommandError> {
 /// `remove` already do — WWW-35 found `run` was the one device-touching
 /// subcommand still missing this and its `--device` flag, so a session
 /// could only be started by SSHing onto the tablet by hand.
-///
-/// Run detached and polled, not blocking: WWW-23 found a live SSH session
-/// does not reliably survive a long-lived takeover, and an interactive
-/// session can run for the whole of `--session-budget` (default 30
-/// minutes), far longer than any one SSH channel should be trusted for.
 #[cfg(not(target_os = "linux"))]
 fn present(args: &RunArgs) -> Result<(), CommandError> {
-    let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
-    println!("device   {host} ({source})");
-    paper_telemetry::run_log::record_device(&host);
-    crate::transport::remote::run_open(
-        &host,
-        &args.remote_argv(),
-        std::time::Duration::from_secs(args.session_budget),
-    )?;
-    Ok(())
+    crate::transport::dispatch::dispatch(args.device.as_deref(), args)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -470,5 +467,37 @@ mod interactive {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod tests {
+    use super::*;
+    use crate::transport::dispatch::{RemoteCommand as _, RemoteShape};
+
+    fn args(session_budget: u64) -> RunArgs {
+        RunArgs {
+            app: RunAppArg::Chess,
+            session_budget,
+            present_only: false,
+            report_to: None,
+            device: crate::transport::DeviceArgs::default(),
+        }
+    }
+
+    #[test]
+    fn remote_argv_carries_the_app_and_session_budget_but_never_present_only() {
+        assert_eq!(
+            args(900).remote_argv(),
+            vec!["run", "--app", "chess", "--session-budget", "900"]
+        );
+    }
+
+    #[test]
+    fn the_shape_is_detached_for_the_full_session_budget() {
+        assert!(matches!(
+            args(900).shape(),
+            RemoteShape::Detached { hold } if hold == std::time::Duration::from_secs(900)
+        ));
     }
 }

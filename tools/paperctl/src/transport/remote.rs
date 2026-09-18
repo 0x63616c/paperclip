@@ -150,7 +150,22 @@ pub(crate) trait SshRunner {
 /// implementation because it already carries the user's own config, keys and
 /// agent, and a second implementation of the protocol would be a second
 /// thing in this repository that can get authentication wrong.
+///
+/// Not named outside this module. Every production caller reaches it through
+/// [`default_runner`] instead, so `SystemSsh` stays the one place that names
+/// — and could be swapped for — the real `ssh` binary.
 pub(crate) struct SystemSsh;
+
+/// The [`SshRunner`] every production dispatch goes through.
+///
+/// A function rather than a public `SystemSsh` so no subcommand module needs
+/// to name the concrete type: `deploy` and `transport::dispatch` both take an
+/// `&dyn SshRunner` and get the real one from here, the same seam a test
+/// swaps in [`crate::transport::test_doubles::FakeSsh`] for.
+pub(crate) fn default_runner() -> &'static dyn SshRunner {
+    const RUNNER: SystemSsh = SystemSsh;
+    &RUNNER
+}
 
 impl SystemSsh {
     fn base(host: &str) -> Command {
@@ -295,15 +310,36 @@ fn shell_join<'a>(argv: impl Iterator<Item = &'a String>) -> String {
         .join(" ")
 }
 
-/// Resolves which tablet to talk to, given whatever `--device` was passed
-/// (`None` if the flag was absent).
-pub(crate) fn resolve_device(flag: Option<&str>) -> Result<(String, DeviceSource), TransportError> {
-    resolve_device_with_timeout(flag, PROBE_TIMEOUT)
+/// Resolves `flag` and prints the one `device   <host> (<source>)` banner
+/// every device-touching command shows, recording it in the run log at the
+/// same time.
+///
+/// The single place this line is written (WWW-48): nine call sites used to
+/// each `println!` and `record_device` it by hand, which is what let them
+/// drift apart in the first place.
+pub(crate) fn resolve_and_announce(
+    flag: Option<&str>,
+) -> Result<(String, DeviceSource), TransportError> {
+    resolve_and_announce_with_timeout(flag, PROBE_TIMEOUT)
 }
 
-/// [`resolve_device`], with the reachability budget given explicitly —
-/// `doctor` and `deploy` pass [`discover::QUICK_PROBE_TIMEOUT`] instead of
-/// [`PROBE_TIMEOUT`]; see that constant for why.
+/// [`resolve_and_announce`], with the reachability budget given explicitly —
+/// see [`resolve_device_with_timeout`] for why `doctor` and `deploy` need
+/// their own.
+pub(crate) fn resolve_and_announce_with_timeout(
+    flag: Option<&str>,
+    timeout: Duration,
+) -> Result<(String, DeviceSource), TransportError> {
+    let (host, source) = resolve_device_with_timeout(flag, timeout)?;
+    println!("device   {host} ({source})");
+    paper_telemetry::run_log::record_device(&host);
+    Ok((host, source))
+}
+
+/// Resolves which tablet to talk to, given whatever `--device` was passed
+/// (`None` if the flag was absent), with the reachability budget given
+/// explicitly — `doctor` and `deploy` pass [`discover::QUICK_PROBE_TIMEOUT`]
+/// instead of [`PROBE_TIMEOUT`]; see that constant for why.
 pub(crate) fn resolve_device_with_timeout(
     flag: Option<&str>,
     timeout: Duration,
@@ -328,12 +364,11 @@ pub(crate) fn resolve_device_with_timeout(
 }
 
 /// Runs `remote_argv` on `host`, blocking, for every device-touching command
-/// except `open` — see the module doc for why `open` is different.
-pub(crate) fn run_blocking(host: &str, remote_argv: &[String]) -> Result<(), TransportError> {
-    run_blocking_with(&SystemSsh, host, remote_argv)
-}
-
-fn run_blocking_with(
+/// except `open` and `run` — see the module doc for why they are different.
+/// The [`SshRunner`] is given explicitly — every production caller reaches
+/// [`default_runner`] through it, and this module's own tests inject
+/// [`crate::transport::test_doubles::FakeSsh`] instead.
+pub(crate) fn run_blocking_with(
     runner: &dyn SshRunner,
     host: &str,
     remote_argv: &[String],
@@ -348,17 +383,11 @@ fn run_blocking_with(
     Ok(())
 }
 
-/// Runs `open`'s `remote_argv` on `host`, detached, and waits for it to
-/// finish by polling its log rather than the (possibly dead) SSH session.
-pub(crate) fn run_open(
-    host: &str,
-    remote_argv: &[String],
-    hold: Duration,
-) -> Result<(), TransportError> {
-    run_open_with(&SystemSsh, host, remote_argv, hold)
-}
-
-fn run_open_with(
+/// Runs `remote_argv` on `host`, detached, and waits for it to finish by
+/// polling its log rather than the (possibly dead) SSH session — `open` and
+/// `run`, see the module doc. The [`SshRunner`] is given explicitly, same as
+/// [`run_blocking_with`].
+pub(crate) fn run_open_with(
     runner: &dyn SshRunner,
     host: &str,
     remote_argv: &[String],

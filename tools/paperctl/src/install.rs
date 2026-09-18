@@ -62,11 +62,10 @@ pub(crate) struct InstallArgs {
     device: crate::transport::DeviceArgs,
 }
 
-impl InstallArgs {
-    /// The argv a remote `paperctl install` on the tablet should be given —
-    /// exactly what was typed, so `--catalog` and `--trust` are read as
+#[cfg(not(target_os = "linux"))]
+impl crate::transport::dispatch::RemoteCommand for InstallArgs {
+    /// Exactly what was typed, so `--catalog` and `--trust` are read as
     /// paths on the tablet, same as if this had been typed there directly.
-    #[cfg(not(target_os = "linux"))]
     fn remote_argv(&self) -> Vec<String> {
         let mut argv = vec![
             "install".to_owned(),
@@ -89,6 +88,10 @@ impl InstallArgs {
             argv.push(root.display().to_string());
         }
         argv
+    }
+
+    fn shape(&self) -> crate::transport::dispatch::RemoteShape {
+        crate::transport::dispatch::RemoteShape::Blocking
     }
 }
 
@@ -161,11 +164,7 @@ impl Progress for Printer {
 pub(crate) fn install(args: &InstallArgs) -> Result<(), CommandError> {
     #[cfg(not(target_os = "linux"))]
     if let Some(explicit) = args.device.as_deref() {
-        let (host, source) = crate::transport::remote::resolve_device(Some(explicit))?;
-        println!("device   {host} ({source})");
-        paper_telemetry::run_log::record_device(&host);
-        crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
-        return Ok(());
+        return crate::transport::dispatch::dispatch(Some(explicit), args);
     }
 
     let (id, wanted) = split_app(&args.app)?;
@@ -411,6 +410,7 @@ fn trusted(paths: &[PathBuf]) -> Result<TrustedKeys, CommandError> {
 #[cfg(all(test, not(target_os = "linux")))]
 mod tests {
     use super::*;
+    use crate::transport::dispatch::RemoteCommand as _;
 
     #[test]
     fn remote_argv_forwards_catalog_trust_and_flags_verbatim() {

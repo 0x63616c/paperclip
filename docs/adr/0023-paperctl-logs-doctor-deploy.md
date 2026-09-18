@@ -19,6 +19,15 @@ Implements spec §4 (`paperctl` as the entry point) for WWW-34.
 > from two of what are now nine device-touching commands. The record format,
 > `RETAIN`, and everything `paperctl logs` prints are unchanged.
 
+> **WWW-48 update:** "`doctor` alone is intercepted before it reaches that
+> path", below, no longer describes the code. `paperctl` is now a library
+> with a thin binary over it, and `CommandError` carries its own
+> `exit_code()`; `main`'s dispatch match calls `doctor::run` inline, the same
+> as every other subcommand, and returns whatever code it gives back — no
+> special case, and no `unreachable!` arm to keep the match exhaustive. The
+> three verdicts and their 0/1/2 codes are unchanged; only how that code
+> reaches the process's exit status did.
+
 ## Context
 
 A set of personal shell functions on Calum's Mac had grown up around gaps in

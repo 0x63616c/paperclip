@@ -62,11 +62,10 @@ pub(crate) struct SetupArgs {
     device: crate::transport::DeviceArgs,
 }
 
-impl SetupArgs {
-    /// The argv a remote `paperctl setup` on the tablet should be given —
-    /// setup inspects the machine it runs on, so this forwards the whole
+#[cfg(not(target_os = "linux"))]
+impl crate::transport::dispatch::RemoteCommand for SetupArgs {
+    /// `setup` inspects the machine it runs on, so this forwards the whole
     /// invocation rather than any answer computed here.
-    #[cfg(not(target_os = "linux"))]
     fn remote_argv(&self) -> Vec<String> {
         let mut argv = vec![
             "setup".to_owned(),
@@ -79,6 +78,10 @@ impl SetupArgs {
             argv.push("--check".to_owned());
         }
         argv
+    }
+
+    fn shape(&self) -> crate::transport::dispatch::RemoteShape {
+        crate::transport::dispatch::RemoteShape::Blocking
     }
 }
 
@@ -133,11 +136,7 @@ fn report(name: &str, stage: &Stage) -> bool {
 pub(crate) fn run(args: &SetupArgs) -> Result<(), CommandError> {
     #[cfg(not(target_os = "linux"))]
     {
-        let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
-        println!("device   {host} ({source})");
-        paper_telemetry::run_log::record_device(&host);
-        crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
-        Ok(())
+        crate::transport::dispatch::dispatch(args.device.as_deref(), args)
     }
     #[cfg(target_os = "linux")]
     run_local(args)
@@ -355,6 +354,7 @@ fn enforcement(controller: paper_host::facilities::Controller) -> &'static str {
 #[cfg(all(test, not(target_os = "linux")))]
 mod tests {
     use super::*;
+    use crate::transport::dispatch::RemoteCommand as _;
 
     fn args(check: bool) -> SetupArgs {
         SetupArgs {

@@ -111,3 +111,8 @@ install-hooks:
 # GitHub already lists as released (WWW-61).
 plan-release *ARGS:
     cargo xtask plan-release {{ARGS}}
+
+# Shell completions and a man page for `paperctl`, from its own `clap`
+# derive — near-free, and cannot drift from what it actually accepts (WWW-48).
+docs-paperctl *ARGS:
+    cargo xtask docs {{ARGS}}

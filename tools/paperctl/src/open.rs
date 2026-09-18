@@ -123,12 +123,13 @@ impl OpenArgs {
             ScreenArg::All => "home",
         }
     }
+}
 
-    /// The argv a remote `paperctl open` on the tablet should be given —
-    /// everything this half was, except `--dry-run`, `--present-only` and
+#[cfg(not(target_os = "linux"))]
+impl crate::transport::dispatch::RemoteCommand for OpenArgs {
+    /// Everything this half was, except `--dry-run`, `--present-only` and
     /// `--report-to`, which only mean something to the half that opens the
     /// vendor engine.
-    #[cfg(not(target_os = "linux"))]
     fn remote_argv(&self) -> Vec<String> {
         let mut argv = vec![
             "open".to_owned(),
@@ -145,6 +146,12 @@ impl OpenArgs {
             argv.push("--partial".to_owned());
         }
         argv
+    }
+
+    fn shape(&self) -> crate::transport::dispatch::RemoteShape {
+        crate::transport::dispatch::RemoteShape::Detached {
+            hold: Duration::from_secs(self.hold),
+        }
     }
 }
 
@@ -306,12 +313,8 @@ fn dry_run(canvas: &Canvas, plan: &HoldPlan) -> Result<(), CommandError> {
 /// forget. A resolution failure is still recorded, unlike before — the span
 /// covers the whole dispatch, not just the part after a device resolved.
 #[cfg(not(target_os = "linux"))]
-fn present(_canvas: &Canvas, plan: &HoldPlan, args: &OpenArgs) -> Result<(), CommandError> {
-    let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
-    println!("device   {host} ({source})");
-    paper_telemetry::run_log::record_device(&host);
-    crate::transport::remote::run_open(&host, &args.remote_argv(), plan.hold)
-        .map_err(CommandError::from)
+fn present(_canvas: &Canvas, _plan: &HoldPlan, args: &OpenArgs) -> Result<(), CommandError> {
+    crate::transport::dispatch::dispatch(args.device.as_deref(), args)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -415,6 +418,7 @@ fn verdict(panel: &paper_device::PanelRecord) -> Result<(), CommandError> {
 #[cfg(all(test, not(target_os = "linux")))]
 mod tests {
     use super::*;
+    use crate::transport::dispatch::RemoteCommand as _;
 
     fn args(hold: u64, partial: bool) -> OpenArgs {
         OpenArgs {
@@ -461,5 +465,14 @@ mod tests {
                 .remote_argv()
                 .contains(&"--partial".to_owned())
         );
+    }
+
+    #[test]
+    fn the_shape_is_detached_for_the_hold() {
+        assert!(matches!(
+            args(45, false).shape(),
+            crate::transport::dispatch::RemoteShape::Detached { hold }
+                if hold == Duration::from_secs(45)
+        ));
     }
 }

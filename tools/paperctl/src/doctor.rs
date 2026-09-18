@@ -12,7 +12,7 @@ use clap::Args;
 use crate::error::CommandError;
 use crate::transport::OutputFormat;
 use crate::transport::discover::{self, DeviceSource, Prober, QUICK_PROBE_TIMEOUT, SystemProber};
-use crate::transport::remote::{CapturedOutput, REMOTE_PAPERCTL, SshRunner, SystemSsh};
+use crate::transport::remote::{self, CapturedOutput, REMOTE_PAPERCTL, SshRunner};
 
 /// `paperctl doctor`.
 #[derive(Debug, Args)]
@@ -98,7 +98,7 @@ pub(crate) fn run(args: &DoctorArgs) -> Result<u8, CommandError> {
         config.as_ref().and_then(|config| config.pinned()),
         config.as_ref().and_then(|config| config.cached()),
         &SystemProber,
-        &SystemSsh,
+        remote::default_runner(),
         QUICK_PROBE_TIMEOUT,
     )?;
     print_report(&report, args.output)?;

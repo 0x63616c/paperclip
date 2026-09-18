@@ -18,6 +18,11 @@
 pub(crate) mod config;
 pub(crate) mod devices;
 pub(crate) mod discover;
+// The `RemoteCommand` trait and the shared resolve → banner → run-log → run
+// sequence (WWW-48). Gated with `remote`, which it is built entirely on top
+// of.
+#[cfg(not(target_os = "linux"))]
+pub(crate) mod dispatch;
 // `paperctl devices` (list/pin/unpin) is useful on either side and stays
 // unconditional; the SSH execution engine is only ever called from a
 // `#[cfg(not(target_os = "linux"))]` dispatch site, so it is gated the same

@@ -121,15 +121,29 @@ refusing immediately.
   `discover` (the resolution order, `Prober` trait, `SystemProber`),
   `remote` (the SSH execution engine, `SshRunner` trait, `SystemSsh`), and
   `devices` (the CLI surface). Every device-touching command gained a
-  `remote_argv()` method on its own `Args` struct and a `--device` flag via
-  the shared `transport::DeviceArgs`, compiled only on the non-Linux side —
-  it does not exist in the on-device build, rather than existing and doing
-  nothing there.
+  `--device` flag via the shared `transport::DeviceArgs`, compiled only on
+  the non-Linux side — it does not exist in the on-device build, rather than
+  existing and doing nothing there.
 - `Prober` and `SshRunner` are trait objects specifically so the resolution
   order and the exact remote command line are unit-testable without a
   network or a real `ssh` process; see `transport::discover`'s and
   `transport::remote`'s test modules, and the `remote_argv` tests beside
   each command's own `Args` struct.
+- **WWW-48 update:** the eight `remote_argv()` methods this ADR originally
+  described as inherent methods are now one trait,
+  `transport::dispatch::RemoteCommand` (`remote_argv()` plus `shape()` —
+  `Blocking` or `Detached { hold }`, replacing the `open`/`run` special case
+  called out above). `transport::dispatch::dispatch(device, command)` is the
+  one place that runs resolve → print the `device   <host> (<source>)`
+  banner → record it in the run log → `run_blocking_with`/`run_open_with` —
+  the sequence every device-touching command used to repeat by hand, nine
+  times over. `deploy` and `doctor` do not implement `RemoteCommand` (neither
+  is blocking-or-detached against the tablet's own `paperctl`: `deploy` sends
+  a binary, `doctor` reads status), but both reach the same seam —
+  `remote::resolve_and_announce[_with_timeout]` for the banner,
+  `remote::default_runner()` in place of naming `SystemSsh` — so the banner
+  stays written in exactly one place regardless. No subcommand module names
+  `SystemSsh` any more; only `transport::remote` does.
 
 ## What is not settled
 

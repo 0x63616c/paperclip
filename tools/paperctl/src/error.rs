@@ -325,3 +325,19 @@ pub(crate) enum CommandError {
         detail: String,
     },
 }
+
+impl CommandError {
+    /// The process exit code a failure of this kind should produce.
+    ///
+    /// Every variant here is 1 today: none of them has yet needed to be told
+    /// apart from any other at the shell. `paperctl doctor`'s three-way
+    /// verdict (0/1/2, WWW-34 acceptance criterion 9) is not a failure at
+    /// all — it never reaches this path, because `doctor::run` returns its
+    /// code directly on the `Ok` side. This exists as its own method, rather
+    /// than a bare `ExitCode::FAILURE` at the one call site in `lib.rs`, so a
+    /// future variant that does need a distinct code has a home to add it in
+    /// without that call site changing.
+    pub(crate) fn exit_code(&self) -> u8 {
+        1
+    }
+}

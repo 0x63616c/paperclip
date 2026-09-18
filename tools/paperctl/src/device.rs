@@ -79,11 +79,10 @@ pub(crate) struct StockArgs {
     device: crate::transport::DeviceArgs,
 }
 
-impl StockArgs {
-    /// The argv a remote `paperctl stock` on the tablet should be given.
+#[cfg(not(target_os = "linux"))]
+impl crate::transport::dispatch::RemoteCommand for StockArgs {
     /// `--from-unit` never forwards: it only means something to the copy
     /// `paperclip-restore-stock.service` itself starts.
-    #[cfg(not(target_os = "linux"))]
     fn remote_argv(&self) -> Vec<String> {
         let mut argv = vec!["stock".to_owned()];
         if let Some(state) = &self.state {
@@ -94,6 +93,10 @@ impl StockArgs {
             argv.push("--force".to_owned());
         }
         argv
+    }
+
+    fn shape(&self) -> crate::transport::dispatch::RemoteShape {
+        crate::transport::dispatch::RemoteShape::Blocking
     }
 }
 
@@ -190,11 +193,7 @@ fn granted_for(app: &AppId) -> GrantedCapabilities {
 /// side only reaches it.
 #[cfg(not(target_os = "linux"))]
 fn stock(args: &StockArgs) -> Result<(), CommandError> {
-    let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
-    println!("device   {host} ({source})");
-    paper_telemetry::run_log::record_device(&host);
-    crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
-    Ok(())
+    crate::transport::dispatch::dispatch(args.device.as_deref(), args)
 }
 
 #[cfg(target_os = "linux")]
@@ -246,6 +245,7 @@ fn stock(args: &StockArgs) -> Result<(), CommandError> {
 #[cfg(all(test, not(target_os = "linux")))]
 mod tests {
     use super::*;
+    use crate::transport::dispatch::RemoteCommand as _;
 
     #[test]
     fn remote_argv_carries_state_and_force_but_never_from_unit() {
