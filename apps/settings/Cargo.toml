@@ -8,6 +8,10 @@ license.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "settings"
+path = "src/main.rs"
+
 [dependencies]
 paper-packages = { workspace = true }
 paper-sdk = { workspace = true }
