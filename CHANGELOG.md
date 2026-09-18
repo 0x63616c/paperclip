@@ -29,11 +29,17 @@ then, entries below are grouped by project stage rather than by release tag.
   per-field overrides — and `cargo xtask plan-release`, which reconciles
   declared app and platform versions against what GitHub already lists as
   published and reports what needs publishing (WWW-61, ADR-0026).
+- `paperctl sign-release`, which signs a GitHub release CI built unsigned
+  (WWW-62) on a machine holding the key, rebuilding and byte-comparing the
+  app half before signing where the local toolchain allows it (WWW-63,
+  ADR-0030).
 
 ### Fixed
 
 - Several stale rustdoc intra-doc links and one stale doc comment (`takeover.rs`
   said "Three layers" after ADR-0011 was amended to four).
+- `docs/updating.md` named the secret key's path as `~/paperclip-keys/`;
+  every other doc, and the key itself, use `~/.paperclip/` (WWW-63).
 
 Everything before this point predates a changelog and is described by the
 project's own issue history and `docs/adr/`, not reconstructed here.

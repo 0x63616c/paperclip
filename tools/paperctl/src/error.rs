@@ -277,6 +277,16 @@ pub(crate) enum CommandError {
     #[error("the release manifest could not be read")]
     ReleaseManifest(#[from] crate::release_manifest::ReleaseManifestError),
 
+    /// `paperctl sign-release` could not resolve the tag, run an external
+    /// tool (`gh`, `tar`, `tools/package-app.sh`), or found the rebuild did
+    /// not match what it was asked to sign.
+    #[cfg(feature = "publishing")]
+    #[error("{detail}")]
+    SignRelease {
+        /// What went wrong.
+        detail: String,
+    },
+
     /// The Mac-side device transport could not reach or complete on the
     /// tablet — no device resolved, `ssh` failed, or the remote command
     /// exited non-zero.

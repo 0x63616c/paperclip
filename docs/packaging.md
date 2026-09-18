@@ -28,6 +28,7 @@ below work from a clean checkout.
 | `paperctl package` | `paperctl list` |
 | `paperctl publish` | `paperctl rollback` |
 | `paperctl check` | `paperctl recover` |
+| `paperctl sign-release` | |
 
 The signing key never leaves the Mac. The device build of `paper-packages` is
 compiled with `default-features = false`, which removes the `publishing`
@@ -71,6 +72,69 @@ has already seen serial 1 must never be handed another serial 1.
 
 Development builds use prerelease versions — `0.3.0-dev.4` — which are as
 immutable as anything else. That is what makes them safe to iterate with.
+
+## Signing a CI-built release
+
+`.github/workflows/release.yml` (WWW-62) builds and uploads app archives and
+platform components to GitHub, unsigned — CI never holds the signing key
+(§12). `paperctl sign-release` is the other half: it downloads what CI
+published for one release tag, decides how much of that it can independently
+vouch for, signs with a local key, and uploads the result back to the same
+release as new assets. Like `key`, `package`, `publish` and `check`, it is
+behind the `publishing` feature and requires `gh` and `tar` on `PATH`; unlike
+them it also needs network access to GitHub (`gh auth status` first).
+
+```sh
+paperctl sign-release dev.calum.chess-v0.2.0 \
+    --catalog ~/catalogs/home --key ~/.paperclip/paperclip.key \
+    --trust ~/.paperclip/paperclip.pub
+paperctl sign-release platform-v0.1.0 \
+    --key ~/.paperclip/paperclip.key --out ~/paperclip-release/paperclip-0.1.0.tar.gz
+```
+
+For an app it rebuilds the archive from source (`tools/package-app.sh`, then
+the same in-process build `paperctl package` uses) and refuses to sign unless
+the rebuild byte-matches what CI published — except that on a Mac with no
+real `aarch64-linux-gnu-gcc` on `PATH` (true of both machines this runs on
+today), the rebuild uses this repository's `zig cc` wrapper instead of CI's
+actual cross GCC, and the two do not produce identical bytes from identical
+source (confirmed 2026-09-18; see `tools/paperctl/src/release_sign.rs`'s own
+module doc and WWW-63). That refusal is expected until a matching cross
+toolchain is installed locally; `--trust-ci-build` skips the rebuild and
+signs CI's archive as published, which is the trust decision this project has
+been making by hand since WWW-63 and `docs/device/www-69-preflight.md`. For
+the platform half the command never rebuilds — four full cross-compiled
+binaries is a workspace release build, and the machine this normally runs on
+is an 8 GB M2 that already swaps under less — so it only checks the
+downloaded components against their own `SHA256SUMS` before signing. See
+[ADR-0030](adr/0030-signing-off-the-build-machine.md) for why both of those
+are deliberate, not shortfalls waiting to be closed.
+
+This is a manual command a person runs once per release; nothing polls
+GitHub or triggers it automatically (§12 — the signing key is never reachable
+from anywhere that could).
+
+### Verifying a signed release on the tablet
+
+Not run on hardware by this ticket — WWW-55 is the device session that would
+run it. Given a signed catalog already on the tablet (the two `scp` steps in
+`docs/device/www-69-preflight.md`):
+
+```sh
+ssh remarkable-wifi /home/root/paperclip/bin/paperctl check \
+    /home/root/paperclip/catalog --trust /home/root/paperclip/keys/paperclip.pub
+```
+
+Expected output is the same shape `paperctl check` prints on the Mac: one
+`catalog <name> serial <n>` line and one `verified <app> <version>` line per
+release, using only the public key already on the tablet (`paperctl check` is
+not behind the `publishing` feature — it ships in the device build, §12). A
+release `sign-release` did not sign, or signed with a different key, reports
+`verified nothing` or a `SignatureError`, never a partial catalog. A platform
+bundle is verified the same way `docs/updating.md`'s "Installing it" section
+already describes: `paperctl upgrade run <bundle> --trust
+/home/root/paperclip/keys/paperclip.pub` refuses before touching the running
+Host if the bundle's signature or a component's digest does not check out.
 
 ## Serving a catalog
 

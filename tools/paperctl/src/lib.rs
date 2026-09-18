@@ -50,6 +50,8 @@ mod packaging;
 mod preview;
 #[cfg(feature = "publishing")]
 mod release_manifest;
+#[cfg(feature = "publishing")]
+mod release_sign;
 #[cfg(feature = "apps")]
 mod run;
 #[cfg(feature = "apps")]
@@ -128,6 +130,10 @@ enum Command {
     /// Verify a catalog, or a single package.
     #[cfg(feature = "publishing")]
     Check(packaging::CheckArgs),
+    /// Sign a release CI built unsigned, and attach the signatures (§12,
+    /// WWW-63).
+    #[cfg(feature = "publishing")]
+    SignRelease(release_sign::SignReleaseArgs),
     /// Install or update an app from a catalog.
     Install(install::InstallArgs),
     /// Show what is installed, and optionally what a catalog offers.
@@ -188,6 +194,8 @@ impl Command {
             Command::Publish(_) => "publish",
             #[cfg(feature = "publishing")]
             Command::Check(_) => "check",
+            #[cfg(feature = "publishing")]
+            Command::SignRelease(_) => "sign-release",
             Command::Install(_) => "install",
             Command::List(_) => "list",
             Command::Rollback(_) => "rollback",
@@ -334,6 +342,8 @@ fn run_cli(cli: Cli) -> Result<u8, CommandError> {
         Command::Publish(args) => packaging::publish(&args).map(|()| 0),
         #[cfg(feature = "publishing")]
         Command::Check(args) => packaging::check(&args).map(|()| 0),
+        #[cfg(feature = "publishing")]
+        Command::SignRelease(args) => release_sign::run(&args).map(|()| 0),
         Command::Install(args) => install::install(&args).map(|()| 0),
         Command::List(args) => install::list(&args).map(|()| 0),
         Command::Rollback(args) => install::rollback(&args).map(|()| 0),

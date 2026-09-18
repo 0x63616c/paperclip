@@ -93,7 +93,7 @@ cp target/aarch64-unknown-linux-gnu/release/settings       build/bin/
 
 paperctl upgrade package \
     --source build \
-    --key ~/paperclip-keys/paperclip.key \
+    --key ~/.paperclip/paperclip.key \
     --out paperclip-0.4.0.tar.gz
 ```
 

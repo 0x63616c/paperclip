@@ -17,7 +17,7 @@ use crate::error::CommandError;
 use crate::install::read_text;
 
 /// The default name of a personal catalog.
-const DEFAULT_CATALOG: &str = "calum-home";
+pub(crate) const DEFAULT_CATALOG: &str = "calum-home";
 
 /// Key management.
 #[derive(Debug, Subcommand)]
@@ -50,39 +50,39 @@ pub(crate) struct GenerateArgs {
 #[derive(Debug, Args)]
 pub(crate) struct PackageArgs {
     /// The package directory, containing `paper.toml`.
-    source: PathBuf,
+    pub(crate) source: PathBuf,
     /// Where to write the archive. Defaults to `<id>-<version>.paperpkg`.
     #[arg(long)]
-    out: Option<PathBuf>,
+    pub(crate) out: Option<PathBuf>,
 }
 
 /// Publish a package into a catalog.
 #[derive(Debug, Args)]
 pub(crate) struct PublishArgs {
     /// The `.paperpkg` to publish.
-    package: PathBuf,
+    pub(crate) package: PathBuf,
     /// The catalog directory. Created if it does not exist.
     #[arg(long)]
-    catalog: PathBuf,
+    pub(crate) catalog: PathBuf,
     /// The secret key to sign with.
     #[arg(long)]
-    key: PathBuf,
+    pub(crate) key: PathBuf,
     /// The catalog's name. Serials are only comparable within one name.
     #[arg(long, default_value = DEFAULT_CATALOG)]
-    name: String,
+    pub(crate) name: String,
     /// A file holding the release notes.
     #[arg(long)]
-    notes_file: Option<PathBuf>,
+    pub(crate) notes_file: Option<PathBuf>,
 }
 
 /// Verify a catalog, or a single package.
 #[derive(Debug, Args)]
 pub(crate) struct CheckArgs {
     /// A catalog directory, a package source directory, or a `.paperpkg` file.
-    target: PathBuf,
+    pub(crate) target: PathBuf,
     /// The public key a catalog must be signed with.
     #[arg(long)]
-    trust: Option<PathBuf>,
+    pub(crate) trust: Option<PathBuf>,
 }
 
 /// Runs a key subcommand.

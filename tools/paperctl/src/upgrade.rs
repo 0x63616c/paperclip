@@ -93,22 +93,22 @@ pub(crate) struct PackageArgs {
     /// A directory holding `bin/paperclip-host`, `bin/home`, `bin/app-store`
     /// and `bin/settings`.
     #[arg(long)]
-    source: PathBuf,
+    pub(crate) source: PathBuf,
     /// `release.toml`, which declares the version, protocol and state
     /// numbers a plain `package` invocation builds (WWW-61, ADR-0026).
     #[arg(long, default_value = crate::release_manifest::RELEASE_MANIFEST_FILE_NAME)]
-    release_manifest: PathBuf,
+    pub(crate) release_manifest: PathBuf,
     /// The release version. Overrides `release.toml` when given.
     #[arg(long)]
-    version: Option<semver::Version>,
+    pub(crate) version: Option<semver::Version>,
     /// The protocol this platform speaks. Overrides `release.toml` when
     /// given.
     #[arg(long)]
-    protocol: Option<String>,
+    pub(crate) protocol: Option<String>,
     /// The persistent state version this release writes. Overrides
     /// `release.toml` when given.
     #[arg(long)]
-    state_version: Option<u32>,
+    pub(crate) state_version: Option<u32>,
     /// The lowest state version that can still read what this release writes.
     /// Overrides `release.toml` when given.
     ///
@@ -118,20 +118,20 @@ pub(crate) struct PackageArgs {
     /// rollback is a rollback rather than a swap over bytes the older
     /// release cannot parse.
     #[arg(long)]
-    rollback_to_state: Option<u32>,
+    pub(crate) rollback_to_state: Option<u32>,
     /// Release notes.
     #[arg(long, default_value = "")]
-    notes: String,
+    pub(crate) notes: String,
     /// An extra file to ship inside the release, relative to `--source`.
     /// Repeatable. Covered by the manifest's digests like everything else.
     #[arg(long = "include")]
-    include: Vec<String>,
+    pub(crate) include: Vec<String>,
     /// The secret key to sign with.
     #[arg(long)]
-    key: PathBuf,
+    pub(crate) key: PathBuf,
     /// Where to write the bundle.
     #[arg(long)]
-    out: PathBuf,
+    pub(crate) out: PathBuf,
 }
 
 /// Install a platform bundle.
@@ -296,7 +296,7 @@ pub(crate) fn run(args: UpgradeArgs) -> Result<(), CommandError> {
 
 /// Builds and signs a platform bundle.
 #[cfg(feature = "publishing")]
-fn package(args: &PackageArgs) -> Result<(), CommandError> {
+pub(crate) fn package(args: &PackageArgs) -> Result<(), CommandError> {
     use paper_packages::signing::{Domain, SecretKey};
     use paper_packages::store;
     use paper_updater::bundle;
