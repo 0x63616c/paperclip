@@ -310,8 +310,8 @@ impl Supervisor {
                 // and the journal is the one place that is still readable when
                 // the state directory is gone and the supervisor is not.
                 if !actions.is_empty() || self.machine.state() != before {
-                    eprintln!(
-                        "paperclip-host: {event:?} :: {before} -> {} :: {}",
+                    tracing::info!(
+                        "{event:?} :: {before} -> {} :: {}",
                         self.machine.state(),
                         actions
                             .iter()
@@ -502,7 +502,7 @@ impl Supervisor {
                     paper_device::stock::StartBudget::at(&self.config.start_budget)
                         .allows_session(SystemTime::now())
                 {
-                    eprintln!("paperclip-host: refusing to take the display: {refusal}");
+                    tracing::warn!("refusing to take the display: {refusal}");
                     self.queued.push(Event::SessionExited {
                         owner: other.clone(),
                         status: ExitKind::Error,
@@ -584,15 +584,12 @@ impl Supervisor {
     fn restore(&mut self, attempt: u32) {
         match self.recovery.restore() {
             Ok(outcome) => {
-                eprintln!(
-                    "paperclip-host: restore attempt {attempt}: {}",
-                    outcome.summary()
-                );
+                tracing::info!("restore attempt {attempt}: {}", outcome.summary());
                 self.queued.push(Event::StockRunning);
                 self.queued.push(Event::DisplayReleased);
             }
             Err(error) => {
-                eprintln!("paperclip-host: restore attempt {attempt} FAILED: {error}");
+                tracing::error!("restore attempt {attempt} FAILED: {error}");
                 self.recovery
                     .capture(&format!("restore attempt {attempt}: {error}"));
                 self.queued.push(Event::RestoreFailed {
@@ -732,7 +729,7 @@ impl Supervisor {
     /// Records why the climb stopped below `rung`.
     fn stall(&mut self, rung: Rung, why: &str) {
         self.ladder_note = format!("{rung}: {why}");
-        eprintln!("paperclip-host: not ready — {}", self.ladder_note);
+        tracing::warn!("not ready — {}", self.ladder_note);
         self.write_status();
     }
 

@@ -141,6 +141,53 @@ enum Command {
     Deploy(deploy::DeployArgs),
 }
 
+impl Command {
+    /// The name every dispatch of this command is recorded under — in
+    /// `paperctl logs`'s `subcommand` column, and in the `paperctl_run` span
+    /// `journalctl` would show it nested under (WWW-46). Matches the
+    /// subcommand's own name on the command line.
+    fn name(&self) -> &'static str {
+        match self {
+            #[cfg(feature = "desktop")]
+            Command::Preview(_) => "preview",
+            #[cfg(feature = "desktop")]
+            Command::Dev(_) => "dev",
+            #[cfg(feature = "apps")]
+            Command::Screenshot(_) => "screenshot",
+            #[cfg(feature = "apps")]
+            Command::Open(_) => "open",
+            #[cfg(feature = "apps")]
+            Command::Run(_) => "run",
+            Command::Manifest { .. } => "manifest",
+            Command::Isolation(_) => "isolation",
+            Command::Units(_) => "units",
+            Command::Stock(_) => "stock",
+            #[cfg(feature = "publishing")]
+            Command::Key { .. } => "key",
+            #[cfg(feature = "publishing")]
+            Command::Package(_) => "package",
+            #[cfg(feature = "publishing")]
+            Command::Publish(_) => "publish",
+            #[cfg(feature = "publishing")]
+            Command::Check(_) => "check",
+            Command::Install(_) => "install",
+            Command::List(_) => "list",
+            Command::Rollback(_) => "rollback",
+            Command::Recover(_) => "recover",
+            Command::Setup(_) => "setup",
+            Command::Upgrade(_) => "upgrade",
+            Command::Remove(_) => "remove",
+            Command::Devices(_) => "devices",
+            #[cfg(not(target_os = "linux"))]
+            Command::Logs(_) => "logs",
+            #[cfg(not(target_os = "linux"))]
+            Command::Doctor(_) => "doctor",
+            #[cfg(not(target_os = "linux"))]
+            Command::Deploy(_) => "deploy",
+        }
+    }
+}
+
 /// Which screen to draw.
 #[cfg(feature = "apps")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -191,22 +238,59 @@ struct ScreenshotArgs {
     out_dir: std::path::PathBuf,
 }
 
-fn main() -> ExitCode {
-    let cli = Cli::parse();
-    // `doctor` alone reports through its exit code, not just its output: 0
-    // healthy, and a *distinct* nonzero for unreachable vs. reachable-but-
-    // degraded (WWW-34 acceptance criterion 9). Every other command only
-    // ever exits 0 or 1, so it stays on the uniform path below.
-    #[cfg(not(target_os = "linux"))]
-    if let Command::Doctor(args) = &cli.command {
-        return to_exit_code(doctor::run(args));
+/// Where a Mac build's telemetry goes: human-readable output plus the JSON
+/// run-log. The device build (`paperctl stock` running on the tablet itself)
+/// has no `logs` command to read that log, so it goes to the journal instead
+/// — the same journal a crash is read out of.
+#[cfg(not(target_os = "linux"))]
+fn init_telemetry() {
+    if let Err(error) = paper_telemetry::init_pretty(transport::run_log_dir()) {
+        eprintln!("paperctl: telemetry did not start: {error}");
     }
-    to_exit_code(run(cli).map(|()| ExitCode::SUCCESS))
 }
 
-fn to_exit_code(result: Result<ExitCode, CommandError>) -> ExitCode {
+#[cfg(target_os = "linux")]
+fn init_telemetry() {
+    if let Err(error) = paper_telemetry::init_journald() {
+        eprintln!("paperctl: telemetry did not start: {error}");
+    }
+}
+
+fn main() -> ExitCode {
+    init_telemetry();
+    let cli = Cli::parse();
+    // One span per dispatch, entered for the whole thing — this is what
+    // `paperctl logs` now reads instead of a `runlog::wrap` call at each
+    // site (WWW-46): a layer watching for this span cannot be forgotten the
+    // way a function call at nine different sites could be, and was.
+    let span = paper_telemetry::run_log::run_span(cli.command.name());
+    let result = span.in_scope(|| dispatch(cli));
+    let exit_code = match &result {
+        Ok(code) => i64::from(*code),
+        Err(_) => 1,
+    };
+    span.record("exit_code", exit_code);
+    drop(span);
+    to_exit_code(result)
+}
+
+/// `doctor` alone reports a three-way verdict — 0 healthy, 1 degraded, 2
+/// unreachable (WWW-34 acceptance criterion 9) — as its real exit code.
+/// Every other command only ever exits 0 or 1. Returning the raw `u8` here
+/// rather than an [`ExitCode`] is what lets [`main`] both build the process's
+/// actual exit code *and* record the real value on the `paperctl_run` span;
+/// [`ExitCode`] itself exposes no way to read a code back out once built.
+fn dispatch(cli: Cli) -> Result<u8, CommandError> {
+    #[cfg(not(target_os = "linux"))]
+    if let Command::Doctor(args) = &cli.command {
+        return doctor::run(args);
+    }
+    run(cli).map(|()| 0)
+}
+
+fn to_exit_code(result: Result<u8, CommandError>) -> ExitCode {
     match result {
-        Ok(code) => code,
+        Ok(code) => ExitCode::from(code),
         Err(error) => {
             report(&error);
             ExitCode::FAILURE

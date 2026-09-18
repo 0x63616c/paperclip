@@ -102,6 +102,12 @@ impl Watchdog for NoWatchdog {
 /// A held takeover: stock is down, the wakelock is held, the panel is free.
 ///
 /// Dropping this restores stock. That is the point of it.
+///
+/// Holds one `tracing` span (WWW-46) for its entire lifetime, entered from
+/// [`Takeover::acquire`] until the struct is dropped: the settle gate, a
+/// budget refusal, and the lock capture in [`Takeover::release`] all nest
+/// under it, so `journalctl` shows one trace for the whole session rather
+/// than a scatter of unrelated-looking lines.
 #[derive(Debug)]
 pub struct Takeover<S: ServiceControl, W: Watchdog> {
     stock: Stock<S>,
@@ -109,6 +115,10 @@ pub struct Takeover<S: ServiceControl, W: Watchdog> {
     watchdog: W,
     locks: VendorLockState,
     released: bool,
+    // Never read: held purely so the span it represents stays "current" for
+    // this struct's entire lifetime and closes exactly when this does.
+    #[allow(dead_code, reason = "held for its Drop effect, not its value")]
+    span: tracing::span::EnteredSpan,
 }
 
 impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
@@ -126,12 +136,15 @@ impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
         budget: Duration,
         now: SystemTime,
     ) -> Result<Self, (DeviceError, WakeLock)> {
+        let span = tracing::info_span!("takeover").entered();
         // The watchdog is armed before the stop, so that even a failure inside
         // `stop_for_session` is covered by something outside this process.
         if let Err(error) = watchdog.arm(budget) {
+            tracing::warn!("budget refusal: watchdog would not arm: {error}");
             return Err((error, wake));
         }
         if let Err(error) = stock.stop_for_session(now) {
+            tracing::warn!("budget refusal: stock would not stop for this session: {error}");
             let _ = watchdog.disarm();
             return Err((error, wake));
         }
@@ -141,6 +154,7 @@ impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
             watchdog,
             locks,
             released: false,
+            span,
         })
     }
 
@@ -194,6 +208,10 @@ impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
         // exit" can fix that, since the release path cannot exit before it
         // starts stock. Putting the file back is the whole fix.
         let locks_restored = self.locks.restore();
+        tracing::debug!(
+            ok = locks_restored.is_ok(),
+            "lock capture: vendor registry restored"
+        );
 
         // Then wait for the panel to actually look free, bounded. A fixed sleep
         // would be either too short on a slow release or wasted time on a fast
@@ -203,6 +221,7 @@ impl<S: ServiceControl, W: Watchdog> Takeover<S, W> {
         } else {
             false
         };
+        tracing::debug!(freed, "settle gate: waited for the panel to look free");
 
         // Only now is it safe to bring stock back.
         let restored = if freed {

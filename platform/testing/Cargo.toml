@@ -1,0 +1,30 @@
+# The fakes (WWW-46).
+#
+# A dev-dependency-only crate: nothing that ships to the tablet or to a
+# developer's Mac as a real binary depends on this one normally. Every crate
+# that needs a fake to test against — `platform/sys`, `platform/updater`,
+# `platform/device` — lists it under `[dev-dependencies]` only.
+#
+# One copy of each fake, replacing what used to be defined separately in each
+# consuming crate's own test module: `FakeClock` (was inline in
+# `platform/updater/tests/upgrade.rs`), `FakeService` and `WatchingService`
+# (were inline in `platform/device/src/takeover.rs`'s test module).
+[package]
+name = "paper-testing"
+description = "Fakes for the effects spine and for device service control, shared across every crate's tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+paper-device = { workspace = true }
+paper-sys = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

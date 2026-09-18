@@ -28,6 +28,10 @@ fn main() -> ExitCode {
 
         use paper_host::linux::runtime::{Outcome, RuntimeConfig, Supervisor};
 
+        if let Err(error) = paper_telemetry::init_journald() {
+            eprintln!("paperclip-host: telemetry did not start: {error}");
+        }
+
         let mut arguments = std::env::args().skip(1);
         let mut config_path: Option<PathBuf> = None;
         let mut state: Option<PathBuf> = None;
@@ -37,7 +41,7 @@ fn main() -> ExitCode {
                 "--config" => config_path = arguments.next().map(PathBuf::from),
                 "--state" => state = arguments.next().map(PathBuf::from),
                 other => {
-                    eprintln!("paperclip-host: unexpected argument `{other}`");
+                    tracing::error!("unexpected argument `{other}`");
                     return ExitCode::FAILURE;
                 }
             }
@@ -47,7 +51,7 @@ fn main() -> ExitCode {
             Some(path) => match RuntimeConfig::load(&path) {
                 Ok(config) => config,
                 Err(error) => {
-                    eprintln!("paperclip-host: cannot read {}: {error}", path.display());
+                    tracing::error!("cannot read {}: {error}", path.display());
                     return ExitCode::FAILURE;
                 }
             },
@@ -57,6 +61,13 @@ fn main() -> ExitCode {
             config.paths.state = state;
         }
 
+        // One span for the whole supervised session (WWW-46): every state
+        // transition, action and diagnosis `Supervisor::run` logs nests under
+        // it, so a `journalctl` filter on this span shows one session's
+        // worth of events rather than every session this unit has ever run.
+        let span = tracing::info_span!("session");
+        let _entered = span.enter();
+
         let mut supervisor = Supervisor::new(config);
         match supervisor.run() {
             Ok(Outcome::StoppedAtStock) => ExitCode::SUCCESS,
@@ -64,15 +75,18 @@ fn main() -> ExitCode {
                 diagnosis,
                 diagnostics,
             }) => {
-                eprintln!("paperclip-host: halted — {}", diagnosis.summary());
-                eprintln!("paperclip-host: diagnostics in {}", diagnostics.display());
+                tracing::error!(
+                    diagnostics = %diagnostics.display(),
+                    "halted — {}",
+                    diagnosis.summary()
+                );
                 // Exits zero on purpose. A non-zero exit would trip this
                 // unit's OnFailure= and start the recovery that has already
                 // failed, which is the restart loop §10 forbids.
                 ExitCode::SUCCESS
             }
             Err(error) => {
-                eprintln!("paperclip-host: {error}");
+                tracing::error!("{error}");
                 ExitCode::FAILURE
             }
         }

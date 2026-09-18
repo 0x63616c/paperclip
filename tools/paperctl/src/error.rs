@@ -291,7 +291,7 @@ pub(crate) enum CommandError {
     /// The Mac-side run history could not be read or written.
     #[cfg(not(target_os = "linux"))]
     #[error("the run log could not be used")]
-    RunLog(#[from] crate::transport::runlog::RunLogError),
+    RunLog(#[from] paper_telemetry::run_log::RunLogError),
 
     /// `paperctl logs` found nothing retained yet.
     #[cfg(not(target_os = "linux"))]

@@ -192,6 +192,7 @@ fn granted_for(app: &AppId) -> GrantedCapabilities {
 fn stock(args: &StockArgs) -> Result<(), CommandError> {
     let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
     println!("device   {host} ({source})");
+    paper_telemetry::run_log::record_device(&host);
     crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
     Ok(())
 }

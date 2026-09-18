@@ -12,6 +12,9 @@ members = [
     "platform/sdk",
     "platform/device",
     "platform/host",
+    "platform/sys",
+    "platform/telemetry",
+    "platform/testing",
     "platform/updater",
     "apps/app-store",
     "apps/home",
@@ -59,6 +62,10 @@ paper-settings = { path = "apps/settings" }
 paper-chess-rules = { path = "apps/chess-rules" }
 paper-sudoku = { path = "apps/sudoku" }
 paper-sudoku-rules = { path = "apps/sudoku-rules" }
+paper-sys = { path = "platform/sys" }
+paper-telemetry = { path = "platform/telemetry" }
+# Dev-dependency only, everywhere it appears — see the crate's own doc comment.
+paper-testing = { path = "platform/testing" }
 
 cc = "1.2"
 chess = "3.2"
@@ -77,6 +84,8 @@ tempfile = "3.24"
 thiserror = "2.0.20"
 tiny-skia = "0.12"
 toml = "1.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 winit = "0.30.13"
 
 [workspace.lints.rust]

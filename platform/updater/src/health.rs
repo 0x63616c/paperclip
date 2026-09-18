@@ -29,12 +29,17 @@
 //! `tests/failure-harness` proves a candidate that stalls is detected.
 
 use std::fmt;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use paper_host::readiness::Rung;
 use paper_protocol::ProtocolVersion;
 
 use crate::error::Unhealthy;
+
+/// Moved to `platform/sys` (WWW-46): the same trait, unchanged, is now the
+/// reference shape a fourth crate proved out. Re-exported here so every
+/// existing `paper_updater::health::Clock` import keeps working.
+pub use paper_sys::{Clock, SystemClock};
 
 /// How long a candidate gets, and how often it is asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,31 +147,6 @@ pub trait SessionControl: fmt::Debug {
     /// By name, with no handle: the process that took it is gone, which is the
     /// only situation in which this is called.
     fn release_wakelock(&self);
-}
-
-/// The clock the watch runs against.
-///
-/// A trait so a unit test can grade a candidate in microseconds. The device
-/// and the VM both use [`SystemClock`].
-pub trait Clock: fmt::Debug {
-    /// Now.
-    fn now(&self) -> Instant;
-    /// Waits.
-    fn sleep(&self, duration: Duration);
-}
-
-/// The real one.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SystemClock;
-
-impl Clock for SystemClock {
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
-    fn sleep(&self, duration: Duration) {
-        std::thread::sleep(duration);
-    }
 }
 
 /// How a candidate did.

@@ -211,6 +211,12 @@ impl<'a> Upgrade<'a> {
     /// session that will not stand down. A candidate that is graded and found
     /// unhealthy is not an error — see [`Outcome::RolledBack`].
     pub fn run(&self, bundle: &Path) -> Result<Outcome, UpdateError> {
+        let span = tracing::info_span!("upgrade", bundle = %bundle.display());
+        let _entered = span.enter();
+        self.run_inner(bundle)
+    }
+
+    fn run_inner(&self, bundle: &Path) -> Result<Outcome, UpdateError> {
         self.layout.ensure()?;
         self.refuse_if_in_flight()?;
 
@@ -315,6 +321,12 @@ impl<'a> Upgrade<'a> {
     /// No fallback recorded, an in-flight transaction, or a session that will
     /// not stand down.
     pub fn rollback(&self) -> Result<Outcome, UpdateError> {
+        let span = tracing::info_span!("upgrade", rollback = true);
+        let _entered = span.enter();
+        self.rollback_inner()
+    }
+
+    fn rollback_inner(&self) -> Result<Outcome, UpdateError> {
         self.layout.ensure()?;
         self.refuse_if_in_flight()?;
 

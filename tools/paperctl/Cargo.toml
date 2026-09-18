@@ -59,12 +59,14 @@ paper-sdk = { workspace = true }
 paper-settings = { workspace = true, optional = true }
 paper-sudoku = { workspace = true, optional = true }
 paper-sudoku-rules = { workspace = true, optional = true }
+paper-telemetry = { workspace = true }
 paper-updater = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

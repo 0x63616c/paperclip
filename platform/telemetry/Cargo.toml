@@ -1,0 +1,38 @@
+# Real observability (WWW-46, §4, ADR-0023).
+#
+# `tracing` as the API everywhere. Three sinks: `init_pretty` for the Mac,
+# `init_journald` for the device (the same journal a crash is read out of),
+# and the run-log layer — always installed — that replaces
+# `tools/paperctl`'s old `runlog::wrap`.
+#
+# No async runtime: everything here is synchronous, on purpose (§ the
+# ticket's own constraint). `tracing-journald` is a `[target.'cfg(...)']`
+# dependency, Linux-only, so a Mac build of this crate — and everything that
+# links it — never has to have `journald` on the machine at all.
+[package]
+name = "paper-telemetry"
+description = "tracing as the platform's logging API: pretty, journald and the JSON run-log, as layers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+paper-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tracing-journald = "0.3"
+
+[dev-dependencies]
+semver = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

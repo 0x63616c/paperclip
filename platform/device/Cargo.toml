@@ -22,11 +22,13 @@ vendor-engine = ["dep:cc"]
 [dependencies]
 paper-protocol = { workspace = true }
 paper-sdk = { workspace = true }
+paper-telemetry = { workspace = true }
 # Only for the frame digest a hold reports: "the morning run presented the same
 # bytes as last night" is checkable, "it looked the same" is not. Same
 # algorithm and spelling as every other digest in the repository (§12).
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 # The takeover example draws a real screen rather than a test pattern: §9 wants

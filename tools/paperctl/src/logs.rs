@@ -2,15 +2,16 @@
 //! path (WWW-34).
 //!
 //! A retired shell alias used to `cat /tmp/paperclip-open.log` by hand — an
-//! invented path nothing else agreed on. This reads exactly what
-//! [`runlog::record`] actually wrote, through the one constant
-//! [`runlog::default_dir`] both sides use.
+//! invented path nothing else agreed on. This reads exactly what every
+//! dispatch site's `paperctl_run` span writes through
+//! [`paper_telemetry::run_log`] (WWW-46), at [`crate::transport::run_log_dir`],
+//! the one directory convention both sides use.
 
 use clap::Args;
 
 use crate::error::CommandError;
 use crate::transport::OutputFormat;
-use crate::transport::runlog::{self, RunRecord};
+use paper_telemetry::run_log::{self, RunRecord};
 
 /// `paperctl logs`.
 #[derive(Debug, Args)]
@@ -45,7 +46,7 @@ pub(crate) fn run(args: &LogsArgs) -> Result<(), CommandError> {
         config.as_ref().and_then(|config| config.pinned()),
         config.as_ref().and_then(|config| config.cached()),
     );
-    run_in(&runlog::default_dir(), args, wanted.as_deref())
+    run_in(&crate::transport::run_log_dir(), args, wanted.as_deref())
 }
 
 /// [`run`], with the run log directory and the resolved device filter given
@@ -57,7 +58,7 @@ fn run_in(
     args: &LogsArgs,
     wanted_device: Option<&str>,
 ) -> Result<(), CommandError> {
-    let mut records = runlog::list(dir).map_err(CommandError::RunLog)?;
+    let mut records = run_log::list(dir).map_err(CommandError::RunLog)?;
     if records.is_empty() {
         return Err(CommandError::NoRuns {
             dir: dir.to_path_buf(),
@@ -209,8 +210,8 @@ mod tests {
     fn with_no_last_given_the_newest_run_is_shown() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("runs");
-        runlog::record(&path, "open", None, 1).expect("record");
-        runlog::record(&path, "open", None, 0).expect("record");
+        run_log::record(&path, "open", None, 1).expect("record");
+        run_log::record(&path, "open", None, 0).expect("record");
 
         assert!(run_in(&path, &args(None, false, None), None).is_ok());
         assert!(run_in(&path, &args(Some(3), false, None), None).is_err());
@@ -220,7 +221,7 @@ mod tests {
     fn a_device_filter_with_no_matching_run_is_a_missing_run_not_an_empty_list() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("runs");
-        runlog::record(&path, "open", Some("other-host"), 0).expect("record");
+        run_log::record(&path, "open", Some("other-host"), 0).expect("record");
 
         let error = run_in(
             &path,

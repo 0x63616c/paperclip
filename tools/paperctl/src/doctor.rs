@@ -5,7 +5,6 @@
 //! resolution route was used. Read-only: nothing here stops Xochitl, takes
 //! the vendor lock, or writes to the device.
 
-use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Args;
@@ -86,7 +85,11 @@ pub(crate) struct DoctorReport {
     verdict: Verdict,
 }
 
-pub(crate) fn run(args: &DoctorArgs) -> Result<ExitCode, CommandError> {
+/// Returns the raw verdict code (0/1/2), not [`ExitCode`]: `main` needs the
+/// actual number both to build the process's real exit code and to record it
+/// on the `paperctl_run` span (WWW-46) — [`ExitCode`] exposes no way to read
+/// a code back out of it once built.
+pub(crate) fn run(args: &DoctorArgs) -> Result<u8, CommandError> {
     let config =
         crate::transport::config::Config::load(&crate::transport::config::default_path()).ok();
     let report = build_report(
@@ -99,7 +102,7 @@ pub(crate) fn run(args: &DoctorArgs) -> Result<ExitCode, CommandError> {
         QUICK_PROBE_TIMEOUT,
     )?;
     print_report(&report, args.output)?;
-    Ok(ExitCode::from(report.verdict.exit_code()))
+    Ok(report.verdict.exit_code())
 }
 
 /// [`run`]'s logic, with every resolution input, the prober, the SSH runner

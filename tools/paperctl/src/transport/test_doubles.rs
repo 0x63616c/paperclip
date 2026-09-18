@@ -90,14 +90,16 @@ impl SshRunner for FakeSsh {
     }
 }
 
-/// A [`Prober`] whose answers are fixed by the test, so `doctor`'s
-/// reachability logic is checkable without a network — the same shape as
-/// `discover`'s own private `FakeProber`, shared here so `doctor` does not
-/// need a second copy.
+/// A [`Prober`] whose answers are fixed by the test, so `doctor`'s and
+/// `discover`'s reachability logic are both checkable without a network. One
+/// copy, not two: this used to have a private duplicate inside `discover`'s
+/// own test module (WWW-46).
 #[derive(Default)]
 pub(crate) struct FakeProber {
     reachable: RefCell<Vec<String>>,
     mdns: Vec<String>,
+    reachable_calls: RefCell<Vec<(String, Duration)>>,
+    mdns_calls: RefCell<Vec<Duration>>,
 }
 
 impl FakeProber {
@@ -107,14 +109,37 @@ impl FakeProber {
             ..Self::default()
         }
     }
+
+    /// Also answers `mdns_candidates` with `hosts`.
+    #[must_use]
+    pub(crate) fn with_mdns_candidates(self, hosts: &[&str]) -> Self {
+        Self {
+            mdns: hosts.iter().map(|h| (*h).to_owned()).collect(),
+            ..self
+        }
+    }
+
+    /// Every `(host, timeout)` passed to [`Prober::reachable`], in call order.
+    pub(crate) fn reachable_calls(&self) -> Vec<(String, Duration)> {
+        self.reachable_calls.borrow().clone()
+    }
+
+    /// Every timeout passed to [`Prober::mdns_candidates`], in call order.
+    pub(crate) fn mdns_calls(&self) -> Vec<Duration> {
+        self.mdns_calls.borrow().clone()
+    }
 }
 
 impl Prober for FakeProber {
-    fn reachable(&self, host: &str, _timeout: Duration) -> bool {
+    fn reachable(&self, host: &str, timeout: Duration) -> bool {
+        self.reachable_calls
+            .borrow_mut()
+            .push((host.to_owned(), timeout));
         self.reachable.borrow().iter().any(|h| h == host)
     }
 
-    fn mdns_candidates(&self, _timeout: Duration) -> Vec<String> {
+    fn mdns_candidates(&self, timeout: Duration) -> Vec<String> {
+        self.mdns_calls.borrow_mut().push(timeout);
         self.mdns.clone()
     }
 }

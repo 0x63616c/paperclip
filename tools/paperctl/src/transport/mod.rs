@@ -25,15 +25,26 @@ pub(crate) mod discover;
 // it.
 #[cfg(not(target_os = "linux"))]
 pub(crate) mod remote;
-// The Mac-side run history behind `paperctl logs` (WWW-34). `open` and
-// `deploy` are the writers; both are Mac-only, so this is gated the same way
-// as `remote` rather than compiled into a device build that never uses it.
-#[cfg(not(target_os = "linux"))]
-pub(crate) mod runlog;
 #[cfg(not(target_os = "linux"))]
 pub(crate) mod test_doubles;
 
 use clap::Args;
+
+/// Where `paper_telemetry::run_log`'s records live: alongside the device
+/// config (the pin and cache), one existing directory convention rather than
+/// a second one to keep synchronised with it (ADR-0023).
+///
+/// The run-log itself moved to `platform/telemetry` (WWW-46) so it could
+/// become a `tracing` layer installed once in `main`, rather than a function
+/// every dispatch site had to remember to call — but *where* it writes is
+/// still paperctl's own convention, not telemetry's to hardcode.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn run_log_dir() -> std::path::PathBuf {
+    config::default_path()
+        .parent()
+        .expect("the config path always has a parent directory")
+        .join("runs")
+}
 
 /// Table for a terminal, or JSON for a script — shared by every command that
 /// offers both (`devices`, `doctor`, `logs`) so the flag looks and behaves

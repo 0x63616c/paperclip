@@ -458,6 +458,7 @@ pub(crate) fn remove(args: &RemoveArgs) -> Result<(), CommandError> {
     if let Some(explicit) = args.device.as_deref() {
         let (host, source) = crate::transport::remote::resolve_device(Some(explicit))?;
         println!("device   {host} ({source})");
+        paper_telemetry::run_log::record_device(&host);
         crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
         return Ok(());
     }
@@ -515,6 +516,7 @@ fn trusted(paths: &[PathBuf]) -> Result<TrustedKeys, CommandError> {
 fn upgrade(args: &RunArgs, device: Option<&str>) -> Result<(), CommandError> {
     let (host, source) = crate::transport::remote::resolve_device(device)?;
     println!("device   {host} ({source})");
+    paper_telemetry::run_log::record_device(&host);
     crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
     Ok(())
 }
@@ -524,6 +526,7 @@ fn upgrade(args: &RunArgs, device: Option<&str>) -> Result<(), CommandError> {
 fn rollback(args: &RollbackArgs, device: Option<&str>) -> Result<(), CommandError> {
     let (host, source) = crate::transport::remote::resolve_device(device)?;
     println!("device   {host} ({source})");
+    paper_telemetry::run_log::record_device(&host);
     crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
     Ok(())
 }

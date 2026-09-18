@@ -50,13 +50,16 @@ flate2 = { workspace = true, optional = true }
 tar = { workspace = true, optional = true }
 paper-packages = { workspace = true }
 paper-protocol = { workspace = true }
+paper-sys = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
+paper-testing = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

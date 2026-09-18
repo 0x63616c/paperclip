@@ -34,7 +34,9 @@ harness = true
 paper-device = { workspace = true }
 paper-packages = { workspace = true }
 paper-protocol = { workspace = true }
+paper-telemetry = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }

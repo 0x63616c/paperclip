@@ -135,6 +135,7 @@ pub(crate) fn run(args: &SetupArgs) -> Result<(), CommandError> {
     {
         let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
         println!("device   {host} ({source})");
+        paper_telemetry::run_log::record_device(&host);
         crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
         Ok(())
     }

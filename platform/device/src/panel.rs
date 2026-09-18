@@ -132,7 +132,37 @@ pub trait Panel: fmt::Debug {
 /// The canvas must be exactly the panel's size. A letterboxed or scaled
 /// presentation is a desktop concern; on the device the mapping is the
 /// identity and anything else is a bug worth an error rather than a blur.
+///
+/// Records the e-ink counters `platform/telemetry` keeps (WWW-46): frames
+/// presented, damage area, which waveform, and how long the swap took.
+/// `full_refresh` here is the [`Refresh`] this call *requested* — whether the
+/// vendor engine actually escalated a partial to a full refresh is a fact
+/// only the real panel can report, and [`Panel::swap`]'s contract gives no
+/// way back from a successful call to know.
 pub fn present(
+    panel: &mut dyn Panel,
+    canvas: &Canvas,
+    rect: PixelRect,
+    waveform: Waveform,
+    refresh: Refresh,
+) -> Result<(), DeviceError> {
+    let span = tracing::info_span!("present", width = rect.width, height = rect.height);
+    let _entered = span.enter();
+    let started = std::time::Instant::now();
+    let result = present_inner(panel, canvas, rect, waveform, refresh);
+    if result.is_ok() {
+        let label = format!("{:?}:{}", waveform.content(), waveform.mode());
+        paper_telemetry::counters::EINK.record_present(paper_telemetry::counters::PresentedFrame {
+            damage_area: u64::from(rect.width) * u64::from(rect.height),
+            waveform: &label,
+            full_refresh: refresh == Refresh::Full,
+            latency: started.elapsed(),
+        });
+    }
+    result
+}
+
+fn present_inner(
     panel: &mut dyn Panel,
     canvas: &Canvas,
     rect: PixelRect,
@@ -316,6 +346,32 @@ mod tests {
         let mut canvas = Canvas::new(size).expect("allocates");
         canvas.fill_rect(ink, palette::INK);
         canvas
+    }
+
+    /// Only checks the counter moved in the right direction, not its exact
+    /// value: `paper_telemetry::counters::EINK` is one process-wide instance,
+    /// and `cargo test` runs this file's other `present` calls concurrently
+    /// with this one. A monotonic counter's `>` still holds under that
+    /// interleaving; a `==` would not.
+    #[test]
+    fn presenting_records_the_eink_counters() {
+        let size = Size::new(16, 16);
+        let mut panel = MemoryPanel::new(size);
+        let canvas = canvas(size, Rect::new(0.0, 0.0, 8.0, 8.0));
+        let before = paper_telemetry::counters::EINK.snapshot();
+
+        present(
+            &mut panel,
+            &canvas,
+            PixelRect::new(0, 0, 8, 8),
+            Waveform::INK,
+            Refresh::Partial,
+        )
+        .expect("presents");
+
+        let after = paper_telemetry::counters::EINK.snapshot();
+        assert!(after.frames_presented > before.frames_presented);
+        assert!(after.damage_area_total >= before.damage_area_total + 64);
     }
 
     #[test]

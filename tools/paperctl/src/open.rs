@@ -301,24 +301,17 @@ fn dry_run(canvas: &Canvas, plan: &HoldPlan) -> Result<(), CommandError> {
 /// over SSH (WWW-33) — detached, because a live SSH session does not
 /// reliably survive a long hold (WWW-23).
 ///
-/// Once a device has resolved, the attempt is recorded through
-/// `runlog::wrap` (WWW-34): `paperctl logs` is what replaces the retired
-/// shell alias that used to `cat` an invented `/tmp` path after a run like
-/// this one. A resolution failure is not recorded — nothing ran yet for
-/// there to be a report about.
+/// The attempt is recorded automatically: `main`'s dispatch span records this
+/// run the moment it closes (WWW-46), so there is no wrap call here to
+/// forget. A resolution failure is still recorded, unlike before — the span
+/// covers the whole dispatch, not just the part after a device resolved.
 #[cfg(not(target_os = "linux"))]
 fn present(_canvas: &Canvas, plan: &HoldPlan, args: &OpenArgs) -> Result<(), CommandError> {
     let (host, source) = crate::transport::remote::resolve_device(args.device.as_deref())?;
     println!("device   {host} ({source})");
-    crate::transport::runlog::wrap(
-        &crate::transport::runlog::default_dir(),
-        "open",
-        Some(&host),
-        || {
-            crate::transport::remote::run_open(&host, &args.remote_argv(), plan.hold)
-                .map_err(CommandError::from)
-        },
-    )
+    paper_telemetry::run_log::record_device(&host);
+    crate::transport::remote::run_open(&host, &args.remote_argv(), plan.hold)
+        .map_err(CommandError::from)
 }
 
 #[cfg(not(target_os = "linux"))]

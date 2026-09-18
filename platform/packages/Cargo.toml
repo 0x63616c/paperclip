@@ -19,6 +19,7 @@ sha2 = { workspace = true }
 tar = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
+tracing = { workspace = true }
 
 [features]
 # Everything a *publisher* needs: secret keys, key generation, archive building,

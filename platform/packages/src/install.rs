@@ -308,6 +308,24 @@ impl PackageManager {
         guard: &dyn ActivationGuard,
         progress: &dyn Progress,
     ) -> Result<Installed, InstallError> {
+        let signed = release.release();
+        let span = tracing::info_span!(
+            "install",
+            app = %signed.app(),
+            version = %signed.version(),
+        );
+        let _entered = span.enter();
+        self.install_inner(release, archive, options, guard, progress)
+    }
+
+    fn install_inner(
+        &self,
+        release: &VerifiedRelease,
+        archive: impl Read,
+        options: &InstallOptions,
+        guard: &dyn ActivationGuard,
+        progress: &dyn Progress,
+    ) -> Result<Installed, InstallError> {
         self.layout.ensure()?;
         let signed = release.release();
         let app = signed.app().clone();

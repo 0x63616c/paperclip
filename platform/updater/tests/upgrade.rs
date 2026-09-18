@@ -21,14 +21,15 @@ use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use paper_host::readiness::Rung;
 use paper_packages::signing::{Domain, SecretKey, TrustedKeys};
 use paper_packages::store::Layout;
 use paper_protocol::ProtocolVersion;
+use paper_testing::FakeClock;
 use paper_updater::error::UpdateError;
-use paper_updater::health::{Budget, Clock, Observation, SessionControl};
+use paper_updater::health::{Budget, Observation, SessionControl};
 use paper_updater::journal::{Journal, Phase};
 use paper_updater::layout::PlatformLayout;
 use paper_updater::manifest::ComponentPolicy;
@@ -38,33 +39,12 @@ use paper_updater::{PlatformManifest, bundle};
 use semver::Version;
 
 // --- fakes ------------------------------------------------------------------
-
-/// A clock that only moves when something waits on it, so a test that grades a
-/// candidate against a 60-second deadline still finishes instantly.
-#[derive(Debug)]
-struct FakeClock {
-    base: Instant,
-    offset: Mutex<Duration>,
-}
-
-impl FakeClock {
-    fn new() -> Self {
-        Self {
-            base: Instant::now(),
-            offset: Mutex::new(Duration::ZERO),
-        }
-    }
-}
-
-impl Clock for FakeClock {
-    fn now(&self) -> Instant {
-        self.base + *self.offset.lock().expect("clock")
-    }
-
-    fn sleep(&self, duration: Duration) {
-        *self.offset.lock().expect("clock") += duration;
-    }
-}
+//
+// `FakeClock` moved to `platform/testing` (WWW-46) — it was the shape every
+// other crate's clock fake should have followed from the start. Everything
+// below it is `SessionControl`, which stays here: it is a domain-specific
+// composition of a unit, a wakelock and a readiness observation, not one of
+// `platform/sys`'s four general effects.
 
 /// How a release behaves when it is brought up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

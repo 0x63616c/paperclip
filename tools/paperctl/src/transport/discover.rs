@@ -309,42 +309,8 @@ pub(crate) fn discover_all(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-
     use super::*;
-
-    /// A `Prober` whose answers are fixed by the test, so precedence and
-    /// timeout behaviour are checked without touching a real network.
-    #[derive(Default)]
-    struct FakeProber {
-        reachable: RefCell<Vec<String>>,
-        mdns: Vec<String>,
-        reachable_calls: RefCell<Vec<(String, Duration)>>,
-        mdns_calls: RefCell<Vec<Duration>>,
-    }
-
-    impl FakeProber {
-        fn reachable_hosts(hosts: &[&str]) -> Self {
-            Self {
-                reachable: RefCell::new(hosts.iter().map(|h| (*h).to_owned()).collect()),
-                ..Self::default()
-            }
-        }
-    }
-
-    impl Prober for FakeProber {
-        fn reachable(&self, host: &str, timeout: Duration) -> bool {
-            self.reachable_calls
-                .borrow_mut()
-                .push((host.to_owned(), timeout));
-            self.reachable.borrow().iter().any(|h| h == host)
-        }
-
-        fn mdns_candidates(&self, timeout: Duration) -> Vec<String> {
-            self.mdns_calls.borrow_mut().push(timeout);
-            self.mdns.clone()
-        }
-    }
+    use crate::transport::test_doubles::FakeProber;
 
     fn inputs() -> Inputs {
         Inputs {
@@ -409,10 +375,8 @@ mod tests {
     fn usb_beats_mdns_and_cache() {
         let mut inputs = inputs();
         inputs.cache = Some("cache-host".to_owned());
-        let prober = FakeProber {
-            mdns: vec!["mdns-host".to_owned()],
-            ..FakeProber::reachable_hosts(&[USB_HOST, "mdns-host", "cache-host"])
-        };
+        let prober = FakeProber::reachable_hosts(&[USB_HOST, "mdns-host", "cache-host"])
+            .with_mdns_candidates(&["mdns-host"]);
 
         let (host, source) = resolve(&inputs, &prober, PROBE_TIMEOUT).expect("resolves");
         assert_eq!(host, USB_HOST);
@@ -423,10 +387,8 @@ mod tests {
     fn mdns_beats_cache_when_usb_is_unreachable() {
         let mut inputs = inputs();
         inputs.cache = Some("cache-host".to_owned());
-        let prober = FakeProber {
-            mdns: vec!["mdns-host".to_owned()],
-            ..FakeProber::reachable_hosts(&["mdns-host", "cache-host"])
-        };
+        let prober = FakeProber::reachable_hosts(&["mdns-host", "cache-host"])
+            .with_mdns_candidates(&["mdns-host"]);
 
         let (host, source) = resolve(&inputs, &prober, PROBE_TIMEOUT).expect("resolves");
         assert_eq!(host, "mdns-host");
@@ -486,11 +448,11 @@ mod tests {
 
         let _ = resolve(&inputs, &prober, PROBE_TIMEOUT);
 
-        for (_, timeout) in prober.reachable_calls.borrow().iter() {
-            assert!(*timeout <= PROBE_TIMEOUT);
+        for (_, timeout) in prober.reachable_calls() {
+            assert!(timeout <= PROBE_TIMEOUT);
         }
-        for timeout in prober.mdns_calls.borrow().iter() {
-            assert!(*timeout <= MDNS_TIMEOUT);
+        for timeout in prober.mdns_calls() {
+            assert!(timeout <= MDNS_TIMEOUT);
         }
     }
 
@@ -503,10 +465,8 @@ mod tests {
             usb: Some(USB_HOST.to_owned()),
             cache: Some("cache-host".to_owned()),
         };
-        let prober = FakeProber {
-            mdns: vec!["mdns-host".to_owned()],
-            ..FakeProber::reachable_hosts(&["pinned-host", USB_HOST])
-        };
+        let prober = FakeProber::reachable_hosts(&["pinned-host", USB_HOST])
+            .with_mdns_candidates(&["mdns-host"]);
 
         let all = discover_all(&inputs, &prober, PROBE_TIMEOUT);
         let hosts: Vec<&str> = all.iter().map(|d| d.host.as_str()).collect();

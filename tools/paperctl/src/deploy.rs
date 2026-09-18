@@ -15,7 +15,6 @@ use clap::Args;
 use crate::error::CommandError;
 use crate::transport::discover::QUICK_PROBE_TIMEOUT;
 use crate::transport::remote::{REMOTE_PAPERCTL, SshRunner, SystemSsh, TransportError};
-use crate::transport::runlog;
 
 /// Where `tools/cross/build-device.sh` is, relative to the repository root —
 /// `deploy`, like the script itself, is meant to be run from there.
@@ -50,13 +49,12 @@ pub(crate) fn run(args: &DeployArgs) -> Result<(), CommandError> {
         QUICK_PROBE_TIMEOUT,
     )?;
     println!("device   {host} ({source})");
+    paper_telemetry::run_log::record_device(&host);
 
-    runlog::wrap(&runlog::default_dir(), "deploy", Some(&host), || {
-        run_build(&argv)?;
-        install_to(&SystemSsh, &host, Path::new(BUILT_BINARY), &install)?;
-        println!("installed {BUILT_BINARY} -> {host}:{REMOTE_PAPERCTL}");
-        Ok(())
-    })
+    run_build(&argv)?;
+    install_to(&SystemSsh, &host, Path::new(BUILT_BINARY), &install)?;
+    println!("installed {BUILT_BINARY} -> {host}:{REMOTE_PAPERCTL}");
+    Ok(())
 }
 
 /// `tools/cross/build-device.sh --bin paperctl`'s argv — what the retired

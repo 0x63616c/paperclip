@@ -1,0 +1,30 @@
+# The effects spine (WWW-46).
+#
+# Four small traits — `Clock`, `Process`, `UnitControl`, `Storage` — each with
+# exactly one real adapter here. The fakes that make them testable live in
+# `platform/testing`, not here: this crate is what the device binary links,
+# and a production dependency has no business carrying test doubles.
+#
+# `UnitControl`'s real adapter is built on `Process` rather than shelling out
+# on its own, which is what makes it testable without a real `systemctl`: a
+# test can hand it a fake `Process` and assert on the argv it built, the same
+# way `platform/updater` has proved a transaction right without systemd since
+# WWW-13.
+[package]
+name = "paper-sys"
+description = "The effects spine: Clock, Process, UnitControl and Storage, each with one real adapter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

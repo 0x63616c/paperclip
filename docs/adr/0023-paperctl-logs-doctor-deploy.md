@@ -1,12 +1,23 @@
 # ADR-0023 — `paperctl logs`, `doctor` and `deploy`
 
-**Status:** accepted. Every command here is exercised by unit tests
-(`tools/paperctl/src/logs.rs`, `doctor.rs`, `deploy.rs`,
-`transport/runlog.rs`) against fakes; nothing in this ADR has run against a
-real tablet, because none of it needs one to be correct — see "What still
-needs hardware" below.
+**Status:** accepted, with one mechanism superseded by ADR-0025 (WWW-46) —
+see the note below. The record shape, the retention count, and every other
+decision here are unchanged.
+
+Every command here is exercised by unit tests
+(`tools/paperctl/src/logs.rs`, `doctor.rs`, `deploy.rs`) against fakes;
+nothing in this ADR has run against a real tablet, because none of it needs
+one to be correct — see "What still needs hardware" below.
 
 Implements spec §4 (`paperctl` as the entry point) for WWW-34.
+
+> **WWW-46 update:** `transport::runlog::wrap`, described below as what
+> `open` and `deploy` call, no longer exists. The run-log it wrote is now
+> `platform/telemetry::run_log`, installed once as a `tracing::Layer` around
+> a span `main` opens for every dispatch — see ADR-0025. This is what closed
+> the gap the rest of this ADR does not mention: `wrap` was only ever called
+> from two of what are now nine device-touching commands. The record format,
+> `RETAIN`, and everything `paperctl logs` prints are unchanged.
 
 ## Context
 

@@ -163,6 +163,7 @@ pub(crate) fn install(args: &InstallArgs) -> Result<(), CommandError> {
     if let Some(explicit) = args.device.as_deref() {
         let (host, source) = crate::transport::remote::resolve_device(Some(explicit))?;
         println!("device   {host} ({source})");
+        paper_telemetry::run_log::record_device(&host);
         crate::transport::remote::run_blocking(&host, &args.remote_argv())?;
         return Ok(());
     }
